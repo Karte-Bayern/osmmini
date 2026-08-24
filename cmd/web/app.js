@@ -123,6 +123,76 @@ function formatLatLon(lat, lon, precision = SEARCH_COORD_PRECISION) {
   return `${point.lat.toFixed(precision)},${point.lon.toFixed(precision)}`;
 }
 
+// A route field has two separate values: the human-readable label that is
+// shown to the user and the exact point that was selected from search. Keeping
+// them separate is essential: a label such as "POI-Name — Beispielstraße 3" is
+// not a stable address query and must never be sent back through fuzzy search
+// on a later route recalculation.
+function resolvedRoutePoint(input) {
+  if (!input) return null;
+  const display = input.dataset.resolvedDisplay || '';
+  // A direct/programmatic value change that did not go through the helper
+  // below invalidates the saved point automatically.
+  if (!display || input.value.trim() !== display) return null;
+  return normalizeLatLon(input.dataset.resolvedLat, input.dataset.resolvedLon);
+}
+
+function clearResolvedRoutePoint(input) {
+  if (!input) return;
+  delete input.dataset.resolvedLat;
+  delete input.dataset.resolvedLon;
+  delete input.dataset.resolvedDisplay;
+}
+
+function setResolvedRoutePoint(input, point, label) {
+  const coord = normalizeLatLon(point?.lat, point?.lon);
+  if (!input || !coord) return false;
+  const display = String(label || formatLatLon(coord.lat, coord.lon)).trim();
+  input.value = display;
+  input.dataset.resolvedLat = String(coord.lat);
+  input.dataset.resolvedLon = String(coord.lon);
+  input.dataset.resolvedDisplay = display;
+  syncInputClearState(input.id);
+  return true;
+}
+
+function setResolvedRouteResponsePoint(input, point) {
+  const coord = normalizeLatLon(point?.lat, point?.lon);
+  if (!input || !coord) return false;
+  const existing = resolvedRoutePoint(input);
+  const samePoint = existing && Math.abs(existing.lat - coord.lat) < 1e-7 && Math.abs(existing.lon - coord.lon) < 1e-7;
+  // If the user selected a search result, retain its useful name/address even
+  // when the coordinate-based API request can only echo a numeric label.
+  const label = samePoint ? input.value.trim() : (point.label || input.value);
+  return setResolvedRoutePoint(input, coord, label);
+}
+
+function setResolvedSearchResult(input, result) {
+  const normalized = normalizeSearchResult(result);
+  if (!normalized) return false;
+  return setResolvedRoutePoint(input, normalized, getResultInputValue(normalized) || resultCoordValue(normalized));
+}
+
+function applySearchResultToInput(input, result) {
+  if (!input) return false;
+  if (input.id === 'from' || input.id === 'to') return setResolvedSearchResult(input, result);
+  const value = resultCoordValue(result);
+  if (!value) return false;
+  input.value = value;
+  input.closest('.input-clear-wrap')?.classList.toggle('has-value', true);
+  return true;
+}
+
+function routeLocationForInput(input) {
+  const coord = resolvedRoutePoint(input);
+  if (coord) return { lat: coord.lat, lon: coord.lon };
+  return { query: input?.value.trim() || '' };
+}
+
+function routeLocationHasValue(location) {
+  return Boolean(location && (location.query || (Number.isFinite(location.lat) && Number.isFinite(location.lon))));
+}
+
 function supportsWebGL() {
   try {
     const canvas = document.createElement('canvas');
@@ -286,6 +356,142 @@ function setOfflineLabelsVisible(enabled) {
   map.on('zoomend', queueOfflineLabels);
   queueOfflineLabels();
 }
+
+// ---- Offline waterway companion layer ------------------------------------
+// tinyTiles' compact built-in generator supplies water surfaces but (at the
+// time of writing) no open OSM waterway lines. The server builds a small local
+// sidecar from the same PBF and returns only the current viewport. Keeping the
+// source dynamic avoids handing every browser an entire region's streams and
+// drainage network when the offline base map is selected.
+const OFFLINE_WATERWAYS_SOURCE_ID = 'offline-waterways';
+const OFFLINE_WATERWAYS_MIN_ZOOM = 7;
+let offlineWaterwaysEnabled = false;
+let offlineWaterwaysTimer = null;
+let offlineWaterwaysRequest = null;
+
+function clearOfflineWaterways() {
+  const source = map.getSource(OFFLINE_WATERWAYS_SOURCE_ID);
+  if (source) source.setData(emptyFeatureCollection());
+}
+
+function ensureOfflineWaterwaysLayer() {
+  if (map.getSource(OFFLINE_WATERWAYS_SOURCE_ID)) return;
+  map.addSource(OFFLINE_WATERWAYS_SOURCE_ID, {
+    type: 'geojson', data: emptyFeatureCollection(), maxzoom: 14, tolerance: 0.35, buffer: 64,
+  });
+  const before = map.getLayer('roads-casing') ? 'roads-casing' : undefined;
+  const add = (layer) => map.addLayer(layer, before);
+  add({
+    id: 'offline-waterways-major-casing', type: 'line', source: OFFLINE_WATERWAYS_SOURCE_ID,
+    minzoom: 7, filter: ['in', ['get', 'class'], ['literal', ['river', 'canal']]],
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: {
+      'line-color': '#5c9fbe',
+      'line-width': ['interpolate', ['linear'], ['zoom'], 7, 1.15, 10, 2.5, 14, 5.8],
+      'line-opacity': 0.9,
+    },
+  });
+  add({
+    id: 'offline-waterways-major', type: 'line', source: OFFLINE_WATERWAYS_SOURCE_ID,
+    minzoom: 7, filter: ['in', ['get', 'class'], ['literal', ['river', 'canal']]],
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: {
+      'line-color': '#a7d9ef',
+      'line-width': ['interpolate', ['linear'], ['zoom'], 7, 0.55, 10, 1.45, 14, 3.8],
+      'line-opacity': 0.96,
+    },
+  });
+  add({
+    id: 'offline-waterways-stream', type: 'line', source: OFFLINE_WATERWAYS_SOURCE_ID,
+    minzoom: 11, filter: ['in', ['get', 'class'], ['literal', ['stream', 'wadi']]],
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: {
+      'line-color': '#87c5e1',
+      'line-width': ['interpolate', ['linear'], ['zoom'], 11, 0.65, 14, 1.75],
+      'line-opacity': 0.9,
+    },
+  });
+  add({
+    id: 'offline-waterways-detail', type: 'line', source: OFFLINE_WATERWAYS_SOURCE_ID,
+    minzoom: 13, filter: ['in', ['get', 'class'], ['literal', ['ditch', 'drain']]],
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: {
+      'line-color': '#9ccde2',
+      'line-width': ['interpolate', ['linear'], ['zoom'], 13, 0.5, 14, 1.1],
+      'line-opacity': 0.72,
+    },
+  });
+}
+
+function queueOfflineWaterways() {
+  if (!offlineWaterwaysEnabled) return;
+  window.clearTimeout(offlineWaterwaysTimer);
+  offlineWaterwaysTimer = window.setTimeout(refreshOfflineWaterways, 180);
+}
+
+async function refreshOfflineWaterways() {
+  if (!offlineWaterwaysEnabled) return;
+  const source = map.getSource(OFFLINE_WATERWAYS_SOURCE_ID);
+  if (!source) return;
+  if (map.getZoom() < OFFLINE_WATERWAYS_MIN_ZOOM) {
+    // Invalidate a response started at a closer zoom before clearing. Without
+    // this, a late fetch could repopulate the source after the user zoomed out.
+    offlineWaterwaysRequest?.abort();
+    offlineWaterwaysRequest = null;
+    clearOfflineWaterways();
+    return;
+  }
+  const bounds = map.getBounds();
+  const bbox = [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()]
+    .map((value) => Number(value).toFixed(6)).join(',');
+  offlineWaterwaysRequest?.abort();
+  const controller = new AbortController();
+  offlineWaterwaysRequest = controller;
+  try {
+    const response = await fetch(`/api/v1/tinytiles/waterways?bbox=${encodeURIComponent(bbox)}&zoom=${Math.round(map.getZoom())}`, {
+      signal: controller.signal,
+      headers: { Accept: 'application/geo+json, application/json' },
+      cache: 'no-store',
+    });
+    if (!response.ok) throw new Error(`offline waterways: ${response.status}`);
+    const data = await response.json();
+    if (!offlineWaterwaysEnabled || offlineWaterwaysRequest !== controller) return;
+    const currentSource = map.getSource(OFFLINE_WATERWAYS_SOURCE_ID);
+    if (currentSource) currentSource.setData(data?.type === 'FeatureCollection' ? data : emptyFeatureCollection());
+  } catch (error) {
+    if (error?.name !== 'AbortError') console.debug('Offline waterways are temporarily unavailable', error);
+  }
+}
+
+function setOfflineWaterwaysVisible(enabled) {
+  if (offlineWaterwaysEnabled === enabled) {
+    if (enabled) {
+      ensureOfflineWaterwaysLayer();
+      queueOfflineWaterways();
+    }
+    return;
+  }
+  offlineWaterwaysEnabled = enabled;
+  window.clearTimeout(offlineWaterwaysTimer);
+  offlineWaterwaysRequest?.abort();
+  offlineWaterwaysRequest = null;
+  if (!enabled) {
+    map.off('moveend', queueOfflineWaterways);
+    map.off('zoomend', queueOfflineWaterways);
+    clearOfflineWaterways();
+    return;
+  }
+  ensureOfflineWaterwaysLayer();
+  map.on('moveend', queueOfflineWaterways);
+  map.on('zoomend', queueOfflineWaterways);
+  queueOfflineWaterways();
+}
+
+registerMapLayerRehydrate(() => {
+  if (!offlineWaterwaysEnabled) return;
+  ensureOfflineWaterwaysLayer();
+  queueOfflineWaterways();
+});
 
 // ---- Hydrants overlay (BOS/Einsatzmodus) ----
 // Same queue/refresh/clear-on-pan/zoom shape as the offline labels above,
@@ -826,6 +1032,7 @@ async function applyTileLayer(settings, { directPreview = false } = {}) {
       await waitForMapLayerPaint();
       updateMapModeUI(tiles);
       setOfflineLabelsVisible(isTinyTilesSettings(tiles));
+      setOfflineWaterwaysVisible(isTinyTilesSettings(tiles));
       rehydrateMapLayers();
       return true;
     } catch (e) {
@@ -851,6 +1058,7 @@ async function applyTileLayer(settings, { directPreview = false } = {}) {
     if (applied) {
       updateMapModeUI(tiles);
       setOfflineLabelsVisible(isTinyTilesSettings(tiles));
+      setOfflineWaterwaysVisible(isTinyTilesSettings(tiles));
       rehydrateMapLayers();
     }
     return applied;
@@ -882,6 +1090,7 @@ async function applyTileLayer(settings, { directPreview = false } = {}) {
   if (applied) {
     updateMapModeUI(tiles);
     setOfflineLabelsVisible(isTinyTilesSettings(tiles));
+    setOfflineWaterwaysVisible(isTinyTilesSettings(tiles));
     rehydrateMapLayers();
   }
   return applied;
@@ -956,6 +1165,7 @@ document.getElementById('useLocationBtn')?.addEventListener('click', async () =>
     userLocation = { lat, lon };
     const fromInput = document.getElementById('from');
     if (fromInput) {
+      clearResolvedRoutePoint(fromInput);
       fromInput.value = `${lat.toFixed(6)},${lon.toFixed(6)}`;
       syncInputClearState('from');
     }
@@ -1056,9 +1266,9 @@ let stopSeq = 1;
 let waypointSeq = 1;
 let lastAIResponse = null;
 
-// Prevent Safari autofill on input fields
+// Prevent unwanted browser autofill on input fields.
 function preventAutofill() {
-  // Create dynamic input fields to avoid Safari's autofill popup
+	// Create dynamic input fields to avoid autofill popups.
   function createDynamicInput(containerId, fieldId, placeholder) {
     const container = document.getElementById(containerId);
     if (!container) return null;
@@ -1087,6 +1297,7 @@ function preventAutofill() {
     clearBtn.setAttribute('aria-label', 'Eingabe löschen');
     clearBtn.textContent = '✕';
     clearBtn.addEventListener('click', () => {
+      clearResolvedRoutePoint(input);
       input.value = '';
       wrap.classList.remove('has-value');
       input.focus();
@@ -1106,6 +1317,7 @@ function preventAutofill() {
       wrap.classList.toggle('has-value', !!input.value);
     }
     input.addEventListener('input', (e) => {
+      clearResolvedRoutePoint(input);
       lastValue = e.target.value;
       updateClearVisible();
     });
@@ -1234,6 +1446,7 @@ function setStopAsDestination(s) {
   const toEl = document.getElementById('to');
   if (!value || !toEl) return;
 
+  clearResolvedRoutePoint(toEl);
   toEl.value = value;
   syncInputClearState('to');
   showToast(`Ziel gesetzt: ${s.label || s.id}`, 'success', 1800);
@@ -1506,7 +1719,7 @@ async function apiPutSettings(settings) {
 }
 
 async function apiRoute(from,to,options){
-  const res = await fetch('/api/v1/route',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({from:{query:from}, to:{query:to}, options})});
+  const res = await fetch('/api/v1/route',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({from, to, options})});
   if(!res.ok){
     const err = await res.json().catch(()=>({}));
     const ex = new Error(err.error || res.statusText);
@@ -1527,7 +1740,7 @@ async function apiTripSolve(from,to,options){
   });
   stops.forEach(s=> allStops.push({id:s.id, location:{lat:s.lat, lon:s.lon}}));
   const vehicleCapacity = parseFloat(document.getElementById('vehicleCapacity')?.value) || 0;
-  const plan = { start:{query:from}, end:{query:to}, stops: allStops, dependencies:[], optimize, vehicle_capacity: vehicleCapacity || undefined };
+  const plan = { start:from, end:to, stops: allStops, dependencies:[], optimize, vehicle_capacity: vehicleCapacity || undefined };
   const res = await fetch('/api/v1/trip/solve', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({plan, options})});
   if(!res.ok){
     const err = await res.json().catch(()=>({}));
@@ -1538,59 +1751,76 @@ async function apiTripSolve(from,to,options){
   return res.json();
 }
 
+function clearRouteLocationChoices(target) {
+  const input = typeof target === 'string' ? document.getElementById(target) : target;
+  input?.closest('.route-input-wrap')?.querySelector('.route-location-choices')?.remove();
+}
+
+// Keep an ambiguous-location decision next to the field it affects instead of
+// hiding it in the optional AI chat. Selecting a result stores its precise
+// coordinates; clicking “Route berechnen” remains the explicit confirmation.
 function renderDisambiguationButtons(details) {
   if (!details || !Array.isArray(details.suggestions) || details.suggestions.length === 0) return;
-  const messagesEl = document.getElementById('aiMessages');
-  if (!messagesEl) return;
 
   const target = details.target === 'from' ? 'from' : 'to';
-  const query = details.query || '';
+  const input = document.getElementById(target);
+  const inputWrap = input?.closest('.route-input-wrap');
+  if (!input || !inputWrap) return;
+  clearRouteLocationChoices(input);
 
-  const wrapper = document.createElement('div');
-  wrapper.className = 'ai-message ai-assistant';
+  const targetLabel = target === 'from' ? 'Start' : 'Ziel';
+  const panel = document.createElement('section');
+  panel.className = 'route-location-choices';
+  panel.setAttribute('aria-label', `Treffer für ${targetLabel} auswählen`);
 
-  const header = document.createElement('div');
-  header.style.fontSize = '11px';
-  header.style.color = 'var(--text-muted)';
-  header.style.marginBottom = '6px';
-  header.textContent = 'Mehrdeutiges Ziel';
-  wrapper.appendChild(header);
+  const header = document.createElement('strong');
+  header.className = 'route-location-choices-title';
+  header.textContent = `${targetLabel} auswählen`;
+  panel.appendChild(header);
 
-  const text = document.createElement('div');
-  text.style.fontSize = '13px';
-  text.style.marginBottom = '8px';
-  text.innerHTML = `Ich bin nicht sicher, welches ${target === 'from' ? 'Start' : 'Ziel'} gemeint ist${query ? ` (<strong>${escapeHtml(query)}</strong>)` : ''}. Bitte auswählen:`;
-  wrapper.appendChild(text);
+  const hint = document.createElement('p');
+  hint.className = 'route-location-choices-hint';
+  hint.textContent = details.query
+    ? `„${details.query}“ ist nicht eindeutig. Bitte den passenden Ort auswählen.`
+    : `Bitte den passenden ${targetLabel.toLowerCase()} auswählen.`;
+  panel.appendChild(hint);
 
-  const btnRow = document.createElement('div');
-  btnRow.style.display = 'flex';
-  btnRow.style.flexWrap = 'wrap';
-  btnRow.style.gap = '6px';
+  const list = document.createElement('div');
+  list.className = 'route-location-choice-list';
+  list.setAttribute('role', 'list');
+  details.suggestions.slice(0, 6).forEach((suggestion) => {
+    const item = normalizeSearchResult(suggestion);
+    if (!item) return;
+    const row = document.createElement('div');
+    row.setAttribute('role', 'listitem');
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'route-location-choice';
 
-  details.suggestions.slice(0, 6).forEach((sug) => {
-    const btn = document.createElement('button');
-    btn.className = 'btn';
-    btn.style.padding = '6px 10px';
-    btn.style.fontSize = '12px';
-    const sugCoord = normalizeSearchResult(sug);
-    btn.textContent = getResultInputValue(sug) || (sugCoord ? `${sugCoord.lat.toFixed(5)}, ${sugCoord.lon.toFixed(5)}` : '');
-    btn.title = [sug.kind || 'Treffer', getResultSecondary(sug)].filter(Boolean).join(' • ');
-    btn.addEventListener('click', async () => {
-          const val = getResultInputValue(sug) || (sugCoord ? `${sugCoord.lat},${sugCoord.lon}` : '');
-      const el = document.getElementById(target);
-      if (el) el.value = val;
-      try {
-        if (sugCoord) map.panTo([sugCoord.lon, sugCoord.lat]);
-      } catch (e) {}
-      showToast(`${target === 'from' ? 'Start' : 'Ziel'} gesetzt: ${val}`, 'success', 1800);
-      try { await compute(); } catch (e) { console.warn('compute after disambiguation failed', e); }
+    const primary = document.createElement('span');
+    primary.className = 'route-location-choice-primary';
+    primary.textContent = getResultPrimary(item) || getResultInputValue(item) || 'Treffer';
+    button.appendChild(primary);
+
+    const context = [getResultSecondary(item), formatLatLon(item.lat, item.lon, 5)].filter(Boolean).join(' • ');
+    if (context) {
+      const secondary = document.createElement('span');
+      secondary.className = 'route-location-choice-secondary';
+      secondary.textContent = context;
+      button.appendChild(secondary);
+    }
+    button.addEventListener('click', () => {
+      if (!setResolvedSearchResult(input, item)) return;
+      clearRouteLocationChoices(input);
+      try { map.panTo([item.lon, item.lat]); } catch (_) {}
+      showToast(`${targetLabel} ausgewählt. Jetzt Route berechnen.`, 'success', 2200);
+      input.focus();
     });
-    btnRow.appendChild(btn);
+    row.appendChild(button);
+    list.appendChild(row);
   });
-
-  wrapper.appendChild(btnRow);
-  messagesEl.appendChild(wrapper);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  panel.appendChild(list);
+  inputWrap.appendChild(panel);
 }
 
 function renderPath(path, meta){
@@ -1650,8 +1880,10 @@ function renderPath(path, meta){
 }
 
 async function compute() {
-  const from = document.getElementById('from').value.trim();
-  const to = document.getElementById('to').value.trim();
+  const fromEl = document.getElementById('from');
+  const toEl = document.getElementById('to');
+  const from = routeLocationForInput(fromEl);
+  const to = routeLocationForInput(toEl);
   // Sync clear-button visibility for main inputs (covers programmatic value sets)
   syncInputClearState('from');
   syncInputClearState('to');
@@ -1672,27 +1904,20 @@ async function compute() {
     const hasStops = stops.length > 0;
     
     if (!hasWaypoints && !hasStops) {
-      if (!from || !to) {
+      if (!routeLocationHasValue(from) || !routeLocationHasValue(to)) {
         document.getElementById('status').textContent = 'Bereit';
         showToast('Bitte Start und Ziel eingeben', 'info');
         return;
       }
       const data = await apiRoute(from, to, options);
       renderPath(data.path, data);
-      // A bare "lat,lon" query (used instead of a free-text label to avoid
-      // ambiguous server-side resolution, see resultCoordValue()) is
-      // upgraded to the resolved place name once the route confirms it.
-      const coordPattern = /^-?\d+\.?\d*,-?\d+\.?\d*$/;
-      const fromEl = document.getElementById('from');
-      const toEl = document.getElementById('to');
-      if (fromEl && coordPattern.test(from) && data.from?.label) {
-        fromEl.value = data.from.label;
-        syncInputClearState('from');
-      }
-      if (toEl && coordPattern.test(to) && data.to?.label) {
-        toEl.value = data.to.label;
-        syncInputClearState('to');
-      }
+      // Preserve the exact resolved positions behind the friendly labels. A
+      // later change of profile/objective must route to this same point rather
+      // than trying to parse the displayed name again.
+      if (data.from) setResolvedRouteResponsePoint(fromEl, data.from);
+      if (data.to) setResolvedRouteResponsePoint(toEl, data.to);
+      clearRouteLocationChoices(fromEl);
+      clearRouteLocationChoices(toEl);
       // ensure maneuvers shown from response (top-level steps)
       (function(){
         let steps = data.steps || null;
@@ -1829,10 +2054,14 @@ document.getElementById('clear').addEventListener('click', () => {
   const fromEl = document.getElementById('from');
   const toEl   = document.getElementById('to');
   if (fromEl) {
+    clearResolvedRoutePoint(fromEl);
+    clearRouteLocationChoices(fromEl);
     fromEl.value = '';
     fromEl.closest('.input-clear-wrap')?.classList.remove('has-value');
   }
   if (toEl) {
+    clearResolvedRoutePoint(toEl);
+    clearRouteLocationChoices(toEl);
     toEl.value = '';
     toEl.closest('.input-clear-wrap')?.classList.remove('has-value');
   }
@@ -2175,17 +2404,33 @@ function makeSuggest(containerId, inputOrId) {
   const container = document.getElementById(containerId);
   const input = typeof inputOrId === 'string' ? document.getElementById(inputOrId) : inputOrId;
   if (!input || !container) return;
+
+  container.setAttribute('role', 'listbox');
+  input.setAttribute('role', 'combobox');
+  input.setAttribute('aria-autocomplete', 'list');
+  input.setAttribute('aria-controls', containerId);
+  input.setAttribute('aria-expanded', 'false');
   
   let timeout = null;
   let seq = 0;
   let ctrl = null;
   let selectedIndex = -1;
 
-  function hide() { container.style.display = 'none'; container.innerHTML = ''; }
-  function show() { if (container.innerHTML.trim()) container.style.display = 'block'; }
+  function hide() {
+    container.style.display = 'none';
+    container.innerHTML = '';
+    input.setAttribute('aria-expanded', 'false');
+    input.removeAttribute('aria-activedescendant');
+  }
+  function show() {
+    if (!container.innerHTML.trim()) return;
+    container.style.display = 'block';
+    input.setAttribute('aria-expanded', 'true');
+  }
 
   let lastQuery = '';
   input.addEventListener('input', () => {
+    clearRouteLocationChoices(input);
     const q = input.value.trim();
     if (timeout) clearTimeout(timeout);
     if (ctrl) { ctrl.abort(); ctrl = null; }
@@ -2222,6 +2467,7 @@ function makeSuggest(containerId, inputOrId) {
           const el = document.createElement('div');
           el.className = 'item';
           el.dataset.index = String(i);
+          el.id = `${containerId}-option-${i}`;
           const primary = getResultPrimary(item);
           const secondary = getResultSecondary(item);
 
@@ -2247,13 +2493,11 @@ function makeSuggest(containerId, inputOrId) {
           el.setAttribute('aria-selected', 'false');
           el.addEventListener('mouseover', () => { selectedIndex = i; updateActive(); });
           el.onclick = () => {
-            const val = resultCoordValue(item) || primary || '';
-            input.value = val;
-            // update clear-button visibility
-            const wrap = input.closest('.input-clear-wrap');
-            if (wrap) wrap.classList.toggle('has-value', !!val);
+            if (!applySearchResultToInput(input, item)) return;
             hide();
-            compute();
+            clearRouteLocationChoices(input);
+            const target = input.id === 'from' ? 'Start' : input.id === 'to' ? 'Ziel' : 'Zwischenstopp';
+            showToast(`${target} ausgewählt. Jetzt Route berechnen.`, 'success', 2000);
             input.focus();
           };
           container.appendChild(el);
@@ -2297,6 +2541,9 @@ function makeSuggest(containerId, inputOrId) {
       it.classList.toggle('active', active);
       it.setAttribute('aria-selected', active ? 'true' : 'false');
     });
+    const activeItem = selectedIndex >= 0 ? items[selectedIndex] : null;
+    if (activeItem) input.setAttribute('aria-activedescendant', activeItem.id);
+    else input.removeAttribute('aria-activedescendant');
     // ensure active item is visible
     const active = container.querySelector('.item.active');
     if (active) active.scrollIntoView({block: 'nearest'});
@@ -2514,14 +2761,10 @@ function createSearchResultMarker(item) {
       const deleteBtn = popup.getElement().querySelector('.delete-marker-btn');
       if (destBtn) {
         destBtn.addEventListener('click', () => {
-          const val = resultCoordValue(normalized);
           const toEl = document.getElementById('to');
-          if (val && toEl) {
-            toEl.value = val;
-            syncInputClearState('to');
-          }
+          const selected = setResolvedSearchResult(toEl, normalized);
           popup.remove();
-          if (val) compute();
+          if (selected) compute();
         });
       }
       if (deleteBtn) {
@@ -2609,11 +2852,10 @@ function createSearchResultMarker(item) {
               const dbtn = el.querySelector('.delete-btn');
               const bbtn = el.querySelector('.back-btn');
               if (rbtn) rbtn.addEventListener('click', () => {
-                const to = resultCoordValue(data) || resultCoordValue(normalized);
-                document.getElementById('to').value = to;
-                syncInputClearState('to');
+                const toEl = document.getElementById('to');
+                const selected = setResolvedSearchResult(toEl, normalizeSearchResult(data) ? data : normalized);
                 popup.remove();
-                compute();
+                if (selected) compute();
               });
               if (wbtn) wbtn.addEventListener('click', () => {
                 const val = resultCoordValue(data) || resultCoordValue(normalized);
@@ -2733,6 +2975,7 @@ optimizeEl.addEventListener('change', (ev) => {
 // Initialize settings UI
 function initializeSettingsUI(s) {
   if (!s) return;
+    setUseCaseSelection(s.use_case || 'private', { announce: false });
     if(s.routing) {
         document.getElementById('engine').value = (s.routing.engine || 'astar');
         document.getElementById('objective').value = s.routing.objective || 'duration';
@@ -2828,7 +3071,7 @@ function initializeSettingsUI(s) {
     const atEl = document.getElementById('tileAttribution');
     if (atEl) atEl.value = tiles.attribution || '';
     updateMapTypeVisibility(mt);
-    // OpenAI / remote API settings
+    // Remote API settings
     const ai = s.ai || {};
     const keyEl = document.getElementById('openaiApiKey');
     if (keyEl) keyEl.value = ai.openai_api_key || '';
@@ -2839,6 +3082,96 @@ function initializeSettingsUI(s) {
     settingsUIReady = true;
     syncTileSourcePickerFromTiles(tiles);
     maybeShowMapWelcome();
+}
+
+let useCaseDefinitions = [];
+
+function setUseCaseSelection(id, { announce = false } = {}) {
+  const input = document.getElementById('useCase');
+  if (input) input.value = id || 'private';
+  document.querySelectorAll('.use-case-card').forEach((card) => {
+    const selected = card.dataset.useCase === (id || 'private');
+    card.classList.toggle('is-selected', selected);
+    card.setAttribute('aria-checked', String(selected));
+  });
+  if (announce) {
+    const definition = useCaseDefinitions.find((item) => item.id === id);
+    const hint = document.getElementById('useCaseHint');
+    if (hint && definition) hint.textContent = `${definition.label} ist ausgewählt. Mit „Speichern“ wird diese Basis dauerhaft übernommen.`;
+  }
+  const definition = useCaseDefinitions.find((item) => item.id === id);
+  const offlineAction = document.getElementById('useCaseOfflineAction');
+  if (offlineAction) offlineAction.hidden = !definition?.prefer_offline_map;
+}
+
+function setUseCaseToggle(id, enabled) {
+  const element = document.getElementById(id);
+  if (!element || element.checked === !!enabled) return;
+  element.checked = !!enabled;
+  element.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+function applyUseCase(definition) {
+  const routing = definition?.routing || {};
+  const weights = routing.weights || {};
+  const setValue = (id, value) => {
+    const element = document.getElementById(id);
+    if (element && value !== undefined && value !== null) element.value = String(value);
+  };
+  setValue('engine', routing.engine || 'astar');
+  setValue('objective', routing.objective || 'duration');
+  const profile = document.getElementById('profile');
+  if (profile) {
+    profile.dataset.pendingValue = routing.profile || '';
+    profile.value = routing.profile || '';
+  }
+  setUseCaseToggle('pro', !!routing.pro);
+  setUseCaseToggle('emergencyMode', !!routing.emergency_mode);
+  setValue('w_left', weights.left_turn || 0);
+  setValue('w_right', weights.right_turn || 0);
+  setValue('w_traffic_light', weights.traffic_light_penalty || 0);
+  setUseCaseToggle('noLeftTurn', !!weights.no_left_turn);
+  setUseCaseToggle('optimize', !!definition.optimize_trips);
+  setUseCaseToggle('showHydrants', !!definition.show_hydrants);
+  setUseCaseToggle('showFireStations', !!definition.show_fire_stations);
+  document.getElementById('weights')?.classList.toggle('hidden', !routing.pro);
+  syncRouteObjectiveToggle();
+  setUseCaseSelection(definition.id, { announce: true });
+}
+
+function renderUseCases() {
+  const container = document.getElementById('useCaseCards');
+  if (!container) return;
+  container.replaceChildren(...useCaseDefinitions.map((definition) => {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'use-case-card';
+    card.dataset.useCase = definition.id;
+    card.setAttribute('role', 'radio');
+    const title = document.createElement('strong');
+    title.textContent = `${definition.icon || '•'} ${definition.label}`;
+    const description = document.createElement('small');
+    description.textContent = definition.description;
+    card.append(title, description);
+    card.addEventListener('click', () => applyUseCase(definition));
+    return card;
+  }));
+  setUseCaseSelection(document.getElementById('useCase')?.value || 'private');
+}
+
+async function loadUseCases() {
+  try {
+    const response = await fetch('/api/v1/use-cases', { headers: { Accept: 'application/json' } });
+    if (!response.ok) throw new Error(`use cases: ${response.status}`);
+    const definitions = await response.json();
+    if (!Array.isArray(definitions)) throw new Error('use cases response is not an array');
+    useCaseDefinitions = definitions;
+    renderUseCases();
+  } catch (error) {
+    const container = document.getElementById('useCaseCards');
+    if (container) container.textContent = 'Einsatzbereiche sind momentan nicht verfügbar.';
+    console.warn('Failed to load use cases:', error);
+  }
 }
 
 // ─── Visual tile-source picker ───────────────────────────────────────────
@@ -3371,6 +3704,9 @@ function tinyTilesElements() {
     progress: document.getElementById('tinyTilesProgress'),
     progressBar: document.querySelector('#tinyTilesProgress .tinytiles-progress-bar span'),
     facts: document.getElementById('tinyTilesFacts'),
+    postcodeLookup: document.getElementById('tinyTilesPostcodeLookup'),
+    postcodeInput: document.getElementById('tinyTilesPostcodeInput'),
+    postcodeStatus: document.getElementById('tinyTilesPostcodeStatus'),
   };
 }
 
@@ -3444,12 +3780,14 @@ function updateTinyTilesFacts(status, state, facts) {
   const estimatedTiles = Number(status.estimated_tile_count);
   const generatedTiles = Number(status.generated_tiles);
   const roads = Number(status.road_features);
+  const waterways = Number(status.waterway_features);
   const duration = formatTinyTilesDuration(status, state);
   if (sourceBytes) entries.push(['PBF-Quelle', sourceBytes]);
   if (estimatedTiles > 0) entries.push(['Geschätzte Kacheln', number.format(estimatedTiles)]);
   if (estimatedDisk) entries.push(['Geschätzter Speicher', estimatedDisk]);
   if (generatedTiles > 0) entries.push(['Erzeugte Kacheln', number.format(generatedTiles)]);
   if (roads > 0) entries.push(['Straßenobjekte', number.format(roads)]);
+  if (waterways > 0) entries.push(['Gewässerobjekte', number.format(waterways)]);
   if (duration) entries.push([state === 'building' ? 'Läuft seit' : 'Build-Dauer', duration]);
   facts.replaceChildren(...entries.map(([label, value]) => {
     const item = document.createElement('div');
@@ -3524,7 +3862,51 @@ function updateTinyTilesUI(rawStatus = {}) {
       : state === 'ready' ? 'Offline-Karte neu erzeugen' : 'Offline-Karte erzeugen';
   }
   if (el.activate) el.activate.style.display = state === 'ready' ? '' : 'none';
+  if (el.postcodeLookup) el.postcodeLookup.hidden = state !== 'ready' || !rawStatus.postal_codes;
   return state;
+}
+
+function setTinyTilesPostcodeStatus(message) {
+  const status = tinyTilesElements().postcodeStatus;
+  if (status) status.textContent = message;
+}
+
+// The postcode endpoint is available only when the local tinyTiles build
+// included OSM postal boundaries. It returns a compact center/bounds summary,
+// so this UI can navigate without loading a GeoJSON boundary into the browser.
+async function findTinyTilesPostcode() {
+  const input = tinyTilesElements().postcodeInput;
+  const query = String(input?.value || '').trim();
+  if (!query) {
+    setTinyTilesPostcodeStatus('Bitte eine Postleitzahl oder einen Ortsnamen eingeben.');
+    input?.focus();
+    return;
+  }
+  setTinyTilesPostcodeStatus('Suche lokal …');
+  try {
+    const response = await fetch(`/tinytiles/postcode/search?q=${encodeURIComponent(query)}`, { cache: 'no-store' });
+    if (response.status === 404) {
+      throw new Error('Diese Offline-Karte enthält keine PLZ-Grenzen. Erzeuge sie über „PLZ-Gebiete erzeugen“.');
+    }
+    if (!response.ok) throw new Error(`PLZ-Suche fehlgeschlagen (${response.status})`);
+    const payload = await response.json();
+    const results = Array.isArray(payload?.results) ? payload.results : [];
+    if (results.length === 0) {
+      setTinyTilesPostcodeStatus('Kein passendes PLZ-Gebiet in der geladenen Offline-Karte gefunden.');
+      return;
+    }
+    const exact = results.find((result) => String(result?.postcode || '').toLowerCase() === query.toLowerCase());
+    const result = exact || results[0];
+    const center = Array.isArray(result?.center) ? result.center : null;
+    if (!center || !Number.isFinite(Number(center[0])) || !Number.isFinite(Number(center[1]))) {
+      throw new Error('Für dieses PLZ-Gebiet ist kein Kartenmittelpunkt verfügbar.');
+    }
+    map.flyTo({ center: [Number(center[0]), Number(center[1])], zoom: Math.max(11, Number(map.getZoom()) || 0), essential: true });
+    const label = [result.postcode, result.name].filter(Boolean).join(' · ');
+    setTinyTilesPostcodeStatus(`${label}${results.length > 1 && !exact ? ` · ${results.length - 1} weitere Treffer` : ''}`);
+  } catch (error) {
+    setTinyTilesPostcodeStatus(error instanceof Error ? error.message : 'PLZ-Suche fehlgeschlagen.');
+  }
 }
 
 function stopTinyTilesPolling() {
@@ -3802,6 +4184,11 @@ async function startTinyTilesBuild({ postalCodes = false, postalPrefixLength = 3
 }
 
 document.getElementById('tinyTilesBuild')?.addEventListener('click', () => { void startTinyTilesBuild(); });
+document.getElementById('useCaseOfflineAction')?.addEventListener('click', openTinyTilesBuilder);
+document.getElementById('tinyTilesPostcodeLookup')?.addEventListener('submit', (event) => {
+  event.preventDefault();
+  void findTinyTilesPostcode();
+});
 
 document.querySelectorAll('.tinytiles-preset').forEach((preset) => {
   preset.addEventListener('click', () => {
@@ -3852,14 +4239,20 @@ async function loadVehicleProfiles() {
       opt.textContent = `${p.icon || ''} ${p.label}`.trim();
       sel.appendChild(opt);
     });
-    // restore active profile from preloaded settings
-    const curProfile = preloadedSettings?.routing?.profile || '';
+    // A use-case card may have applied a profile before this asynchronous
+    // list arrived. Preserve that explicit choice over the initial settings.
+    const curProfile = sel.dataset.pendingValue || sel.value || preloadedSettings?.routing?.profile || '';
     if (curProfile) sel.value = curProfile;
+    delete sel.dataset.pendingValue;
   } catch (e) {
     console.warn('Failed to load vehicle profiles:', e);
   }
 }
 loadVehicleProfiles();
+// The deployment/use-case picker is intentionally hidden in this compact UI.
+// Preserve its hidden value for backwards-compatible settings saves, but do
+// not spend a request and DOM work rendering cards the user cannot access.
+if (!document.querySelector('.use-case-section[hidden]')) loadUseCases();
 
 // ─── Territories ────────────────────────────────────────────────────────
 // The backend only exposes a minimal, read-only surface (list of layers +
@@ -4163,6 +4556,345 @@ document.getElementById('territoryBuildPostal')?.addEventListener('click', () =>
 
 loadTerritoryLayers();
 
+// ─── Local proof-of-delivery and maintenance log ─────────────────────────
+// Inspired by the barcode logger's focused mode workflow: capture a code,
+// add the context appropriate to the task, then keep a durable local audit
+// entry. The browser queue is deliberately small and only covers temporary
+// connectivity loss; the server remains the system of record.
+const operationsEndpoint = '/api/v1/operations';
+const operationsQueueKey = 'osmmini.operations.pending.v1';
+const operationsLocalKey = 'osmmini.operations.local.v1';
+let operationCoordinates = null;
+let operationScanStream = null;
+let operationScanTimer = null;
+let operationDetector = null;
+let operationRecords = [];
+let deployment = { mode: 'single-user', operator_auth_required: false, browser_local_operations: false };
+
+function operationType() {
+  const type = document.getElementById('operationType')?.value;
+  return ['pod', 'maintenance', 'check'].includes(type) ? type : 'pod';
+}
+
+function setOperationStatus(message) {
+  const element = document.getElementById('operationStatusText');
+  if (element) element.textContent = message;
+}
+
+function setOperationMode(type) {
+  const normalized = ['pod', 'maintenance', 'check'].includes(type) ? type : 'pod';
+  const input = document.getElementById('operationType');
+  if (input) input.value = normalized;
+  document.querySelectorAll('.operation-mode').forEach((button) => {
+    const selected = button.dataset.operationType === normalized;
+    button.classList.toggle('is-selected', selected);
+    button.setAttribute('aria-checked', String(selected));
+  });
+  document.querySelectorAll('.operation-pod-field').forEach((element) => { element.hidden = normalized !== 'pod'; });
+  document.querySelectorAll('.operation-maintenance-field').forEach((element) => { element.hidden = normalized !== 'maintenance'; });
+  document.querySelectorAll('.operation-check-field').forEach((element) => { element.hidden = normalized !== 'check'; });
+  const submit = document.querySelector('#operationForm button[type="submit"]');
+  if (submit) submit.textContent = normalized === 'pod' ? 'Zustellnachweis speichern' : normalized === 'maintenance' ? 'Wartung protokollieren' : 'Lagecheck speichern';
+  setOperationStatus(normalized === 'pod'
+    ? 'Barcode erfassen, Empfänger:in ergänzen und lokal speichern.'
+    : normalized === 'maintenance'
+      ? 'Objekt erfassen, Arbeit und Status ergänzen und lokal speichern.'
+      : 'Objekt, Ressource oder Abschnitt erfassen und die aktuelle Lage lokal protokollieren.');
+}
+
+function pendingOperations() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(operationsQueueKey) || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function savePendingOperations(records) {
+  localStorage.setItem(operationsQueueKey, JSON.stringify(records.slice(-100)));
+}
+
+function queueOperation(record) {
+  const queue = pendingOperations();
+  queue.push(record);
+  savePendingOperations(queue);
+  setOperationStatus(`Offline vorgemerkt (${queue.length}). Der Eintrag wird beim nächsten Kontakt übertragen.`);
+}
+
+function localOperations() {
+  try {
+    const records = JSON.parse(localStorage.getItem(operationsLocalKey) || '[]');
+    return Array.isArray(records) ? records : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function saveLocalOperations(records) {
+  localStorage.setItem(operationsLocalKey, JSON.stringify(records.slice(0, 500)));
+}
+
+function operationHeaders(headers = {}) {
+  if (deployment.operator_auth_required) {
+    const token = document.getElementById('operationToken')?.value.trim() || sessionStorage.getItem('osmminiOperationToken') || '';
+    if (token) sessionStorage.setItem('osmminiOperationToken', token);
+    return token ? { ...headers, Authorization: `Bearer ${token}` } : headers;
+  }
+  return adminAuthHeaders(headers);
+}
+
+function setOperationsDeploymentStatus() {
+  const element = document.getElementById('operationsDeployment');
+  const tokenRow = document.getElementById('operationTokenRow');
+  if (!element) return;
+  if (deployment.browser_local_operations) {
+    element.textContent = 'Browser-lokal: Protokolle bleiben auf diesem Gerät und können als CSV exportiert werden.';
+  } else if (deployment.operator_auth_required) {
+    element.textContent = 'Mehrbenutzer-Server: Einträge werden zentral gespeichert und dem Operator-Token zugeordnet.';
+  } else {
+    element.textContent = 'Einzelserver: Protokolle werden lokal auf diesem Server gespeichert.';
+  }
+  if (tokenRow) tokenRow.hidden = !deployment.operator_auth_required;
+}
+
+async function loadDeployment() {
+  try {
+    const response = await fetch('/api/v1/deployment', { headers: { Accept: 'application/json' } });
+    if (!response.ok) throw new Error(`deployment: ${response.status}`);
+    deployment = { ...deployment, ...await response.json() };
+  } catch (error) {
+    console.warn('Failed to load deployment mode:', error);
+  }
+  const token = document.getElementById('operationToken');
+  if (token) token.value = sessionStorage.getItem('osmminiOperationToken') || '';
+  setOperationsDeploymentStatus();
+}
+
+function operationPayload() {
+  const type = operationType();
+  const assetCode = document.getElementById('operationAssetCode')?.value.trim() || '';
+  const recipient = document.getElementById('operationRecipient')?.value.trim() || '';
+  if (!assetCode) throw new Error('Barcode oder Objekt-ID fehlt.');
+  if (type === 'pod' && !recipient) throw new Error('Für den Zustellnachweis fehlt die empfangende Person.');
+  const payload = {
+    type,
+    asset_code: assetCode,
+    status: type === 'pod' ? 'delivered' : type === 'maintenance' ? (document.getElementById('operationStatus')?.value || 'completed') : (document.getElementById('operationCheckStatus')?.value || 'checked'),
+    recipient: type === 'pod' ? recipient : '',
+    reference: type === 'pod' ? (document.getElementById('operationReference')?.value.trim() || '') : type === 'check' ? (document.getElementById('operationCheckReference')?.value.trim() || '') : '',
+    technician: type === 'maintenance' ? (document.getElementById('operationTechnician')?.value.trim() || '') : '',
+    work_type: type === 'maintenance' ? (document.getElementById('operationWorkType')?.value || '') : '',
+    notes: document.getElementById('operationNotes')?.value.trim() || '',
+    occurred_at: new Date().toISOString(),
+  };
+  if (operationCoordinates) {
+    payload.latitude = operationCoordinates.latitude;
+    payload.longitude = operationCoordinates.longitude;
+  }
+  return payload;
+}
+
+async function submitOperation(record) {
+  if (deployment.browser_local_operations) {
+    const created = { ...record, id: `browser_${globalThis.crypto?.randomUUID?.() || Date.now()}`, actor: 'browser-local', created_at: new Date().toISOString() };
+    const records = localOperations();
+    records.unshift(created);
+    saveLocalOperations(records);
+    return created;
+  }
+  const response = await fetch(operationsEndpoint, {
+    method: 'POST',
+    headers: operationHeaders({ 'Content-Type': 'application/json', Accept: 'application/json' }),
+    body: JSON.stringify(record),
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.error || `Protokoll konnte nicht gespeichert werden (${response.status})`);
+  }
+  return response.json();
+}
+
+function renderOperationsHistory(records) {
+  const list = document.getElementById('operationsHistory');
+  if (!list) return;
+  list.replaceChildren(...records.map((record) => {
+    const item = document.createElement('li');
+    item.className = 'operation-history-entry';
+    const title = document.createElement('strong');
+    const label = record.type === 'maintenance' ? '🔧 Wartung' : record.type === 'check' ? '📋 Lagecheck' : '📦 Zustellung';
+    title.textContent = `${label} · ${record.asset_code || 'ohne ID'}`;
+    const detail = document.createElement('span');
+    const context = record.type === 'maintenance'
+      ? [record.work_type, record.status, record.technician].filter(Boolean).join(' · ')
+      : record.type === 'check'
+        ? [record.status, record.reference].filter(Boolean).join(' · ')
+        : [record.recipient, record.reference].filter(Boolean).join(' · ');
+    const time = record.occurred_at ? new Date(record.occurred_at).toLocaleString('de-DE') : '';
+    detail.textContent = [context, record.actor, time, record.latitude != null ? '📍' : ''].filter(Boolean).join(' · ');
+    item.append(title, detail);
+    return item;
+  }));
+  if (records.length === 0) {
+    const empty = document.createElement('li');
+    empty.className = 'operation-history-entry';
+    empty.textContent = 'Noch keine Einträge.';
+    list.append(empty);
+  }
+}
+
+async function loadOperations() {
+  if (deployment.browser_local_operations) {
+    operationRecords = localOperations();
+    renderOperationsHistory(operationRecords);
+    return;
+  }
+  try {
+    const response = await fetch(`${operationsEndpoint}?limit=100`, { headers: operationHeaders({ Accept: 'application/json' }) });
+    if (!response.ok) throw new Error(`operations: ${response.status}`);
+    operationRecords = await response.json();
+    renderOperationsHistory(operationRecords);
+  } catch (error) {
+    renderOperationsHistory([]);
+    if (error instanceof Error && error.message !== 'operations: 401') console.warn('Failed to load operations:', error);
+  }
+}
+
+async function flushPendingOperations() {
+  if (deployment.browser_local_operations) return;
+  const queued = pendingOperations();
+  if (queued.length === 0 || !navigator.onLine) return;
+  const remaining = [];
+  for (const record of queued) {
+    try {
+      await submitOperation(record);
+    } catch (_) {
+      remaining.push(record);
+    }
+  }
+  savePendingOperations(remaining);
+  if (remaining.length < queued.length) {
+    setOperationStatus(remaining.length ? `${queued.length - remaining.length} Offline-Einträge übertragen; ${remaining.length} warten noch.` : 'Offline-Einträge übertragen.');
+    await loadOperations();
+  }
+}
+
+function stopOperationScanner() {
+  if (operationScanTimer !== null) window.clearInterval(operationScanTimer);
+  operationScanTimer = null;
+  operationDetector = null;
+  operationScanStream?.getTracks().forEach((track) => track.stop());
+  operationScanStream = null;
+  const video = document.getElementById('operationCamera');
+  if (video) {
+    video.srcObject = null;
+    video.hidden = true;
+  }
+  const button = document.getElementById('operationScan');
+  if (button) button.textContent = '📷 Scannen';
+}
+
+async function startOperationScanner() {
+  if (operationScanStream) {
+    stopOperationScanner();
+    return;
+  }
+  if (!('BarcodeDetector' in window) || !navigator.mediaDevices?.getUserMedia) {
+    setOperationStatus('Kamera-Scan wird von diesem Browser nicht unterstützt. Barcode bitte eingeben.');
+    return;
+  }
+  try {
+    const formats = typeof window.BarcodeDetector.getSupportedFormats === 'function'
+      ? await window.BarcodeDetector.getSupportedFormats()
+      : null;
+    operationDetector = formats?.length ? new window.BarcodeDetector({ formats }) : new window.BarcodeDetector();
+    operationScanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+    const video = document.getElementById('operationCamera');
+    if (!video) throw new Error('Kameraansicht fehlt');
+    video.srcObject = operationScanStream;
+    video.hidden = false;
+    await video.play();
+    document.getElementById('operationScan').textContent = '■ Scan stoppen';
+    setOperationStatus('Kamera aktiv – Barcode oder QR-Code in den Rahmen halten.');
+    operationScanTimer = window.setInterval(async () => {
+      if (!operationDetector || !video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+      try {
+        const found = await operationDetector.detect(video);
+        if (!found[0]?.rawValue) return;
+        const input = document.getElementById('operationAssetCode');
+        if (input) input.value = found[0].rawValue;
+        stopOperationScanner();
+        setOperationStatus('Code erkannt. Kontext ergänzen und speichern.');
+        navigator.vibrate?.(35);
+      } catch (_) { /* keep scanning after a transient decode failure */ }
+    }, 350);
+  } catch (error) {
+    stopOperationScanner();
+    setOperationStatus(error instanceof Error ? `Kamera nicht verfügbar: ${error.message}` : 'Kamera nicht verfügbar.');
+  }
+}
+
+function operationCSV(records) {
+  const columns = ['id', 'type', 'asset_code', 'status', 'recipient', 'reference', 'technician', 'work_type', 'notes', 'occurred_at', 'created_at', 'latitude', 'longitude'];
+  const quote = (value) => `"${String(value ?? '').replaceAll('"', '""')}"`;
+  return ['\uFEFF' + columns.join(';'), ...records.map((record) => columns.map((column) => quote(record[column])).join(';'))].join('\n');
+}
+
+function exportOperationsCSV() {
+  const data = operationCSV(operationRecords);
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(new Blob([data], { type: 'text/csv;charset=utf-8' }));
+  link.download = `osmmini-protokoll-${new Date().toISOString().slice(0, 10)}.csv`;
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
+document.querySelectorAll('.operation-mode').forEach((button) => button.addEventListener('click', () => setOperationMode(button.dataset.operationType)));
+document.getElementById('operationScan')?.addEventListener('click', () => { void startOperationScanner(); });
+document.getElementById('operationLocation')?.addEventListener('click', () => {
+  if (!navigator.geolocation) { setOperationStatus('Standortbestimmung wird von diesem Browser nicht unterstützt.'); return; }
+  setOperationStatus('Position wird ermittelt …');
+  navigator.geolocation.getCurrentPosition((position) => {
+    operationCoordinates = { latitude: position.coords.latitude, longitude: position.coords.longitude };
+    setOperationStatus('Position hinzugefügt.');
+  }, () => setOperationStatus('Position konnte nicht ermittelt werden. Der Eintrag bleibt ohne GPS möglich.'), { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 });
+});
+document.getElementById('operationForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  try {
+    const record = operationPayload();
+    const created = await submitOperation(record);
+    operationRecords.unshift(created);
+    operationRecords = operationRecords.slice(0, 100);
+    renderOperationsHistory(operationRecords);
+    document.getElementById('operationForm').reset();
+    operationCoordinates = null;
+    setOperationMode(created.type);
+    setOperationStatus('Lokal und dauerhaft gespeichert.');
+  } catch (error) {
+    if (error instanceof TypeError || !navigator.onLine) {
+      try { queueOperation(operationPayload()); } catch (payloadError) { setOperationStatus(payloadError instanceof Error ? payloadError.message : 'Eintrag konnte nicht vorgemerkt werden.'); }
+      return;
+    }
+    setOperationStatus(error instanceof Error ? error.message : 'Eintrag konnte nicht gespeichert werden.');
+  }
+});
+document.getElementById('operationsExport')?.addEventListener('click', exportOperationsCSV);
+document.getElementById('operationToken')?.addEventListener('change', () => {
+  const token = document.getElementById('operationToken')?.value.trim() || '';
+  if (token) sessionStorage.setItem('osmminiOperationToken', token);
+  else sessionStorage.removeItem('osmminiOperationToken');
+  void loadOperations();
+});
+window.addEventListener('online', () => { void flushPendingOperations(); });
+window.addEventListener('pagehide', stopOperationScanner, { once: true });
+setOperationMode('pod');
+void (async () => {
+  await loadDeployment();
+  await loadOperations();
+  await flushPendingOperations();
+})();
+
 // When a profile is selected, auto-apply its default objective if the user
 // hasn't explicitly changed it.
 const profileSelEl = document.getElementById('profile');
@@ -4217,6 +4949,7 @@ document.getElementById('save').onclick = async () => {
   
   try {
     const cur = await apiGetSettings();
+    cur.use_case = document.getElementById('useCase')?.value || 'private';
     cur.routing = routeOptionsFromUI();
     // collect allowed highways
     const allowed = Array.from(document.querySelectorAll('.allowed-highway')).filter(x=>x.checked).map(x=>x.dataset.type);
@@ -4227,7 +4960,7 @@ document.getElementById('save').onclick = async () => {
     speedInputs.forEach(si => { const k=si.dataset.type; const v=parseFloat(si.value); if(!isNaN(v)) cur.default_highway_speeds[k]=v; });
     // collect tile/map source settings
     cur.tiles = tileSettingsFromUI(cur.tiles || {});
-    // OpenAI / remote API key
+    // Remote API key
     cur.ai = cur.ai || {};
     const keyEl = document.getElementById('openaiApiKey');
     if (keyEl) cur.ai.openai_api_key = keyEl.value.trim();
@@ -4533,7 +5266,7 @@ async function checkAIStatus() {
         statusEl.textContent = 'Provider erreichbar, aber keine Modelle geladen.';
       }
     } else {
-      statusEl.innerHTML = 'Keine KI verfügbar. Starte <a href="https://ollama.com" target="_blank">Ollama</a> oder <a href="https://lmstudio.ai" target="_blank">LM Studio</a>.';
+      statusEl.textContent = 'Keine KI verfügbar. Starte einen lokalen KI-Dienst oder konfiguriere eine Remote-API.';
     }
   } catch (e) {
     statusEl.textContent = 'KI-Status nicht abrufbar.';

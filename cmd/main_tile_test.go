@@ -411,6 +411,9 @@ func TestIndexIncludesVisualMapSourceChoice(t *testing.T) {
 		[]byte(`id="tileSourceCards"`),
 		[]byte(`id="tileLoadOverlay"`),
 		[]byte(`id="tinyTilesBuild"`),
+		[]byte(`id="tinyTilesPostcodeLookup"`),
+		[]byte(`id="useCaseCards"`),
+		[]byte(`id="operationForm"`),
 	} {
 		if !bytes.Contains(page, marker) {
 			t.Fatalf("map-source UI misses %s", marker)
@@ -418,6 +421,38 @@ func TestIndexIncludesVisualMapSourceChoice(t *testing.T) {
 	}
 	if bytes.Contains(page, []byte(`id="tilePreset"`)) {
 		t.Fatal("legacy tile-source dropdown is still present")
+	}
+}
+
+func TestUseCaseAPIAndSettingsValidation(t *testing.T) {
+	settings := DefaultSettings(t.TempDir(), "https://tiles.example.test/{z}/{x}/{y}.png")
+	store := NewSettingsStore(t.TempDir()+"/settings.json", settings)
+	cache := NewTileCache(settings.Tiles)
+	defer cache.Close()
+	s := &server{settings: store, tiles: cache}
+
+	response := httptest.NewRecorder()
+	s.handleUseCases(response, httptest.NewRequest(http.MethodGet, "/api/v1/use-cases", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("use cases status = %d: %s", response.Code, response.Body.String())
+	}
+	var cases []UseCaseDefinition
+	if err := json.Unmarshal(response.Body.Bytes(), &cases); err != nil {
+		t.Fatalf("decode use cases: %v", err)
+	}
+	if len(cases) < 3 || useCaseByID("fire") == nil || useCaseByID("delivery") == nil {
+		t.Fatalf("use cases = %#v, want private, fire and delivery", cases)
+	}
+
+	settings.UseCase = "unknown"
+	body, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalid := httptest.NewRecorder()
+	s.handleSettings(invalid, httptest.NewRequest(http.MethodPut, "/api/v1/settings", bytes.NewReader(body)))
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("unknown use case status = %d, want %d: %s", invalid.Code, http.StatusBadRequest, invalid.Body.String())
 	}
 }
 

@@ -287,6 +287,81 @@
           </div>
         </section>
 
+        <!-- ── Operations log card ── -->
+        <section class="card operations-card collapsed" id="operationsCard">
+          <div class="card-header" id="operationsCardHeader" tabindex="0" title="Zustellung und Wartung ein-/ausklappen">
+            <div class="card-header-left">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+              <h2>Zustellung &amp; Wartung</h2>
+            </div>
+            <button id="operationsToggle" class="btn-collapse" aria-expanded="false">›</button>
+          </div>
+          <div class="card-body" id="operationsBody" style="display:none">
+            <p id="operationsDeployment" class="operations-status">Betriebsmodus wird geprüft …</p>
+            <div id="operationTokenRow" class="setting-item" hidden>
+              <label class="setting-label" for="operationToken">Operator-Token</label>
+              <input id="operationToken" type="password" class="setting-input" autocomplete="current-password" placeholder="Persönlicher Operator-Token"/>
+            </div>
+            <form id="operationForm" class="operations-form">
+              <div class="operations-modes" role="radiogroup" aria-label="Protokolltyp">
+                <button type="button" class="operation-mode is-selected" data-operation-type="pod" role="radio" aria-checked="true">📦 Zustellnachweis</button>
+                <button type="button" class="operation-mode" data-operation-type="maintenance" role="radio" aria-checked="false">🔧 Wartung</button>
+                <button type="button" class="operation-mode" data-operation-type="check" role="radio" aria-checked="false">📋 Lage &amp; Check</button>
+              </div>
+              <input id="operationType" type="hidden" value="pod"/>
+              <div class="operation-code-row">
+                <div class="setting-item">
+                  <label class="setting-label" for="operationAssetCode">Barcode / Objekt-ID</label>
+                  <input id="operationAssetCode" class="setting-input" autocomplete="off" required placeholder="scannen oder eingeben"/>
+                </div>
+                <button id="operationScan" type="button" class="btn btn-ghost">📷 Scannen</button>
+              </div>
+              <video id="operationCamera" class="operation-camera" playsinline muted hidden></video>
+              <div class="settings-grid">
+                <div class="setting-item operation-pod-field">
+                  <label class="setting-label" for="operationRecipient">Empfangen von</label>
+                  <input id="operationRecipient" class="setting-input" autocomplete="name" placeholder="Name"/>
+                </div>
+                <div class="setting-item operation-pod-field">
+                  <label class="setting-label" for="operationReference">Referenz</label>
+                  <input id="operationReference" class="setting-input" placeholder="Auftrag / Lieferschein"/>
+                </div>
+                <div class="setting-item operation-maintenance-field" hidden>
+                  <label class="setting-label" for="operationWorkType">Arbeit</label>
+                  <select id="operationWorkType" class="setting-select"><option value="inspection">Inspektion</option><option value="repair">Reparatur</option><option value="replacement">Austausch</option><option value="check">Prüfung</option><option value="cleaning">Reinigung</option></select>
+                </div>
+                <div class="setting-item operation-maintenance-field" hidden>
+                  <label class="setting-label" for="operationTechnician">Durchgeführt von</label>
+                  <input id="operationTechnician" class="setting-input" autocomplete="name" placeholder="Techniker:in"/>
+                </div>
+                <div class="setting-item operation-maintenance-field" hidden>
+                  <label class="setting-label" for="operationStatus">Status</label>
+                  <select id="operationStatus" class="setting-select"><option value="completed">Abgeschlossen</option><option value="in_progress">In Bearbeitung</option><option value="open">Offen</option></select>
+                </div>
+                <div class="setting-item operation-check-field" hidden>
+                  <label class="setting-label" for="operationCheckStatus">Lage</label>
+                  <select id="operationCheckStatus" class="setting-select"><option value="available">Verfügbar</option><option value="checked">Geprüft</option><option value="damaged">Beschädigt</option><option value="blocked">Gesperrt</option></select>
+                </div>
+                <div class="setting-item operation-check-field" hidden>
+                  <label class="setting-label" for="operationCheckReference">Abschnitt / Referenz</label>
+                  <input id="operationCheckReference" class="setting-input" placeholder="z. B. Abschnitt Nord"/>
+                </div>
+              </div>
+              <div class="setting-item">
+                <label class="setting-label" for="operationNotes">Notiz</label>
+                <textarea id="operationNotes" class="setting-input" rows="2" maxlength="4096" placeholder="optional"></textarea>
+              </div>
+              <div class="operations-actions">
+                <button id="operationLocation" type="button" class="btn btn-ghost">📍 Position hinzufügen</button>
+                <button type="submit" class="btn btn-primary">Zustellnachweis speichern</button>
+              </div>
+              <p id="operationStatusText" class="operations-status" role="status" aria-live="polite">Die Einträge bleiben lokal auf diesem Server.</p>
+            </form>
+            <div class="operations-history-head"><strong>Letzte Einträge</strong><button id="operationsExport" type="button" class="btn btn-ghost">CSV exportieren</button></div>
+            <ul id="operationsHistory" class="operations-history" aria-live="polite"></ul>
+          </div>
+        </section>
+
         <!-- ── Settings card ── -->
         <section class="card settings-card collapsed" id="settingsCard">
           <div class="card-header" id="settingsCardHeader" tabindex="0" title="Einstellungen ein-/ausklappen">
@@ -298,6 +373,20 @@
           </div>
           <div class="card-body" id="settingsBody" style="display:none">
 
+            <div class="settings-section use-case-section" hidden>
+              <div class="section-header">
+                <span class="section-icon">🎯</span>
+                <h3>Einsatzbereich</h3>
+              </div>
+              <p class="settings-hint">Wählt passende Startwerte. Alle darunterliegenden Optionen können danach weiter angepasst werden.</p>
+              <input id="useCase" type="hidden" value="private"/>
+              <div id="useCaseCards" class="use-case-cards" role="radiogroup" aria-label="Einsatzbereich auswählen">
+                <div class="tile-source-empty">Einsatzbereiche werden geladen …</div>
+              </div>
+              <p id="useCaseHint" class="use-case-hint" aria-live="polite"></p>
+              <button id="useCaseOfflineAction" type="button" class="btn btn-ghost use-case-offline-action" hidden>📦 Offline-Karte vorbereiten</button>
+            </div>
+
             <div class="settings-section">
               <div class="section-header">
                 <span class="section-icon">🚗</span>
@@ -305,11 +394,11 @@
               </div>
               <div class="settings-grid">
                 <div class="setting-item">
-                  <label class="setting-label" title="Fahrzeugprofil">Profil <span class="info-icon" title="Passend zum Fahrzeug/Nutzer">ⓘ</span></label>
+                  <label class="setting-label" for="profile" title="Fahrzeugprofil">Profil <span class="info-icon" title="Passend zum Fahrzeug/Nutzer">ⓘ</span></label>
                   <select id="profile" class="setting-select"><option value="">— Standard —</option></select>
                 </div>
                 <div class="setting-item">
-                  <label class="setting-label">Engine <span class="info-icon" title="A* ist der Standard; Dijkstra eignet sich zum Vergleichen">ⓘ</span></label>
+                  <label class="setting-label" for="engine">Engine <span class="info-icon" title="A* ist der Standard; Dijkstra eignet sich zum Vergleichen">ⓘ</span></label>
                   <select id="engine" class="setting-select">
                     <option value="astar">A* (schnell)</option>
                     <option value="dijkstra">Dijkstra (exakt)</option>
@@ -317,7 +406,7 @@
                   </select>
                 </div>
                 <div class="setting-item">
-                  <label class="setting-label">Ziel <span class="info-icon" title="Kürzeste Strecke oder schnellste Zeit">ⓘ</span></label>
+                  <label class="setting-label" for="objective">Ziel <span class="info-icon" title="Kürzeste Strecke oder schnellste Zeit">ⓘ</span></label>
                   <select id="objective" class="setting-select">
                     <option value="distance">Distanz</option>
                     <option value="duration">Dauer</option>
@@ -462,7 +551,7 @@
                 <span class="collapse-indicator">›</span>
               </div>
               <div id="tinyTilesSettings" style="display:none">
-                <p class="settings-hint">Erzeugt aus der beim Server geladenen OSM-PBF eine lokale Straßen-, Gebäude-, Gewässer- und Landbedeckungskarte. Während des Builds bleibt Routing verfügbar; der Build benötigt freien lokalen Speicher.</p>
+                <p class="settings-hint">Erzeugt aus der beim Server geladenen OSM-PBF eine lokale Straßen-, Gebäude-, Gewässer- und Landbedeckungskarte. Flüsse, Bäche und Kanäle werden als lokale Vektorebene ergänzt. Während des Builds bleibt Routing verfügbar; der Build benötigt freien lokalen Speicher.</p>
                 <div class="tinytiles-presets" role="group" aria-label="Zoom-Voreinstellung für die Offline-Karte">
                   <button type="button" class="tinytiles-preset" data-tinytiles-min="5" data-tinytiles-max="10"><strong>Übersicht</strong><span>5–10 · klein &amp; schnell</span></button>
                   <button type="button" class="tinytiles-preset is-selected" data-tinytiles-min="8" data-tinytiles-max="14"><strong>Ausgewogen</strong><span>8–14 · empfohlen</span></button>
@@ -482,6 +571,14 @@
                   <button id="tinyTilesBuild" type="button" class="btn btn-primary">Offline-Karte erzeugen</button>
                   <button id="tinyTilesActivate" type="button" class="btn btn-ghost" style="display:none">Offline-Karte anzeigen</button>
                 </div>
+                <form id="tinyTilesPostcodeLookup" class="tinytiles-postcode-lookup" hidden>
+                  <label class="setting-label" for="tinyTilesPostcodeInput">PLZ-Gebiet finden</label>
+                  <div class="tinytiles-postcode-row">
+                    <input id="tinyTilesPostcodeInput" type="search" class="setting-input" inputmode="numeric" autocomplete="postal-code" maxlength="12" placeholder="z. B. 94032"/>
+                    <button type="submit" class="btn btn-ghost">Anzeigen</button>
+                  </div>
+                  <p id="tinyTilesPostcodeStatus" class="tinytiles-postcode-status" aria-live="polite">Suche lokal in den PLZ-Grenzen der Offline-Karte.</p>
+                </form>
                 <div id="tinyTilesBuildStatus" class="tinytiles-status" role="status" aria-live="polite" data-state="idle">
                   <span id="tinyTilesStatusIcon" class="tinytiles-status-icon" aria-hidden="true">○</span>
                   <div class="tinytiles-status-copy">
@@ -512,16 +609,16 @@
               <div id="speedDefaults" class="speed-defaults" style="display:none"></div>
             </div>
 
-            <!-- OpenAI / Remote API -->
+            <!-- Remote API -->
             <div class="settings-section">
               <div class="section-header">
                 <span class="section-icon">🔑</span>
-                <h3>OpenAI / Remote-API</h3>
+                <h3>KI-Remote-API</h3>
               </div>
-              <p class="settings-hint">Optional. Leer lassen, um nur lokale Modelle (Ollama, LM Studio) zu nutzen.</p>
+              <p class="settings-hint">Optional. Leer lassen, um nur lokale Modelle zu nutzen.</p>
               <div class="settings-grid" style="grid-template-columns:1fr;">
                 <div class="setting-item">
-                  <label class="setting-label" for="openaiApiKey">API-Key <span class="info-icon" title="OpenAI API-Key (sk-…) oder Key eines kompatiblen Anbieters (Groq, Mistral, Together AI…)">ⓘ</span></label>
+                  <label class="setting-label" for="openaiApiKey">API-Key <span class="info-icon" title="Schlüssel eines kompatiblen API-Anbieters">ⓘ</span></label>
                   <div class="api-key-wrap">
                     <input id="openaiApiKey" type="password" class="setting-input" placeholder="sk-…" autocomplete="off" spellcheck="false"/>
                     <button id="toggleApiKeyVis" class="btn-icon-xs" type="button" title="Anzeigen/Verbergen" aria-label="API-Key anzeigen">
@@ -531,8 +628,8 @@
                   </div>
                 </div>
                 <div class="setting-item">
-                  <label class="setting-label" for="openaiBaseUrl">Base URL <span class="info-icon" title="Leer lassen für api.openai.com. Alternativ z.B. https://api.groq.com/openai oder https://api.mistral.ai">ⓘ</span></label>
-                  <input id="openaiBaseUrl" type="text" class="setting-input" placeholder="https://api.openai.com  (Standard)"/>
+                  <label class="setting-label" for="openaiBaseUrl">Base URL <span class="info-icon" title="Optionaler Endpunkt eines kompatiblen API-Anbieters">ⓘ</span></label>
+                  <input id="openaiBaseUrl" type="text" class="setting-input" placeholder="https://anbieter.example/v1"/>
                 </div>
               </div>
             </div>
@@ -672,7 +769,20 @@
           const f=document.getElementById('from');
           const t=document.getElementById('to');
           if(f && t){
+            const fromPoint={lat:f.dataset.resolvedLat,lon:f.dataset.resolvedLon,display:f.dataset.resolvedDisplay};
+            const toPoint={lat:t.dataset.resolvedLat,lon:t.dataset.resolvedLon,display:t.dataset.resolvedDisplay};
             const v=f.value; f.value=t.value; t.value=v;
+            [[f,toPoint],[t,fromPoint]].forEach(([input,point])=>{
+              if(point.lat && point.lon && point.display===input.value){
+                input.dataset.resolvedLat=point.lat;
+                input.dataset.resolvedLon=point.lon;
+                input.dataset.resolvedDisplay=point.display;
+              }else{
+                delete input.dataset.resolvedLat;
+                delete input.dataset.resolvedLon;
+                delete input.dataset.resolvedDisplay;
+              }
+            });
             f.closest('.input-clear-wrap')?.classList.toggle('has-value', !!f.value);
             t.closest('.input-clear-wrap')?.classList.toggle('has-value', !!t.value);
           }

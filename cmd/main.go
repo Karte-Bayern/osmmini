@@ -171,8 +171,6 @@ var BuiltinTilePresets = []TileSourcePreset{
 // used for quick, language-aware POI lookup without LLMs.
 var staticPOIMapping = map[string]map[string]string{
 	// German
-	"mcdonald":    {"amenity": "fast_food", "brand": "McDonald's"},
-	"mcdonalds":   {"amenity": "fast_food", "brand": "McDonald's"},
 	"tankstelle":  {"amenity": "fuel"},
 	"benzin":      {"amenity": "fuel"},
 	"bahnhof":     {"railway": "station"},
@@ -201,19 +199,12 @@ var staticPOIMapping = map[string]map[string]string{
 	"forest": {"landuse": "forest"},
 }
 
-// brandAliasMap maps common user typos/aliases to a canonical normalized brand key
+// brandAliasMap is populated from the loaded OSM data with compact aliases for
+// POI names and brands. It intentionally contains no application-specific
+// businesses.
 var (
 	brandAliasMu  sync.RWMutex
-	brandAliasMap = map[string]string{
-		"maci":        "mcdonalds",
-		"mcdo":        "mcdonalds",
-		"mcd":         "mcdonalds",
-		"mcdonald":    "mcdonalds",
-		"mcdonalds":   "mcdonalds",
-		"macdonalds":  "mcdonalds",
-		"maccdonalds": "mcdonalds",
-		"macca":       "mcdonalds",
-	}
+	brandAliasMap = make(map[string]string)
 )
 
 func lookupBrandAlias(alias string) string {
@@ -247,7 +238,7 @@ func (s *server) buildBrandAliases() {
 		if alias == "" {
 			return
 		}
-		// don't overwrite existing manual aliases
+		// Keep the first indexed spelling for a compact alias.
 		if _, exists := brandAliasMap[alias]; !exists {
 			brandAliasMap[alias] = canon
 		}
@@ -297,17 +288,19 @@ func normalizeForCompare(s string) string {
 // changes (like default speeds used during graph import) require rebuilding
 // the graph or restarting the server to take full effect.
 // AISettings holds configuration for optional remote AI providers.
-// Local providers (Ollama, LM Studio) are always probed automatically.
+// Local model services are always probed automatically.
 type AISettings struct {
-	// OpenAIAPIKey enables the OpenAI provider when non-empty.
+	// OpenAIAPIKey enables the configured remote provider when non-empty.
 	OpenAIAPIKey string `json:"openai_api_key,omitempty"`
-	// OpenAIBaseURL overrides the default OpenAI API endpoint. Leave empty
-	// to use the official https://api.openai.com endpoint. Can also point to
-	// any other OpenAI-compatible API (e.g. Groq, Mistral, Together AI).
+	// OpenAIBaseURL overrides the default remote API endpoint. It may point to
+	// any compatible chat-completions endpoint.
 	OpenAIBaseURL string `json:"openai_base_url,omitempty"`
 }
 
 type Settings struct {
+	// UseCase records the selected operating context. It labels a coherent set
+	// of user-applied defaults; individual settings remain freely editable.
+	UseCase string               `json:"use_case,omitempty"`
 	Routing osmmini.RouteOptions `json:"routing"`
 	Tiles   TileSettings         `json:"tiles"`
 	AI      AISettings           `json:"ai,omitempty"`
@@ -318,6 +311,86 @@ type Settings struct {
 	DefaultHighwaySpeeds map[string]float64 `json:"default_highway_speeds,omitempty"`
 	// AllowedHighwayTypes controls which highway types are imported/allowed
 	AllowedHighwayTypes []string `json:"allowed_highway_types,omitempty"`
+}
+
+// UseCaseDefinition describes one common osmmini deployment. Routing values
+// are returned to the client as ordinary, inspectable settings rather than
+// becoming hidden server-side behaviour.
+type UseCaseDefinition struct {
+	ID               string               `json:"id"`
+	Label            string               `json:"label"`
+	Icon             string               `json:"icon"`
+	Description      string               `json:"description"`
+	Routing          osmmini.RouteOptions `json:"routing"`
+	OptimizeTrips    bool                 `json:"optimize_trips"`
+	ShowHydrants     bool                 `json:"show_hydrants"`
+	ShowFireStations bool                 `json:"show_fire_stations"`
+	PreferOfflineMap bool                 `json:"prefer_offline_map"`
+}
+
+var builtinUseCases = []UseCaseDefinition{
+	{
+		ID: "private", Label: "Privat", Icon: "🚗",
+		Description: "Alltagsfahrten mit Pkw und ausgewogener Kartenansicht.",
+		Routing: osmmini.RouteOptions{
+			Engine: osmmini.EngineAStar, Objective: osmmini.ObjectiveDuration,
+			Weights: osmmini.ProWeights{MaxSpeedKph: 150},
+		},
+	},
+	{
+		ID: "fire", Label: "Feuerwehr", Icon: "🚒",
+		Description: "Zeitkritische Einsatzfahrten mit Feuerwehrhäusern und Hydranten auf der Karte.",
+		Routing: osmmini.RouteOptions{
+			Engine: osmmini.EngineAStar, Objective: osmmini.ObjectiveDuration, Profile: osmmini.ProfileFirefighting,
+			Pro: true, EmergencyMode: true, Weights: osmmini.ProWeights{MaxSpeedKph: 130},
+		},
+		ShowHydrants: true, ShowFireStations: true,
+	},
+	{
+		ID: "delivery", Label: "Lieferdienst", Icon: "🚚",
+		Description: "Mehrere Stopps effizient planen; Lieferfahrzeug vermeidet ungünstige Wendemanöver.",
+		Routing: osmmini.RouteOptions{
+			Engine: osmmini.EngineAStar, Objective: osmmini.ObjectiveDuration, Profile: osmmini.ProfileDelivery,
+			Pro: true, Weights: osmmini.ProWeights{MaxSpeedKph: 80, LeftTurn: 3, UTurn: 10},
+		},
+		OptimizeTrips: true,
+	},
+	{
+		ID: "disaster", Label: "Katastrophenschutz", Icon: "⛑️",
+		Description: "Robuster Feldbetrieb bei eingeschränkter Netzversorgung; Einsatz- und Offline-Werkzeuge im Vordergrund.",
+		Routing: osmmini.RouteOptions{
+			Engine: osmmini.EngineAStar, Objective: osmmini.ObjectiveDuration, Profile: osmmini.ProfileTHW,
+			Pro: true, EmergencyMode: true, Weights: osmmini.ProWeights{MaxSpeedKph: 100},
+		},
+		OptimizeTrips: true, ShowHydrants: true, ShowFireStations: true, PreferOfflineMap: true,
+	},
+	{
+		ID: "field-service", Label: "Technischer Außendienst", Icon: "🛠️",
+		Description: "Wartungen, Prüfungen und Reparaturen mit schneller Routenplanung zwischen mehreren Objekten.",
+		Routing: osmmini.RouteOptions{
+			Engine: osmmini.EngineAStar, Objective: osmmini.ObjectiveDuration, Profile: osmmini.ProfileCar,
+			Pro: true, Weights: osmmini.ProWeights{MaxSpeedKph: 100, LeftTurn: 2},
+		},
+		OptimizeTrips: true,
+	},
+	{
+		ID: "municipal", Label: "Kommunale Dienste", Icon: "🏛️",
+		Description: "Planbare Touren für Bauhof, Infrastruktur und kommunale Sachbearbeitung.",
+		Routing: osmmini.RouteOptions{
+			Engine: osmmini.EngineAStar, Objective: osmmini.ObjectiveEconomy, Profile: osmmini.ProfileTruck,
+			Pro: true, Weights: osmmini.ProWeights{MaxSpeedKph: 80},
+		},
+		OptimizeTrips: true,
+	},
+}
+
+func useCaseByID(id string) *UseCaseDefinition {
+	for i := range builtinUseCases {
+		if builtinUseCases[i].ID == id {
+			return &builtinUseCases[i]
+		}
+	}
+	return nil
 }
 
 // publicSettings removes server-side secrets before Settings are embedded in
@@ -341,6 +414,7 @@ func DefaultSettings(cacheDir, upstream string) Settings {
 		mapType = "raster-direct"
 	}
 	return Settings{
+		UseCase: "private",
 		Routing: osmmini.RouteOptions{
 			Engine: osmmini.EngineAStar,
 			// Default routing objective for Germany: minimize duration
@@ -1356,13 +1430,24 @@ type server struct {
 	// tinyTiles is optional until the user creates an offline tileset from the
 	// loaded PBF. The handler is swapped only after a complete artifact passes
 	// tinyTiles validation, so existing map requests never see partial output.
-	tinyTilesMu        sync.RWMutex
-	tinyTilesServer    *tinytilesserver.Server
-	tinyTilesDataset   *tinytiles.Dataset
-	tinyTilesHandler   http.Handler
-	tinyTilesDir       string
-	tinyTilesMaxMemory int64
-	tinyTilesBuild     tinyTilesBuildStatus
+	tinyTilesMu      sync.RWMutex
+	tinyTilesServer  *tinytilesserver.Server
+	tinyTilesDataset *tinytiles.Dataset
+	tinyTilesHandler http.Handler
+	// tinyTilesWaterways is a viewport-indexed companion layer generated from
+	// linear OSM waterways. The upstream minimal tileset currently contains
+	// water surfaces but not open river/stream/canal ways.
+	tinyTilesWaterways       *tinyTilesWaterwayIndex
+	tinyTilesWaterwayBuildMu sync.Mutex
+	tinyTilesDir             string
+	tinyTilesMaxMemory       int64
+	// Each reader owns a tinySQL page cache; tinyTiles also retains a separate,
+	// bounded cache for hot immutable payloads. Keep both parts configurable so
+	// country-sized artifacts have a predictable serving footprint.
+	tinyTilesReaders        int
+	tinyTilesReaderMemory   int64
+	tinyTilesTileCacheBytes int64
+	tinyTilesBuild          tinyTilesBuildStatus
 
 	// Territory layers can be reloaded after a local PLZ3 build completes.
 	// Keep the store and its raw GeoJSON snapshot together under this lock.
@@ -1374,7 +1459,10 @@ type server struct {
 	// fireStations persists manually-added/CSV-imported vehicle rosters for
 	// the Einsatzmodus "Feuerwehrhäuser" overlay. Never committed — see
 	// fire_stations.go and the gitignored fire-stations.json default path.
-	fireStations *FireStationStore
+	fireStations   *FireStationStore
+	operations     *OperationsStore
+	deploymentMode string
+	operatorTokens map[string]string
 }
 
 type aiMessage struct {
@@ -1406,6 +1494,9 @@ func main() {
 		case "pbf-index":
 			runPBFIndexCLI(os.Args[2:])
 			return
+		case "region-extract":
+			runRegionExtractCLI(os.Args[2:])
+			return
 		}
 	}
 
@@ -1422,6 +1513,12 @@ func main() {
 	tinyTilesDir := flag.String("tinytiles-dir", "offline-tiles", "Directory for generated tinyTiles .ttiles artifacts")
 	territoriesDir := flag.String("territories-dir", "territories", "Directory of *.geojson territory layers (file name without extension = layer name); optional")
 	tinyTilesMaxMemoryMB := flag.Int64("tinytiles-max-memory-mb", 768, "Maximum memory (MB) tinyTiles may use while importing a .ttiles artifact; raise this for larger PBF regions")
+	tinyTilesReaders := flag.Int("tinytiles-readers", 4, "Concurrent tinyTiles readers for the offline map")
+	tinyTilesReaderMemoryMB := flag.Int64("tinytiles-reader-memory-mb", 32, "Page-cache memory (MB) per tinyTiles reader while serving the offline map")
+	tinyTilesTileCacheMB := flag.Int64("tinytiles-tile-cache-mb", 64, "Bounded hot-tile cache (MB) for the offline map; -1 disables it")
+	operationsFile := flag.String("operations-file", "operations.json", "Local JSON file for delivery proofs and maintenance records")
+	deploymentModeFlag := flag.String("deployment-mode", deploymentModeSingleUser, "Deployment mode: browser-local, single-user, or multi-user")
+	operatorsFile := flag.String("operators-file", "", "JSON map of operator name to token; required for multi-user mode")
 
 	// Coord window support
 	windowStr := flag.String("window", "", "Coord window minLat,maxLat,minLon,maxLon (optional)")
@@ -1429,6 +1526,33 @@ func main() {
 	enforceWindow := flag.Bool("enforce-window", false, "Reject requests outside window (if window set)")
 
 	flag.Parse()
+	if *tinyTilesReaders < 1 {
+		log.Fatal("-tinytiles-readers must be at least 1")
+	}
+	if *tinyTilesReaderMemoryMB < 1 {
+		log.Fatal("-tinytiles-reader-memory-mb must be at least 1")
+	}
+	if *tinyTilesTileCacheMB < -1 {
+		log.Fatal("-tinytiles-tile-cache-mb must be -1 or greater")
+	}
+	deploymentMode, err := normalizeDeploymentMode(*deploymentModeFlag)
+	if err != nil {
+		log.Fatal(err)
+	}
+	operatorTokens := map[string]string(nil)
+	if deploymentMode == deploymentModeMultiUser {
+		if strings.TrimSpace(*operatorsFile) == "" {
+			log.Fatal("-operators-file is required for multi-user mode")
+		}
+		operatorTokens, err = loadOperatorTokens(*operatorsFile)
+		if err != nil {
+			log.Fatalf("load operators file: %v", err)
+		}
+	}
+	tinyTilesTileCacheBytes := *tinyTilesTileCacheMB
+	if tinyTilesTileCacheBytes >= 0 {
+		tinyTilesTileCacheBytes <<= 20
+	}
 
 	var win *osmmini.CoordWindow
 	if strings.TrimSpace(*windowStr) != "" {
@@ -1489,24 +1613,33 @@ func main() {
 	openapiBytes, _ := embedded.ReadFile("api/openapi.yaml")
 
 	srv := &server{
-		router:         r,
-		addrs:          addrs,
-		startedAt:      time.Now(),
-		settings:       store,
-		tiles:          tileCache,
-		routeCache:     rCache,
-		window:         win,
-		enforceWindow:  *enforceWindow,
-		adminToken:     strings.TrimSpace(*adminToken),
-		indexTmpl:      indexTmpl,
-		openAPI:        openapiBytes,
-		pbfPath:        *pbf,
-		tinyTilesDir:   *tinyTilesDir,
-		territoriesDir: *territoriesDir,
-		fireStations:   NewFireStationStore("fire-stations.json"),
+		router:                  r,
+		addrs:                   addrs,
+		startedAt:               time.Now(),
+		settings:                store,
+		tiles:                   tileCache,
+		routeCache:              rCache,
+		window:                  win,
+		enforceWindow:           *enforceWindow,
+		adminToken:              strings.TrimSpace(*adminToken),
+		indexTmpl:               indexTmpl,
+		openAPI:                 openapiBytes,
+		pbfPath:                 *pbf,
+		tinyTilesDir:            *tinyTilesDir,
+		territoriesDir:          *territoriesDir,
+		fireStations:            NewFireStationStore("fire-stations.json"),
+		operations:              NewOperationsStore(*operationsFile),
+		deploymentMode:          deploymentMode,
+		operatorTokens:          operatorTokens,
+		tinyTilesReaders:        *tinyTilesReaders,
+		tinyTilesReaderMemory:   *tinyTilesReaderMemoryMB << 20,
+		tinyTilesTileCacheBytes: tinyTilesTileCacheBytes,
 	}
 	if err := srv.fireStations.Load(); err != nil {
 		log.Printf("fire stations: failed to load fire-stations.json: %v", err)
+	}
+	if err := srv.operations.Load(); err != nil {
+		log.Printf("operations: failed to load %s: %v", *operationsFile, err)
 	}
 	if *tinyTilesMaxMemoryMB > 0 {
 		srv.tinyTilesMaxMemory = *tinyTilesMaxMemoryMB << 20
@@ -1643,12 +1776,16 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("/api/v1/settings", s.handleSettings)
 	mux.HandleFunc("/api/v1/tile-sources", s.handleTileSources)
 	mux.HandleFunc("/api/v1/tinytiles/build", s.handleTinyTilesBuild)
+	mux.HandleFunc("/api/v1/tinytiles/waterways", s.handleTinyTilesWaterways)
 	mux.HandleFunc("/api/v1/offline-labels", s.handleOfflineLabels)
 	mux.HandleFunc("/api/v1/hydrants", s.handleHydrants)
 	mux.HandleFunc("/api/v1/fire-stations", s.handleFireStations)
 	mux.HandleFunc("/api/v1/fire-stations/import", s.handleFireStationsImport)
 	mux.HandleFunc("/api/v1/fire-stations/", s.handleFireStationByID)
+	mux.HandleFunc("/api/v1/operations", s.handleOperations)
+	mux.HandleFunc("/api/v1/deployment", s.handleDeployment)
 	mux.HandleFunc("/api/v1/profiles", s.handleProfiles)
+	mux.HandleFunc("/api/v1/use-cases", s.handleUseCases)
 	mux.HandleFunc("/api/v1/search", s.handleSearch)
 	mux.HandleFunc("/api/v1/route", s.handleRoute)
 	mux.HandleFunc("/api/v1/trip/solve", s.handleTripSolve)
@@ -2429,8 +2566,8 @@ func (s *server) handleAgentQuery(w http.ResponseWriter, r *http.Request) {
 
 		// fallback: if empty place, ask user
 		if place == "" {
-			actions := []any{map[string]any{"type": "ask_user", "params": map[string]any{"prompt": "Welches Ziel suchst du? (z. B. 'McDonald's')"}}}
-			writeJSON(w, http.StatusOK, map[string]any{"actions": actions, "reply": "Welches Ziel meinst du? Zum Beispiel 'McDonald's'.", "session_id": req.Session})
+			actions := []any{map[string]any{"type": "ask_user", "params": map[string]any{"prompt": "Welches Ziel suchst du? (z. B. eine Tankstelle)"}}}
+			writeJSON(w, http.StatusOK, map[string]any{"actions": actions, "reply": "Welches Ziel meinst du? Zum Beispiel eine Tankstelle.", "session_id": req.Session})
 			return
 		}
 
@@ -2456,14 +2593,7 @@ func (s *server) handleAgentQuery(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				if brandAlias != "" {
-					if brandNorm != "" && strings.Contains(brandNorm, brandAlias) {
-						matches = append(matches, a)
-						continue
-					}
-				}
-				// heuristic for short queries (e.g., 'maci') and fast_food
-				if len(placeNorm) <= 6 && a.Tags["amenity"] == "fast_food" {
-					if strings.Contains(nameNorm, "mcdonald") || strings.Contains(brandNorm, "mcdonald") {
+					if strings.Contains(nameNorm, brandAlias) || strings.Contains(brandNorm, brandAlias) {
 						matches = append(matches, a)
 						continue
 					}
@@ -2901,6 +3031,98 @@ func (s *server) handleProfiles(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, osmmini.BuiltinProfiles)
 }
 
+func (s *server) handleUseCases(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	writeJSON(w, http.StatusOK, builtinUseCases)
+}
+
+func (s *server) handleOperations(w http.ResponseWriter, r *http.Request) {
+	if s.operations == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "operations log is unavailable")
+		return
+	}
+	if s.deploymentMode == deploymentModeBrowserLocal {
+		writeJSONError(w, http.StatusNotFound, "operations are stored locally in this browser mode")
+		return
+	}
+	actor := ""
+	if s.deploymentMode == deploymentModeMultiUser {
+		var ok bool
+		actor, ok = s.authenticatedOperator(r)
+		if !ok {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="osmmini operations"`)
+			writeJSONError(w, http.StatusUnauthorized, "a valid operator token is required")
+			return
+		}
+	} else if !s.requireSettingsAdmin(w, r) {
+		// Proofs of delivery and maintenance notes can contain names,
+		// references, and locations. A protected single-user server uses its
+		// existing admin credential for both reading and writing this log.
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		kind := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("type")))
+		if kind != "" && kind != operationTypePOD && kind != operationTypeMaintenance && kind != operationTypeCheck {
+			writeJSONError(w, http.StatusBadRequest, "type must be pod, maintenance or check")
+			return
+		}
+		limit, err := strconv.Atoi(r.URL.Query().Get("limit"))
+		if err != nil && r.URL.Query().Get("limit") != "" {
+			writeJSONError(w, http.StatusBadRequest, "limit must be a number")
+			return
+		}
+		writeJSON(w, http.StatusOK, s.operations.List(kind, limit))
+	case http.MethodPost:
+		var record OperationRecord
+		if err := readJSON(w, r, &record, 16<<10); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid operation: "+err.Error())
+			return
+		}
+		record.Actor = actor
+		created, err := s.operations.Create(record)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, created)
+	default:
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *server) authenticatedOperator(r *http.Request) (string, bool) {
+	provided := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+	if provided == "" {
+		return "", false
+	}
+	for name, token := range s.operatorTokens {
+		if len(provided) == len(token) && subtle.ConstantTimeCompare([]byte(provided), []byte(token)) == 1 {
+			return name, true
+		}
+	}
+	return "", false
+}
+
+func (s *server) handleDeployment(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	mode := s.deploymentMode
+	if mode == "" {
+		mode = deploymentModeSingleUser
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"mode":                     mode,
+		"operator_auth_required":   mode == deploymentModeMultiUser,
+		"browser_local_operations": mode == deploymentModeBrowserLocal,
+	})
+}
+
 func (s *server) requireSettingsAdmin(w http.ResponseWriter, r *http.Request) bool {
 	if s.adminToken == "" {
 		return true
@@ -2927,6 +3149,10 @@ func (s *server) handleSettings(w http.ResponseWriter, r *http.Request) {
 		var v Settings
 		if err := readJSON(w, r, &v, 1<<20); err != nil {
 			writeJSONError(w, http.StatusBadRequest, "invalid json: "+err.Error())
+			return
+		}
+		if v.UseCase != "" && useCaseByID(v.UseCase) == nil {
+			writeJSONError(w, http.StatusBadRequest, "unknown use_case")
 			return
 		}
 		normalizeTileSettings(&v.Tiles)
@@ -2986,7 +3212,7 @@ func (s *server) searchLocationResults(raw string, limit int) []apiSearchResult 
 		if s.window != nil && !s.window.Contains(m.Coord) {
 			continue
 		}
-		out = appendUniqueSearchResult(out, seen, buildSearchResult("address", m.ID, m.Coord, m.Tags, raw), limit)
+		out = appendUniqueSearchResult(out, seen, s.withSearchLocality(buildSearchResult("address", m.ID, m.Coord, m.Tags, raw)), limit)
 		if len(out) >= limit {
 			return out
 		}
@@ -3022,9 +3248,9 @@ func (s *server) searchLocationResults(raw string, limit int) []apiSearchResult 
 }
 
 type searchResultKey struct {
-	label string
-	lat   int64
-	lon   int64
+	id  int64
+	lat int64
+	lon int64
 }
 
 func appendUniqueSearchResult(out []apiSearchResult, seen map[searchResultKey]struct{}, res apiSearchResult, limit int) []apiSearchResult {
@@ -3032,15 +3258,89 @@ func appendUniqueSearchResult(out []apiSearchResult, seen map[searchResultKey]st
 		return out
 	}
 	key := searchResultKey{
-		label: normalizeForCompare(res.Label),
-		lat:   int64(math.Round(res.Lat * 1e6)),
-		lon:   int64(math.Round(res.Lon * 1e6)),
+		id:  res.ID,
+		lat: int64(math.Round(res.Lat * 1e6)),
+		lon: int64(math.Round(res.Lon * 1e6)),
 	}
 	if _, ok := seen[key]; ok {
 		return out
 	}
 	seen[key] = struct{}{}
 	return append(out, res)
+}
+
+// withSearchLocality makes sparse OSM POIs easier to distinguish. Many
+// businesses carry a street and house number but no addr:city; a nearby town
+// label from the already-loaded local POI index is a safe, offline-only hint.
+func (s *server) withSearchLocality(result apiSearchResult) apiSearchResult {
+	if formatLocality(result.Tags) != "" {
+		return result
+	}
+	locality := s.nearestPlaceName(osmmini.Coord{Lat: result.Lat, Lon: result.Lon}, 15_000)
+	if locality == "" || normalizedContains(result.Label, locality) || normalizedContains(result.Subtitle, locality) {
+		return result
+	}
+	if result.Subtitle == "" {
+		result.Subtitle = locality
+	} else {
+		result.Subtitle = joinUniqueParts([]string{result.Subtitle, locality})
+	}
+	return result
+}
+
+// nearestPlaceName returns the closest city/town (or, when none is nearby, a
+// village) from the compact place-label grid. It intentionally avoids a full
+// scan of the POI index on each type-ahead request.
+func (s *server) nearestPlaceName(coord osmmini.Coord, maxDistanceM float64) string {
+	if maxDistanceM <= 0 {
+		return ""
+	}
+	latDegrees := maxDistanceM / 111_320
+	lonDegrees := maxDistanceM / (111_320 * math.Max(0.2, math.Cos(coord.Lat*math.Pi/180)))
+	minX, minY := offlineLabelCell(coord.Lat-latDegrees, coord.Lon-lonDegrees)
+	maxX, maxY := offlineLabelCell(coord.Lat+latDegrees, coord.Lon+lonDegrees)
+
+	bestName := ""
+	bestDistance := math.MaxFloat64
+	bestRank := 0
+	consider := func(label offlineMapLabel) {
+		if label.Rank < 60 || strings.TrimSpace(label.Name) == "" {
+			return
+		}
+		distance := haversineMeters(coord.Lat, coord.Lon, label.Lat, label.Lon)
+		if distance > maxDistanceM {
+			return
+		}
+		// Prefer a municipality-scale label (city/town) over a closer village,
+		// then use distance to resolve labels of the same scale.
+		municipality := label.Rank >= 80
+		bestMunicipality := bestRank >= 80
+		if bestName == "" || (municipality && !bestMunicipality) ||
+			(municipality == bestMunicipality && distance < bestDistance) {
+			bestName = label.Name
+			bestDistance = distance
+			bestRank = label.Rank
+		}
+	}
+
+	s.poiMu.RLock()
+	if len(s.poiPlaceCells) > 0 {
+		for x := minX; x <= maxX; x++ {
+			for y := minY; y <= maxY; y++ {
+				for _, label := range s.poiPlaceCells[offlineLabelCellKey(x, y)] {
+					consider(label)
+				}
+			}
+		}
+	} else {
+		// Direct server construction in tests/integrations can omit the grid.
+		for _, node := range s.poiTaggedNodes {
+			rank := placeLabelRank(node.Tags["place"])
+			consider(offlineMapLabel{Name: node.Tags["name"], Lat: node.Lat, Lon: node.Lon, Rank: rank})
+		}
+	}
+	s.poiMu.RUnlock()
+	return bestName
 }
 
 func (s *server) searchPOIMatches(raw string, limit int) []apiSearchResult {
@@ -3088,7 +3388,7 @@ func (s *server) searchPOIMatches(raw string, limit int) []apiSearchResult {
 
 	out := make([]apiSearchResult, 0, len(scoredPOIs))
 	for _, item := range scoredPOIs {
-		out = append(out, buildSearchResult(item.kind, item.id, item.coord, item.tags, raw))
+		out = append(out, s.withSearchLocality(buildSearchResult(item.kind, item.id, item.coord, item.tags, raw)))
 	}
 	return out
 }
@@ -3517,6 +3817,7 @@ func (s *server) handleRoute(w http.ResponseWriter, r *http.Request) {
 		cached.From = RoutePoint{Input: fromInput, Label: fromLabel, Lat: fromCoord.Lat, Lon: fromCoord.Lon, Node: startID, SnapM: startDist}
 		cached.To = RoutePoint{Input: toInput, Label: toLabel, Lat: toCoord.Lat, Lon: toCoord.Lon, Node: endID, SnapM: endDist}
 		cached.Cached = true
+		s.prefetchTinyTilesRoute(cached.Path)
 		writeJSON(w, http.StatusOK, cached)
 		return
 	}
@@ -3569,6 +3870,7 @@ func (s *server) handleRoute(w http.ResponseWriter, r *http.Request) {
 		ComputeMs:     computeMs,
 	}
 	s.routeCache.set(cacheKey, resp)
+	s.prefetchTinyTilesRoute(resp.Path)
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -4102,6 +4404,22 @@ func (s *server) buildLocationSuggestions(raw string, limit int) []apiSearchResu
 	return s.searchLocationResults(raw, limit)
 }
 
+// locationSearchQuery unwraps the label format emitted by formatAddressLabel.
+// The display label is useful to people but is not a valid address query when
+// it contains a POI name and a street/housenumber ("POI-Name — Beispielstraße
+// 3"). Resolve the stable name portion instead of degrading the query to a
+// house-number-only match on a later recalculation.
+func locationSearchQuery(raw string) string {
+	name, _, ok := strings.Cut(raw, " — ")
+	if !ok {
+		return raw
+	}
+	if name = strings.TrimSpace(name); name != "" {
+		return name
+	}
+	return raw
+}
+
 func (s *server) resolveLocation(loc Location) (osmmini.Coord, string, string, error) {
 	if loc.Lat != nil && loc.Lon != nil {
 		lat, lon := *loc.Lat, *loc.Lon
@@ -4134,7 +4452,8 @@ func (s *server) resolveLocation(loc Location) (osmmini.Coord, string, string, e
 		return c, label, raw, nil
 	}
 
-	q := osmmini.ParseAddressGuess(raw)
+	lookup := locationSearchQuery(raw)
+	q := osmmini.ParseAddressGuess(lookup)
 	if airportHint(raw) && munichHint(raw) {
 		airportCandidates := osmmini.SearchAddresses(s.addrs, q, 20)
 		munichCandidates := make([]osmmini.AddressEntry, 0, len(airportCandidates))
@@ -4187,14 +4506,20 @@ func (s *server) resolveLocation(loc Location) (osmmini.Coord, string, string, e
 	}
 
 	// Try POI matches as a fallback (e.g., "Kloster Weltenburg")
-	if pois := s.searchLocationResults(raw, 6); len(pois) > 0 {
-		// pick the first POI/address/street match
+	if pois := s.searchLocationResults(lookup, 6); len(pois) == 1 {
 		p := pois[0]
 		c := osmmini.Coord{Lat: p.Lat, Lon: p.Lon}
 		if s.enforceWindow && s.window != nil && !s.window.Contains(c) {
 			return osmmini.Coord{}, "", "", errors.New("outside configured window")
 		}
 		return c, p.Label, raw, nil
+	} else if len(pois) > 1 {
+		return osmmini.Coord{}, "", "", &locationResolveError{
+			Message:     "mehrdeutiges Ziel, bitte auswählen",
+			Query:       raw,
+			Ambiguous:   true,
+			Suggestions: pois,
+		}
 	}
 	// final fallback: no result
 	return osmmini.Coord{}, "", "", fmt.Errorf("not found: %s", raw)
@@ -4661,7 +4986,7 @@ func (s *server) handleAIQuery(w http.ResponseWriter, r *http.Request) {
 		place = re.ReplaceAllString(place, "")
 		place = strings.Trim(place, " ?.!\n\r\t")
 		if place == "" {
-			writeJSONError(w, http.StatusBadRequest, "Bitte nennen Sie das Ziel (z. B. 'McDonald's') zusammen mit Ihrem Standort.")
+			writeJSONError(w, http.StatusBadRequest, "Bitte nennen Sie ein Ziel (z. B. eine Tankstelle) zusammen mit Ihrem Standort.")
 			return
 		}
 
@@ -4772,20 +5097,9 @@ func (s *server) handleAIQuery(w http.ResponseWriter, r *http.Request) {
 					matches = append(matches, a)
 					continue
 				}
-				// alias lookup (e.g., user typed 'maci')
+				// Look up a compact alias learned from the local POI index.
 				if brandAlias != "" {
-					if brandNorm != "" && strings.Contains(brandNorm, brandAlias) {
-						matches = append(matches, a)
-						continue
-					}
-					if a.Tags["amenity"] == "fast_food" && (strings.Contains(nameNorm, brandAlias) || strings.Contains(brandNorm, brandAlias)) {
-						matches = append(matches, a)
-						continue
-					}
-				}
-				// heuristic: if user typed something short like 'maci', and the POI is fast_food, consider it
-				if len(placeNormCmp) <= 6 && a.Tags["amenity"] == "fast_food" {
-					if strings.Contains(nameNorm, "mcdonald") || strings.Contains(brandNorm, "mcdonald") {
+					if strings.Contains(nameNorm, brandAlias) || strings.Contains(brandNorm, brandAlias) {
 						matches = append(matches, a)
 						continue
 					}
@@ -5254,10 +5568,6 @@ var poiKeywordTags = map[string][2]string{
 	"pharmacy":       {"amenity", "pharmacy"},
 	"supermarkt":     {"shop", "supermarket"},
 	"supermarket":    {"shop", "supermarket"},
-	"edeka":          {"shop", "supermarket"},
-	"lidl":           {"shop", "supermarket"},
-	"aldi":           {"shop", "supermarket"},
-	"rewe":           {"shop", "supermarket"},
 	"bäckerei":       {"shop", "bakery"},
 	"bakery":         {"shop", "bakery"},
 	"parkplatz":      {"amenity", "parking"},
@@ -5277,10 +5587,8 @@ var poiKeywordTags = map[string][2]string{
 	"café":           {"amenity", "cafe"},
 	"cafe":           {"amenity", "cafe"},
 	"kaffee":         {"amenity", "cafe"},
-	"mcdonald":       {"amenity", "fast_food"},
-	"mcdonalds":      {"amenity", "fast_food"},
-	"burger king":    {"amenity", "fast_food"},
 	"fastfood":       {"amenity", "fast_food"},
+	"fast food":      {"amenity", "fast_food"},
 	"imbiss":         {"amenity", "fast_food"},
 	"arzt":           {"amenity", "doctors"},
 	"zahnarzt":       {"amenity", "dentist"},
@@ -6081,6 +6389,7 @@ func (s *server) computeRouteFromLocQuery(ctx context.Context, from, to string, 
 	toLat, toLon := toCoord.Lat, toCoord.Lon
 	fromAI := &aiLocation{Query: from, Label: fromLabel, Lat: &fromLat, Lon: &fromLon}
 	toAI := &aiLocation{Query: to, Label: toLabel, Lat: &toLat, Lon: &toLon}
+	s.prefetchTinyTilesRoute(rr.Path)
 	return rr, fromAI, toAI, nil
 }
 

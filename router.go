@@ -895,6 +895,15 @@ func FindBestAddress(entries []AddressEntry, q AddressQuery) (AddressEntry, bool
 	if bestScore <= 0 {
 		return AddressEntry{}, false
 	}
+	// A house number alone is never a safe destination. In a regional extract
+	// there can be hundreds of identical numbers, and choosing the first one
+	// silently can send a route to a completely different town. A valid match
+	// with a house number must also match at least one other address or POI
+	// field (street, city, name, brand, ...).
+	const houseNumberOnlyScore = 4
+	if query.housenumber != "" && bestScore <= houseNumberOnlyScore {
+		return AddressEntry{}, false
+	}
 	return best, true
 }
 

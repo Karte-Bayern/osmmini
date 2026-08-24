@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -178,6 +179,159 @@ func TestServeTinyTilesUsesV23HTTPOptimizations(t *testing.T) {
 	s.serveTinyTiles(conditionalResponse, conditional)
 	if conditionalResponse.Code != http.StatusNotModified {
 		t.Fatalf("conditional TileJSON status = %d, want %d", conditionalResponse.Code, http.StatusNotModified)
+	}
+}
+
+func TestInstallTinyTilesActivatesWaterwaySidecar(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	artifact := filepath.Join(dir, "basemap.ttiles")
+	if _, err := tiles.ImportTiles(ctx, tinyTilesTestSource{}, artifact, &tiles.ImportOptions{
+		BatchSize:      1,
+		MaxMemoryBytes: 8 << 20,
+		MinFreeBytes:   0,
+	}); err != nil {
+		t.Fatalf("create tinyTiles test artifact: %v", err)
+	}
+	river := tinyTilesWaterway{
+		ID: 1, Class: "river", MinZoom: 7,
+		Coordinates: [][2]float64{{10, 48}, {12, 48}},
+	}
+	if !river.normalize() {
+		t.Fatal("test river should normalize")
+	}
+	if err := writeTinyTilesWaterwaySidecar(tinyTilesWaterwaySidecarPath(dir), tinyTilesWaterwaySidecar{
+		Version:  tinyTilesWaterwaySidecarVersion,
+		Features: []tinyTilesWaterway{river},
+	}); err != nil {
+		t.Fatalf("write waterway sidecar: %v", err)
+	}
+	if err := stampTinyTilesWaterwaySidecar(tinyTilesWaterwaySidecarPath(dir), artifact); err != nil {
+		t.Fatalf("stamp waterway sidecar: %v", err)
+	}
+
+	s := &server{tinyTilesDir: dir}
+	if err := s.installTinyTiles(artifact); err != nil {
+		t.Fatalf("install tinyTiles test artifact: %v", err)
+	}
+	t.Cleanup(s.closeTinyTiles)
+
+	response := httptest.NewRecorder()
+	s.handleTinyTilesWaterways(response, httptest.NewRequest(http.MethodGet, "/api/v1/tinytiles/waterways?bbox=10.5,47.5,11.5,48.5&zoom=8", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("waterways status = %d: %s", response.Code, response.Body.String())
+	}
+	var payload tinyTilesWaterwayGeoJSON
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode waterways response: %v", err)
+	}
+	if len(payload.Features) != 1 || payload.Features[0].Properties.Class != "river" {
+		t.Fatalf("waterway sidecar was not activated: %#v", payload.Features)
+	}
+}
+
+func TestInstallTinyTilesRejectsMismatchedWaterwaySidecar(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	artifact := filepath.Join(dir, "basemap.ttiles")
+	if _, err := tiles.ImportTiles(ctx, tinyTilesTestSource{}, artifact, &tiles.ImportOptions{
+		BatchSize:      1,
+		MaxMemoryBytes: 8 << 20,
+		MinFreeBytes:   0,
+	}); err != nil {
+		t.Fatalf("create tinyTiles test artifact: %v", err)
+	}
+	river := tinyTilesWaterway{
+		ID: 1, Class: "river", MinZoom: 7,
+		Coordinates: [][2]float64{{10, 48}, {12, 48}},
+	}
+	if !river.normalize() {
+		t.Fatal("test river should normalize")
+	}
+	if err := writeTinyTilesWaterwaySidecar(tinyTilesWaterwaySidecarPath(dir), tinyTilesWaterwaySidecar{
+		Version:                tinyTilesWaterwaySidecarVersion,
+		ArtifactManifestSHA256: "does-not-match",
+		Features:               []tinyTilesWaterway{river},
+	}); err != nil {
+		t.Fatalf("write mismatched waterway sidecar: %v", err)
+	}
+
+	s := &server{tinyTilesDir: dir}
+	if err := s.installTinyTiles(artifact); err != nil {
+		t.Fatalf("install tinyTiles test artifact: %v", err)
+	}
+	t.Cleanup(s.closeTinyTiles)
+	if s.tinyTilesHasWaterwaySidecar() {
+		t.Fatal("mismatched waterway sidecar was activated")
+	}
+}
+
+func TestBackfillTinyTilesWaterwaysMigratesExistingArtifact(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	pbfPath := filepath.Join(dir, "source.osm.pbf")
+	if err := os.WriteFile(pbfPath, tinyTilesWaterwayPBF(), 0o600); err != nil {
+		t.Fatalf("write PBF fixture: %v", err)
+	}
+	artifact := filepath.Join(dir, "basemap.ttiles")
+	if _, err := tiles.ImportTiles(ctx, tinyTilesTestSource{}, artifact, &tiles.ImportOptions{
+		BatchSize:      1,
+		MaxMemoryBytes: 8 << 20,
+		MinFreeBytes:   0,
+	}); err != nil {
+		t.Fatalf("create tinyTiles test artifact: %v", err)
+	}
+
+	s := &server{tinyTilesDir: dir, pbfPath: pbfPath, tinyTilesBuild: tinyTilesBuildStatus{State: "ready"}}
+	if err := s.installTinyTiles(artifact); err != nil {
+		t.Fatalf("install legacy tinyTiles artifact: %v", err)
+	}
+	t.Cleanup(s.closeTinyTiles)
+	if s.tinyTilesHasWaterwaySidecar() {
+		t.Fatal("legacy artifact unexpectedly has a loaded waterway sidecar")
+	}
+
+	s.backfillTinyTilesWaterways(artifact)
+	if got := s.tinyTilesWaterwayCount(); got != 2 {
+		t.Fatalf("backfilled waterway count = %d, want 2", got)
+	}
+	if _, err := loadTinyTilesWaterwaySidecarForArtifact(tinyTilesWaterwaySidecarPath(dir), artifact); err != nil {
+		t.Fatalf("backfilled sidecar does not match artifact: %v", err)
+	}
+}
+
+// tinyTiles v2.3 can serve the postal-boundary sidecar directly. osmmini
+// should activate that feature automatically when a postal-code build made
+// the sidecar, rather than requiring a second in-memory PBF index.
+func TestServeTinyTilesActivatesPostcodeSidecar(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	artifact := filepath.Join(dir, "basemap.ttiles")
+	if _, err := tiles.ImportTiles(ctx, tinyTilesTestSource{}, artifact, &tiles.ImportOptions{
+		BatchSize:      1,
+		MaxMemoryBytes: 8 << 20,
+		MinFreeBytes:   0,
+	}); err != nil {
+		t.Fatalf("create tinyTiles test artifact: %v", err)
+	}
+	postalSidecar := []byte(`{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"postcode":"94032","name":"Passau"},"geometry":{"type":"Polygon","coordinates":[[[13.4,48.55],[13.5,48.55],[13.5,48.60],[13.4,48.55]]]}}]}`)
+	if err := os.WriteFile(filepath.Join(dir, "basemap.postcodes.geojson"), postalSidecar, 0o600); err != nil {
+		t.Fatalf("write postcode sidecar: %v", err)
+	}
+
+	s := &server{tinyTilesDir: dir, tinyTilesReaders: 1, tinyTilesReaderMemory: 8 << 20, tinyTilesTileCacheBytes: 1 << 20}
+	if err := s.installTinyTiles(artifact); err != nil {
+		t.Fatalf("install tinyTiles test artifact: %v", err)
+	}
+	t.Cleanup(s.closeTinyTiles)
+
+	response := httptest.NewRecorder()
+	s.serveTinyTiles(response, httptest.NewRequest(http.MethodGet, "/tinytiles/postcode/search?q=940", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("postcode search status = %d: %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "94032") {
+		t.Fatalf("postcode search response = %s", response.Body.String())
 	}
 }
 

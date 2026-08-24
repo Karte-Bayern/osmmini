@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	osmmini "simonwaldherr.de/go/osmmini"
@@ -57,5 +59,120 @@ func TestSearchLocationResultsIncludesPOIWithContext(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected POI result in %#v", results)
+	}
+}
+
+func TestSearchLocationResultsAddsNearbyTownForSparseAddress(t *testing.T) {
+	plattling := osmmini.Node{
+		ID:   446250344,
+		Lat:  48.7766852,
+		Lon:  12.8733655,
+		Tags: osmmini.Tags{"name": "Plattling", "place": "town"},
+	}
+	s := &server{
+		router:         &osmmini.Router{},
+		poiTaggedNodes: map[int64]osmmini.Node{plattling.ID: plattling},
+		addrs: []osmmini.AddressEntry{{
+			ID:    12257954539,
+			Coord: osmmini.Coord{Lat: 48.7971234, Lon: 12.884135},
+			Tags: osmmini.Tags{
+				"name":             "RUBIX",
+				"addr:street":      "Scheiblerstraße",
+				"addr:housenumber": "3",
+			},
+		}},
+	}
+	s.poiPlaceCells = buildPlaceLabelCells(s.poiTaggedNodes)
+
+	results := s.searchLocationResults("Rubix", 5)
+	if len(results) == 0 || !strings.Contains(results[0].Subtitle, "Plattling") {
+		t.Fatalf("search results = %#v, want Plattling context", results)
+	}
+}
+
+func TestSearchLocationResultsDoesNotDuplicateOneOSMFeature(t *testing.T) {
+	const rubixID = int64(12257954539)
+	coord := osmmini.Coord{Lat: 48.7971234, Lon: 12.884135}
+	s := &server{
+		router: &osmmini.Router{},
+		addrs: []osmmini.AddressEntry{{
+			ID:    rubixID,
+			Coord: coord,
+			Tags:  osmmini.Tags{"name": "RUBIX", "addr:street": "Scheiblerstraße", "addr:housenumber": "3"},
+		}},
+		poiTaggedNodes: map[int64]osmmini.Node{
+			rubixID: {ID: rubixID, Lat: coord.Lat, Lon: coord.Lon, Tags: osmmini.Tags{"name": "RUBIX", "office": "company"}},
+		},
+	}
+
+	results := s.searchLocationResults("Rubix", 5)
+	if len(results) != 1 {
+		t.Fatalf("search results = %#v, want one physical RUBIX feature", results)
+	}
+	if results[0].Label != "RUBIX — Scheiblerstraße 3" {
+		t.Fatalf("result label = %q", results[0].Label)
+	}
+}
+
+func TestResolveLocationReusesNameFromDisplayedPOILabel(t *testing.T) {
+	landshut := osmmini.AddressEntry{
+		ID:    1,
+		Coord: osmmini.Coord{Lat: 48.5473443, Lon: 12.1205542},
+		Tags: osmmini.Tags{
+			"name":             "Arche Noah",
+			"addr:street":      "Wilhelm-Dieß-Straße",
+			"addr:housenumber": "3",
+			"addr:city":        "Landshut",
+		},
+	}
+	plattling := osmmini.AddressEntry{
+		ID:    2,
+		Coord: osmmini.Coord{Lat: 48.7971234, Lon: 12.884135},
+		Tags: osmmini.Tags{
+			"name":             "RUBIX",
+			"addr:street":      "Scheiblerstraße",
+			"addr:housenumber": "3",
+		},
+	}
+	s := &server{router: &osmmini.Router{}, addrs: []osmmini.AddressEntry{landshut, plattling}}
+
+	coord, label, _, err := s.resolveLocation(Location{Query: "RUBIX — Scheiblerstraße 3"})
+	if err != nil {
+		t.Fatalf("resolveLocation() error = %v", err)
+	}
+	if coord != plattling.Coord {
+		t.Fatalf("resolveLocation() coord = %#v, want RUBIX in Plattling %#v", coord, plattling.Coord)
+	}
+	if label != "RUBIX — Scheiblerstraße 3" {
+		t.Fatalf("resolveLocation() label = %q", label)
+	}
+}
+
+func TestResolveLocationDoesNotPickAnArbitraryHouseNumber(t *testing.T) {
+	s := &server{
+		router: &osmmini.Router{},
+		addrs: []osmmini.AddressEntry{
+			{ID: 1, Coord: osmmini.Coord{Lat: 48.5473443, Lon: 12.1205542}, Tags: osmmini.Tags{"addr:street": "Wilhelm-Dieß-Straße", "addr:housenumber": "3", "addr:city": "Landshut"}},
+			{ID: 2, Coord: osmmini.Coord{Lat: 48.7971234, Lon: 12.884135}, Tags: osmmini.Tags{"addr:street": "Scheiblerstraße", "addr:housenumber": "3"}},
+		},
+	}
+
+	_, _, _, err := s.resolveLocation(Location{Query: "unbekannter Ort 3"})
+	if err == nil {
+		t.Fatal("resolveLocation() unexpectedly accepted a house-number-only match")
+	}
+	var resolveErr *locationResolveError
+	if !errors.As(err, &resolveErr) || !resolveErr.Ambiguous {
+		t.Fatalf("resolveLocation() error = %T %v, want ambiguous location error", err, err)
+	}
+	if len(resolveErr.Suggestions) != 2 {
+		t.Fatalf("suggestions = %#v, want both address candidates", resolveErr.Suggestions)
+	}
+}
+
+func TestExtractPOIFromPromptRecognizesGenericFastFood(t *testing.T) {
+	intent := classifyPromptIntent("Wo ist der nächste Fast Food?")
+	if intent.Type != intentPOINear || intent.POIType != "fast food" || intent.POITagKey != "amenity" || intent.POITagVal != "fast_food" {
+		t.Fatalf("classifyPromptIntent() = %#v, want generic fast-food POI intent", intent)
 	}
 }

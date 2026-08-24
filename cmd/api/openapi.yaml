@@ -113,6 +113,34 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/v1/tinytiles/waterways:
+    get:
+      summary: Get local river, canal, and stream geometry for the current offline-map viewport
+      description: Returns clipped GeoJSON from the tinyTiles waterway companion sidecar. It is available only after an offline map build and is intentionally bounded to the requested viewport.
+      parameters:
+        - name: bbox
+          in: query
+          required: true
+          description: Visible WGS84 bounds as minLon,minLat,maxLon,maxLat.
+          schema: { type: string }
+        - name: zoom
+          in: query
+          required: false
+          description: Current map zoom; controls which waterway classes are returned.
+          schema: { type: integer, minimum: 0, maximum: 22 }
+      responses:
+        "200":
+          description: GeoJSON waterway features clipped to the requested viewport
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TinyTilesWaterwayFeatureCollection"
+        "400":
+          description: Invalid bounding box
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/v1/offline-labels:
     get:
       summary: Get local town and street labels for the tinyTiles map
@@ -469,7 +497,7 @@ components:
         state: { type: string, enum: [idle, building, ready, failed] }
         phase:
           type: string
-          enum: [idle, preparing, generating, importing, finalizing, activating, territories, processing, ready, failed]
+          enum: [idle, preparing, waterways, generating, importing, finalizing, activating, territories, processing, ready, failed]
           description: Public build phase; does not expose local paths or tinyTiles internals.
         progress:
           type: integer
@@ -492,3 +520,35 @@ components:
         estimated_tile_count: { type: integer, format: int64, minimum: 0, description: Tile count estimated during tinySQL preflight. }
         generated_tiles: { type: integer, minimum: 0, description: Number of tiles generated from the PBF. }
         road_features: { type: integer, minimum: 0, description: Number of road features used by the generated map. }
+        waterway_features: { type: integer, minimum: 0, description: Number of linear waterway features published in the local companion layer. }
+    TinyTilesWaterwayFeatureCollection:
+      type: object
+      required: [type, features]
+      properties:
+        type: { type: string, enum: [FeatureCollection] }
+        truncated: { type: boolean, description: True when a viewport result limit was reached. }
+        features:
+          type: array
+          items:
+            type: object
+            required: [type, properties, geometry]
+            properties:
+              type: { type: string, enum: [Feature] }
+              properties:
+                type: object
+                required: [class]
+                properties:
+                  class: { type: string, enum: [river, canal, stream, wadi, ditch, drain] }
+                  name: { type: string }
+              geometry:
+                type: object
+                required: [type, coordinates]
+                properties:
+                  type: { type: string, enum: [LineString] }
+                  coordinates:
+                    type: array
+                    items:
+                      type: array
+                      minItems: 2
+                      maxItems: 2
+                      items: { type: number }

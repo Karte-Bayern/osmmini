@@ -15,11 +15,17 @@ import (
 	tinytiles "github.com/Karte-Bayern/tinyTiles/v2"
 	tinytilesserver "github.com/Karte-Bayern/tinyTiles/v2/server"
 	tiles "github.com/SimonWaldherr/tinySQL/tiles"
+	osmmini "simonwaldherr.de/go/osmmini"
 )
 
 const (
 	tinyTilesDefaultMinZoom = 5
 	tinyTilesDefaultMaxZoom = 14
+	// Route-prefetching warms a small map corridor after a route response. The
+	// tinyTiles server has a separate bounded queue; this is only the maximum
+	// submission per route, never an unbounded download of the whole path.
+	tinyTilesRoutePrefetchRadius   = 1
+	tinyTilesRoutePrefetchMaxTiles = 512
 )
 
 // tinyTilesBuildStatus is deliberately small and public-facing: the UI can
@@ -44,6 +50,7 @@ type tinyTilesBuildStatus struct {
 	EstimatedTileCount int64     `json:"estimated_tile_count,omitempty"`
 	GeneratedTiles     int       `json:"generated_tiles,omitempty"`
 	RoadFeatures       int       `json:"road_features,omitempty"`
+	WaterwayFeatures   int       `json:"waterway_features,omitempty"`
 }
 
 type tinyTilesBuildRequest struct {
@@ -129,6 +136,7 @@ func (s *server) handleTinyTilesBuild(w http.ResponseWriter, r *http.Request) {
 			PostalPrefixLength: request.PostalPrefixLength,
 			SourceBytes:        pbfInfo.Size(),
 		}
+		status.WaterwayFeatures = s.tinyTilesWaterways.len()
 		s.tinyTilesBuild = status
 		s.tinyTilesMu.Unlock()
 		if reusePostalBoundaries {
@@ -148,7 +156,37 @@ func regularFileExists(path string) bool {
 }
 
 func (s *server) buildTinyTiles(status tinyTilesBuildStatus) {
+	// A startup backfill may be creating a missing companion layer. Keep its
+	// publication serialized with a full build so an explicit rebuild always
+	// wins and never gets paired with a concurrently written sidecar.
+	s.tinyTilesWaterwayBuildMu.Lock()
+	defer s.tinyTilesWaterwayBuildMu.Unlock()
+
 	artifact := filepath.Join(s.tinyTilesDir, "basemap.ttiles")
+	waterways := tinyTilesWaterwaySidecarPath(s.tinyTilesDir)
+	if err := os.MkdirAll(s.tinyTilesDir, 0o755); err != nil {
+		s.finishTinyTilesBuild("", "", 0, 0, 0, 0, fmt.Errorf("Wasserwege vorbereiten: %w", err))
+		return
+	}
+	stagedWaterways, err := os.CreateTemp(s.tinyTilesDir, ".basemap.waterways-*")
+	if err != nil {
+		s.finishTinyTilesBuild("", "", 0, 0, 0, 0, fmt.Errorf("Wasserwege vorbereiten: %w", err))
+		return
+	}
+	stagedWaterwaysPath := stagedWaterways.Name()
+	if err := stagedWaterways.Close(); err != nil {
+		_ = os.Remove(stagedWaterwaysPath)
+		s.finishTinyTilesBuild("", "", 0, 0, 0, 0, fmt.Errorf("Wasserwege vorbereiten: %w", err))
+		return
+	}
+	defer os.Remove(stagedWaterwaysPath)
+
+	s.updateTinyTilesBuildProgress("waterways", 4, "Flüsse, Bäche und Kanäle werden vorbereitet…")
+	waterwayFeatures, err := buildTinyTilesWaterwaySidecar(s.pbfPath, stagedWaterwaysPath)
+	if err != nil {
+		s.finishTinyTilesBuild("", "", 0, 0, 0, 0, err)
+		return
+	}
 	s.updateTinyTilesBuildProgress("generating", 5, "Kartendaten werden aus der PBF erzeugt…")
 	result, err := tinytiles.BuildPBF(context.Background(), tinytiles.PBFBuildOptions{
 		PBFInputs:       []string{s.pbfPath},
@@ -168,6 +206,16 @@ func (s *server) buildTinyTiles(status tinyTilesBuildStatus) {
 		},
 	})
 	if err == nil {
+		if err = stampTinyTilesWaterwaySidecar(stagedWaterwaysPath, artifact); err != nil {
+			err = fmt.Errorf("Wasserwege mit Offline-Karte abgleichen: %w", err)
+		}
+	}
+	if err == nil {
+		if err = os.Rename(stagedWaterwaysPath, waterways); err != nil {
+			err = fmt.Errorf("Wasserwege veröffentlichen: %w", err)
+		}
+	}
+	if err == nil {
 		s.updateTinyTilesBuildProgress("activating", 98, "Offline-Karte wird aktiviert…")
 		err = s.installTinyTiles(artifact)
 	}
@@ -178,7 +226,7 @@ func (s *server) buildTinyTiles(status tinyTilesBuildStatus) {
 		territoryLayer, territoryCount, err = s.publishPostalTerritories(result.PostalCodesPath, status.PostalPrefixLength)
 	}
 
-	s.finishTinyTilesBuild(filepath.Base(artifact), territoryLayer, territoryCount, result.GeneratedTiles, result.RoadFeatures, err)
+	s.finishTinyTilesBuild(filepath.Base(artifact), territoryLayer, territoryCount, result.GeneratedTiles, result.RoadFeatures, waterwayFeatures, err)
 }
 
 // buildPostalTerritory creates an additional PLZ1–PLZ5 layer from the
@@ -187,10 +235,10 @@ func (s *server) buildTinyTiles(status tinyTilesBuildStatus) {
 func (s *server) buildPostalTerritory(status tinyTilesBuildStatus, postalSidecar string) {
 	s.updateTinyTilesBuildProgress("territories", 20, "OSM-PLZ-Grenzen werden geladen…")
 	territoryLayer, territoryCount, err := s.publishPostalTerritories(postalSidecar, status.PostalPrefixLength)
-	s.finishTinyTilesBuild("", territoryLayer, territoryCount, 0, 0, err)
+	s.finishTinyTilesBuild("", territoryLayer, territoryCount, 0, 0, -1, err)
 }
 
-func (s *server) finishTinyTilesBuild(artifact, territoryLayer string, territoryCount, generatedTiles, roadFeatures int, err error) {
+func (s *server) finishTinyTilesBuild(artifact, territoryLayer string, territoryCount, generatedTiles, roadFeatures, waterwayFeatures int, err error) {
 	s.tinyTilesMu.Lock()
 	defer s.tinyTilesMu.Unlock()
 	s.tinyTilesBuild.FinishedAt = time.Now().UTC()
@@ -212,6 +260,9 @@ func (s *server) finishTinyTilesBuild(artifact, territoryLayer string, territory
 	}
 	if roadFeatures > 0 {
 		s.tinyTilesBuild.RoadFeatures = roadFeatures
+	}
+	if waterwayFeatures >= 0 {
+		s.tinyTilesBuild.WaterwayFeatures = waterwayFeatures
 	}
 	if territoryLayer != "" {
 		s.tinyTilesBuild.Message = fmt.Sprintf("%d %s-Gebiete sind bereit.", territoryCount, territoryLayer)
@@ -324,16 +375,23 @@ func (s *server) loadTinyTilesIfPresent() {
 		return
 	}
 	minZoom, maxZoom := s.tinyTilesZoomRange()
+	waterwayFeatures := s.tinyTilesWaterwayCount()
+	waterwaySidecarLoaded := s.tinyTilesHasWaterwaySidecar()
+	message := "Vorhandene Offline-Karte ist bereit."
+	if !waterwaySidecarLoaded {
+		message = "Vorhandene Offline-Karte ist bereit. Gewässerlayer wird aus der PBF ergänzt…"
+	}
 	s.tinyTilesMu.Lock()
 	s.tinyTilesBuild = tinyTilesBuildStatus{
-		State:      "ready",
-		Phase:      "ready",
-		Progress:   100,
-		Message:    "Vorhandene Offline-Karte ist bereit.",
-		Artifact:   filepath.Base(artifact),
-		MinZoom:    minZoom,
-		MaxZoom:    maxZoom,
-		FinishedAt: time.Now().UTC(),
+		State:       "ready",
+		Phase:       "ready",
+		Progress:    100,
+		Message:     message,
+		Artifact:    filepath.Base(artifact),
+		MinZoom:     minZoom,
+		MaxZoom:     maxZoom,
+		PostalCodes: regularFileExists(filepath.Join(s.tinyTilesDir, "basemap.postcodes.geojson")),
+		FinishedAt:  time.Now().UTC(),
 		SourceBytes: func() int64 {
 			info, err := os.Stat(s.pbfPath)
 			if err != nil || info.IsDir() {
@@ -341,8 +399,12 @@ func (s *server) loadTinyTilesIfPresent() {
 			}
 			return info.Size()
 		}(),
+		WaterwayFeatures: waterwayFeatures,
 	}
 	s.tinyTilesMu.Unlock()
+	if !waterwaySidecarLoaded {
+		go s.backfillTinyTilesWaterways(artifact)
+	}
 }
 
 func (s *server) tinyTilesZoomRange() (int, int) {
@@ -367,13 +429,30 @@ func (s *server) tinyTilesZoomRange() (int, int) {
 }
 
 func (s *server) installTinyTiles(artifact string) error {
-	dataset, err := tinytiles.Open(context.Background(), artifact, tinytiles.OpenOptions{Readers: 4, MaxMemoryBytes: 64 << 20})
+	readers := s.tinyTilesReaders
+	if readers == 0 {
+		readers = 4
+	}
+	readerMemory := s.tinyTilesReaderMemory
+	if readerMemory == 0 {
+		readerMemory = 32 << 20
+	}
+	dataset, err := tinytiles.Open(context.Background(), artifact, tinytiles.OpenOptions{
+		Readers:        readers,
+		MaxMemoryBytes: readerMemory,
+	})
 	if err != nil {
 		return fmt.Errorf("öffne erzeugte Offline-Karte: %w", err)
 	}
+	postalIndex := filepath.Join(s.tinyTilesDir, "basemap.postcodes.geojson")
+	if !regularFileExists(postalIndex) {
+		postalIndex = ""
+	}
 	next, err := tinytilesserver.New(tinytilesserver.Config{
-		Dataset:   dataset,
-		DatasetID: "osmmini",
+		Dataset:           dataset,
+		DatasetID:         "osmmini",
+		TileCacheBytes:    s.tinyTilesTileCacheBytes,
+		PostcodeIndexPath: postalIndex,
 		// The handler is mounted below /tinytiles. Advertising that mount keeps
 		// TileJSON and the offline sync manifest directly consumable by clients.
 		MountPath: "/tinytiles",
@@ -381,6 +460,11 @@ func (s *server) installTinyTiles(artifact string) error {
 	if err != nil {
 		_ = dataset.Close()
 		return fmt.Errorf("starte Offline-Kartenserver: %w", err)
+	}
+	waterways, waterwaysErr := loadTinyTilesWaterwaySidecarForArtifact(tinyTilesWaterwaySidecarPath(s.tinyTilesDir), artifact)
+	if waterwaysErr != nil && !errors.Is(waterwaysErr, os.ErrNotExist) {
+		log.Printf("tinyTiles waterway sidecar is unavailable: %v", waterwaysErr)
+		waterways = nil
 	}
 
 	s.tinyTilesMu.Lock()
@@ -394,10 +478,12 @@ func (s *server) installTinyTiles(artifact string) error {
 			return fmt.Errorf("aktualisiere Offline-Karte: %w", err)
 		}
 		s.tinyTilesDataset = dataset
+		s.tinyTilesWaterways = waterways
 		// Keep the existing handler so requests in flight continue unchanged.
 	} else {
 		s.tinyTilesServer = next
 		s.tinyTilesDataset = dataset
+		s.tinyTilesWaterways = waterways
 		s.tinyTilesHandler = next.Handler()
 	}
 	s.tinyTilesMu.Unlock()
@@ -409,6 +495,111 @@ func (s *server) installTinyTiles(artifact string) error {
 		_ = previousDataset.Close()
 	}
 	return nil
+}
+
+func (s *server) tinyTilesWaterwayCount() int {
+	s.tinyTilesMu.RLock()
+	defer s.tinyTilesMu.RUnlock()
+	return s.tinyTilesWaterways.len()
+}
+
+func (s *server) tinyTilesHasWaterwaySidecar() bool {
+	s.tinyTilesMu.RLock()
+	defer s.tinyTilesMu.RUnlock()
+	return s.tinyTilesWaterways != nil
+}
+
+// backfillTinyTilesWaterways migrates pre-waterway offline artifacts without
+// forcing the user to regenerate every base tile. It runs only after the
+// artifact has already been activated, never blocks startup, and gives up
+// safely when the source PBF has changed since that artifact was built.
+func (s *server) backfillTinyTilesWaterways(artifact string) {
+	s.tinyTilesWaterwayBuildMu.Lock()
+	defer s.tinyTilesWaterwayBuildMu.Unlock()
+
+	sidecar := tinyTilesWaterwaySidecarPath(s.tinyTilesDir)
+	if _, err := loadTinyTilesWaterwaySidecarForArtifact(sidecar, artifact); err == nil {
+		return
+	}
+	pbfInfo, err := os.Stat(s.pbfPath)
+	if err != nil || pbfInfo.IsDir() {
+		s.noteTinyTilesWaterwayBackfillFailure(fmt.Errorf("PBF ist nicht verfügbar"))
+		return
+	}
+	artifactManifest, err := tinyTilesArtifactManifestPath(artifact)
+	if err != nil {
+		s.noteTinyTilesWaterwayBackfillFailure(fmt.Errorf("Offline-Karte ist nicht verfügbar"))
+		return
+	}
+	artifactInfo, err := os.Stat(artifactManifest)
+	if err != nil {
+		s.noteTinyTilesWaterwayBackfillFailure(fmt.Errorf("Offline-Karte ist nicht verfügbar"))
+		return
+	}
+	if pbfInfo.ModTime().After(artifactInfo.ModTime()) {
+		s.noteTinyTilesWaterwayBackfillFailure(fmt.Errorf("PBF wurde nach der Offline-Karte geändert"))
+		return
+	}
+
+	staged, err := os.CreateTemp(s.tinyTilesDir, ".basemap.waterways-backfill-*")
+	if err != nil {
+		s.noteTinyTilesWaterwayBackfillFailure(fmt.Errorf("Wasserweg-Zwischendatei: %w", err))
+		return
+	}
+	stagedPath := staged.Name()
+	if err := staged.Close(); err != nil {
+		_ = os.Remove(stagedPath)
+		s.noteTinyTilesWaterwayBackfillFailure(fmt.Errorf("Wasserweg-Zwischendatei schließen: %w", err))
+		return
+	}
+	defer os.Remove(stagedPath)
+
+	count, err := buildTinyTilesWaterwaySidecar(s.pbfPath, stagedPath)
+	if err != nil {
+		s.noteTinyTilesWaterwayBackfillFailure(err)
+		return
+	}
+	// An explicit full build that started while this background migration was
+	// scanning will publish its own matching pair. Do not race it with an
+	// otherwise valid sidecar for the old artifact.
+	s.tinyTilesMu.RLock()
+	building := s.tinyTilesBuild.State == "building"
+	s.tinyTilesMu.RUnlock()
+	if building {
+		return
+	}
+	if err := stampTinyTilesWaterwaySidecar(stagedPath, artifact); err != nil {
+		s.noteTinyTilesWaterwayBackfillFailure(err)
+		return
+	}
+	if err := os.Rename(stagedPath, sidecar); err != nil {
+		s.noteTinyTilesWaterwayBackfillFailure(fmt.Errorf("Gewässerlayer veröffentlichen: %w", err))
+		return
+	}
+	index, err := loadTinyTilesWaterwaySidecarForArtifact(sidecar, artifact)
+	if err != nil {
+		s.noteTinyTilesWaterwayBackfillFailure(err)
+		return
+	}
+
+	s.tinyTilesMu.Lock()
+	if s.tinyTilesBuild.State != "building" && s.tinyTilesDataset != nil {
+		s.tinyTilesWaterways = index
+		if s.tinyTilesBuild.State == "ready" {
+			s.tinyTilesBuild.WaterwayFeatures = count
+			s.tinyTilesBuild.Message = "Vorhandene Offline-Karte ist bereit; Gewässerlayer wurde ergänzt."
+		}
+	}
+	s.tinyTilesMu.Unlock()
+}
+
+func (s *server) noteTinyTilesWaterwayBackfillFailure(err error) {
+	log.Printf("tinyTiles waterway migration failed: %v", err)
+	s.tinyTilesMu.Lock()
+	defer s.tinyTilesMu.Unlock()
+	if s.tinyTilesBuild.State == "ready" {
+		s.tinyTilesBuild.Message = "Offline-Karte ist bereit; Gewässerlayer konnte nicht ergänzt werden. Bitte Offline-Karte neu erzeugen."
+	}
 }
 
 func (s *server) serveTinyTiles(w http.ResponseWriter, r *http.Request) {
@@ -440,6 +631,7 @@ func (s *server) closeTinyTiles() {
 	s.tinyTilesServer = nil
 	s.tinyTilesDataset = nil
 	s.tinyTilesHandler = nil
+	s.tinyTilesWaterways = nil
 	s.tinyTilesMu.Unlock()
 	if server != nil {
 		server.Close()
@@ -447,4 +639,46 @@ func (s *server) closeTinyTiles() {
 	if dataset != nil {
 		_ = dataset.Close()
 	}
+}
+
+// prefetchTinyTilesRoute uses tinyTiles v2.3's bounded predictive cache after
+// osmmini has already computed a trusted route. It never becomes a public HTTP
+// endpoint, so an unauthenticated caller cannot turn it into a disk/RAM work
+// amplifier. A missing offline map or a deliberately disabled cache is simply
+// a no-op for the routing API.
+func (s *server) prefetchTinyTilesRoute(path []osmmini.Coord) {
+	if len(path) == 0 {
+		return
+	}
+	points := make([]tinytilesserver.RoutePoint, len(path))
+	for i, point := range path {
+		points[i] = tinytilesserver.RoutePoint{Latitude: point.Lat, Longitude: point.Lon}
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		s.tinyTilesMu.RLock()
+		server := s.tinyTilesServer
+		dataset := s.tinyTilesDataset
+		if server == nil || dataset == nil {
+			s.tinyTilesMu.RUnlock()
+			return
+		}
+		maxZoom := tinyTilesDefaultMaxZoom
+		if metadata, err := dataset.Metadata(); err == nil {
+			if parsed, err := strconv.Atoi(metadata["maxzoom"]); err == nil && parsed >= 0 && parsed < maxZoom {
+				maxZoom = parsed
+			}
+		}
+		_, err := server.PrefetchRoute(ctx, points, tinytilesserver.RoutePrefetchOptions{
+			Zoom:     maxZoom,
+			Radius:   tinyTilesRoutePrefetchRadius,
+			MaxTiles: tinyTilesRoutePrefetchMaxTiles,
+		})
+		s.tinyTilesMu.RUnlock()
+		if err != nil && !errors.Is(err, tinytilesserver.ErrPredictiveCachingDisabled) {
+			log.Printf("tinyTiles route prefetch: %v", err)
+		}
+	}()
 }

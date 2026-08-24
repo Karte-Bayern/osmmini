@@ -18,7 +18,7 @@
     "map_type": "vector",
     "style_url": "https://vtod1.bayernwolke.de/styles/by_style_standard.json",
     "upstream": "https://wmtsod1.bayernwolke.de/wmts/by_webkarte/smerc/{z}/{x}/{y}",
-    "user_agent": "osmmini-routerd/1.0 (karte.bayern)",
+    "user_agent": "osmmini-routerd/1.0 (offline routing)",
     "attribution": "Webkarte Vektor © Bayerische Vermessungsverwaltung – www.geodaten.bayern.de CC BY 4.0, © GeoBasis-DE / BKG 2022 (Daten verändert) CC BY 4.0",
     "max_zoom": 19
   },

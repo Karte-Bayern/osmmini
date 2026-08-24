@@ -55,3 +55,33 @@ func TestSearchAddressesMatchesRawPOIName(t *testing.T) {
 		t.Fatalf("top result = %q, want Berlin Hauptbahnhof", got)
 	}
 }
+
+func TestFindBestAddressRejectsHouseNumberOnlyMatch(t *testing.T) {
+	entries := []AddressEntry{
+		{
+			ID:    1,
+			Coord: Coord{Lat: 48.5473443, Lon: 12.1205542},
+			Tags: Tags{
+				"name":             "Arche Noah",
+				"addr:street":      "Wilhelm-Dieß-Straße",
+				"addr:housenumber": "3",
+				"addr:city":        "Landshut",
+			},
+		},
+		{
+			ID:    2,
+			Coord: Coord{Lat: 48.7971234, Lon: 12.884135},
+			Tags: Tags{
+				"name":             "RUBIX",
+				"addr:street":      "Scheiblerstraße",
+				"addr:housenumber": "3",
+			},
+		},
+	}
+
+	// This is the display label a route response returns. It must not degrade
+	// into the first arbitrary address with house number 3.
+	if got, ok := FindBestAddress(entries, ParseAddressGuess("RUBIX — Scheiblerstraße 3")); ok {
+		t.Fatalf("FindBestAddress() = %#v, want no house-number-only match", got)
+	}
+}
