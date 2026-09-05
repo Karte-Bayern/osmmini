@@ -40,3 +40,16 @@ func TestNormalizePreservesGermanSearchEquivalence(t *testing.T) {
 		}
 	}
 }
+
+func BenchmarkSearchAddressesUnlimited(b *testing.B) {
+	entries := make([]AddressEntry, 5000)
+	for i := range entries {
+		entries[i] = AddressEntry{ID: int64(len(entries) - i), Tags: Tags{"name": "Hauptstraße"}}
+	}
+	q := ParseAddressGuess("Hauptstraße")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = SearchAddresses(entries, q, 0)
+	}
+}

@@ -233,7 +233,9 @@ func TestTinyTilesOfflineStyleIsEmbedded(t *testing.T) {
 
 func TestOfflineMapAssetsAreEmbedded(t *testing.T) {
 	for _, path := range []string{
-		"web/static/maplibre/maplibre-gl.js",
+		"web/static/maplibre/maplibre-gl.mjs",
+		"web/static/maplibre/maplibre-gl-shared.mjs",
+		"web/static/maplibre/maplibre-gl-worker.mjs",
 		"web/static/maplibre/maplibre-gl.css",
 	} {
 		asset, err := embedded.ReadFile(path)
@@ -532,5 +534,15 @@ func TestApplyDefaultHighwaySpeedOverridesKeepsUnspecifiedTypes(t *testing.T) {
 	}
 	if got := osmmini.DefaultHighwaySpeeds["secondary"]; got != 70 {
 		t.Fatalf("secondary = %v, want preserved value 70", got)
+	}
+}
+
+func TestDefaultMapUsesLocalOfflineStyle(t *testing.T) {
+	tiles := DefaultSettings(t.TempDir(), "").Tiles
+	if tiles.MapType != "vector" || tiles.StyleURL != "/static/styles/tinytiles-minimal.json" || tiles.Upstream != "" {
+		t.Fatalf("default map is not local: %#v", tiles)
+	}
+	if err := validateTileSettings(&tiles); err != nil {
+		t.Fatalf("default offline settings rejected: %v", err)
 	}
 }

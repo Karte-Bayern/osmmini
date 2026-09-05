@@ -203,6 +203,32 @@
         </div>
 
         <div class="sidebar-secondary" aria-label="Weitere Werkzeuge">
+        <details class="card gis-tools">
+          <summary>GIS &amp; Geo-Werkzeuge</summary>
+          <p class="settings-hint">POIs im Ausschnitt oder um die Kartenmitte suchen. Entfernungen sind Luftlinien.</p>
+          <label for="gisQuery">Name oder Suchbegriff</label>
+          <input id="gisQuery" class="setting-input" type="search" placeholder="z. B. Apotheke"/>
+          <label for="gisCategory">Kategorie</label>
+          <select id="gisCategory" class="setting-input">
+            <option value="">Alle Kategorien</option><option value="pharmacy">Apotheken</option>
+            <option value="hospital">Krankenhäuser</option><option value="cafe">Cafés</option>
+            <option value="supermarket">Supermärkte</option><option value="fire_station">Feuerwehrhäuser</option>
+          </select>
+          <label for="gisRadius">Radius um die Kartenmitte</label>
+          <select id="gisRadius" class="setting-input"><option value="1000">1 km</option><option value="5000" selected>5 km</option><option value="10000">10 km</option><option value="50000">50 km</option></select>
+          <div class="gis-actions">
+            <button id="gisViewport" type="button" class="btn btn-ghost">Im Kartenausschnitt</button>
+            <button id="gisNearby" type="button" class="btn btn-ghost">Im Umkreis</button>
+            <button id="gisExport" type="button" class="btn btn-ghost" disabled>POIs als GeoJSON</button>
+          </div>
+          <p id="gisStatus" role="status" aria-live="polite">Lokaler POI-Bestand; Flächen werden als Mittelpunkt dargestellt.</p>
+          <div class="gis-actions">
+            <button id="gisMeasure" type="button" class="btn btn-ghost" aria-pressed="false">Strecke messen</button>
+            <button id="gisUndo" type="button" class="btn btn-ghost">Letzten Messpunkt entfernen</button>
+            <button id="gisMeasureClear" type="button" class="btn btn-ghost">Messung löschen</button>
+          </div>
+          <p id="gisMeasureStatus" role="status" aria-live="polite">Messmodus aktivieren und Punkte auf der Karte setzen.</p>
+        </details>
         <!-- ── AI Assistant card ── -->
         <section class="card ai-card collapsed" id="aiCard">
           <div class="card-header" id="aiCardHeader" tabindex="0" title="KI-Assistent ein-/ausklappen">
@@ -228,7 +254,7 @@
             </div>
             <div id="aiMessages" class="ai-messages" role="log" aria-live="polite" aria-label="KI-Nachrichten"></div>
             <div class="ai-input-row">
-              <input id="aiPrompt" type="text" placeholder="z.B. Route von München nach Berlin, nächste Tankstelle…" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="KI-Frage eingeben"/>
+              <input id="aiPrompt" type="text" placeholder="Wohin möchtest du fahren?" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="KI-Frage eingeben"/>
               <button id="aiSend" class="btn-send" disabled title="Senden" aria-label="Nachricht senden">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
               </button>
@@ -552,6 +578,34 @@
               </div>
               <div id="tinyTilesSettings" style="display:none">
                 <p class="settings-hint">Erzeugt aus der beim Server geladenen OSM-PBF eine lokale Straßen-, Gebäude-, Gewässer- und Landbedeckungskarte. Flüsse, Bäche und Kanäle werden als lokale Vektorebene ergänzt. Während des Builds bleibt Routing verfügbar; der Build benötigt freien lokalen Speicher.</p>
+                <details id="offlineStyleEditor" class="offline-style-editor">
+                  <summary>Kartenstil anpassen</summary>
+                  <p class="settings-hint">Direkte Vorschau auf der Offline-Karte. Kein erneutes Erzeugen nötig; Speicherung in diesem Browser.</p>
+                  <label class="setting-label" for="offlineStylePreset">Vorlage</label>
+                  <select id="offlineStylePreset" class="setting-select">
+                    <option value="standard">Standard · Natur</option><option value="atlas">Atlas · klare Straßen</option><option value="night">Nacht</option><option value="contrast">Hoher Kontrast</option><option value="custom" disabled>Eigener Stil</option>
+                  </select>
+                  <div class="offline-style-colors">
+                    <label>Hintergrund<input type="color" id="offlineColorbackground" data-style-field="background" aria-label="Farbe: Hintergrund"/></label>
+                    <label>Gewässer<input type="color" id="offlineColorwater" data-style-field="water" aria-label="Farbe: Gewässer"/></label>
+                    <label>Wald<input type="color" id="offlineColorforest" data-style-field="forest" aria-label="Farbe: Wald"/></label>
+                    <label>Felder<input type="color" id="offlineColorfarmland" data-style-field="farmland" aria-label="Farbe: Felder"/></label>
+                    <label>Wiesen<input type="color" id="offlineColormeadow" data-style-field="meadow" aria-label="Farbe: Wiesen"/></label>
+                    <label>Gebäude<input type="color" id="offlineColorbuildings" data-style-field="buildings" aria-label="Farbe: Gebäude"/></label>
+                    <label>Fernstraßen<input type="color" id="offlineColormotorway" data-style-field="motorway" aria-label="Farbe: Fernstraßen"/></label>
+                    <label>Hauptstraßen<input type="color" id="offlineColorprimary" data-style-field="primary" aria-label="Farbe: Hauptstraßen"/></label>
+                    <label>Nebenstraßen<input type="color" id="offlineColorresidential" data-style-field="residential" aria-label="Farbe: Nebenstraßen"/></label>
+                    <label>Beschriftung<input type="color" id="offlineColortext" data-style-field="text" aria-label="Farbe: Beschriftung"/></label>
+                    <label>Textumrandung<input type="color" id="offlineColorhalo" data-style-field="halo" aria-label="Farbe: Textumrandung"/></label>
+                  </div>
+                  <label class="offline-style-range" for="offlineroadWidth">Straßenbreite<output id="offlineroadWidthValue" for="offlineroadWidth">100 %</output><input id="offlineroadWidth" data-style-field="roadWidth" type="range" min="0.6" max="2" step="0.05"/></label>
+                  <label class="offline-style-range" for="offlinelabelSize">Beschriftungsgröße<output id="offlinelabelSizeValue" for="offlinelabelSize">100 %</output><input id="offlinelabelSize" data-style-field="labelSize" type="range" min="0.8" max="1.5" step="0.05"/></label>
+                  <label class="checkbox"><input type="checkbox" data-style-field="showBuildings"/>Gebäude anzeigen</label>
+                  <label class="checkbox"><input type="checkbox" data-style-field="showPaths"/>Wege anzeigen</label>
+                  <label class="checkbox"><input type="checkbox" data-style-field="showLabels"/>Beschriftungen anzeigen</label>
+                  <div class="tinytiles-actions"><button id="offlineStyleSave" type="button" class="btn btn-primary">Stil speichern</button><button id="offlineStyleReset" type="button" class="btn btn-ghost">Standard wiederherstellen</button></div>
+                  <p id="offlineStyleStatus" class="settings-hint" role="status">Die Einstellungen betreffen nur die lokale Offline-Karte.</p>
+                </details>
                 <div class="tinytiles-presets" role="group" aria-label="Zoom-Voreinstellung für die Offline-Karte">
                   <button type="button" class="tinytiles-preset" data-tinytiles-min="5" data-tinytiles-max="10"><strong>Übersicht</strong><span>5–10 · klein &amp; schnell</span></button>
                   <button type="button" class="tinytiles-preset is-selected" data-tinytiles-min="8" data-tinytiles-max="14"><strong>Ausgewogen</strong><span>8–14 · empfohlen</span></button>
@@ -723,24 +777,24 @@
       </section>
     </div>
 
+    <script src="/static/offline-style.js?v={{.Version}}"></script>
     <script>
       (function(){
         const maplibreCss = '/static/maplibre/maplibre-gl.css';
-        const maplibreJs  = '/static/maplibre/maplibre-gl.js';
+        const maplibreJs  = '/static/maplibre/maplibre-gl.mjs';
 
         function loadCss(href){
           return new Promise((res,rej)=>{ const l=document.createElement('link'); l.rel='stylesheet'; l.href=href; l.onload=()=>res(href); l.onerror=()=>rej(href); document.head.appendChild(l); });
         }
-        function loadScript(src){
-          return new Promise((res,rej)=>{ const s=document.createElement('script'); s.src=src; s.defer=true; s.onload=()=>res(src); s.onerror=()=>rej(src); document.head.appendChild(s); });
-        }
+
 
         // All browser dependencies are part of osmmini's static bundle. Do
         // not fall back to a CDN here: the local tinyTiles profile must also
         // work after the machine has been taken completely offline.
         loadCss(maplibreCss).catch(()=>{});
 
-        loadScript(maplibreJs).then(()=>{
+        import(maplibreJs).then((maplibre)=>{
+          window.maplibregl = maplibre;
           const a=document.createElement('script'); a.src='/static/app.js?v={{.Version}}'; a.defer=true; document.head.appendChild(a);
         }).catch(()=>{
           const spinner=document.getElementById('pageSpinner');
@@ -782,6 +836,7 @@
                 delete input.dataset.resolvedLon;
                 delete input.dataset.resolvedDisplay;
               }
+              input.dispatchEvent(new Event('routepointchange'));
             });
             f.closest('.input-clear-wrap')?.classList.toggle('has-value', !!f.value);
             t.closest('.input-clear-wrap')?.classList.toggle('has-value', !!t.value);

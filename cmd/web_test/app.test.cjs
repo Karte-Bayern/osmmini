@@ -1,0 +1,384 @@
+const assert = require('node:assert/strict');
+const { test } = require('node:test');
+const { readFileSync } = require('node:fs');
+const vm = require('node:vm');
+
+// Exercise the shipped functions with controlled network completion and DOM
+// events. No MapLibre, external tiles or third-party test runtime is needed.
+const source = readFileSync(require('node:path').join(__dirname, '../web/app.js'), 'utf8');
+function section(start, end) {
+  const a = source.indexOf(start);
+  const b = source.indexOf(end, a);
+  assert.ok(a >= 0 && b > a, `missing source section: ${start}`);
+  return source.slice(a, b);
+}
+function deferred() {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+class Element extends EventTarget {
+  constructor() {
+    super();
+    this.children = [];
+    this.attributes = {};
+    this.style = {};
+    this.dataset = {};
+    this.value = '';
+    this.classList = { toggle() {} };
+  }
+  setAttribute(k, v) { this.attributes[k] = v; }
+  removeAttribute(k) { delete this.attributes[k]; }
+  set innerHTML(value) { this.children = []; this.html = value; }
+  get innerHTML() { return this.html || (this.children.length ? '<children>' : ''); }
+  appendChild(child) { this.children.push(child); }
+  querySelectorAll() { return this.children.filter(c => c.className === 'item'); }
+  querySelector() { return null; }
+  contains(target) { return target === this || this.children.includes(target); }
+  focus() {}
+}
+function searchHarness() {
+  const input = new Element();
+  const container = new Element();
+  const doc = new Element();
+  doc.getElementById = () => container;
+  doc.createElement = () => new Element();
+  const timers = new Map();
+  let id = 0;
+  const requests = [], toasts = [], rendered = [];
+  let cancellations = 0;
+  const context = vm.createContext({
+    document: doc, AbortController,
+    setTimeout(fn) { timers.set(++id, fn); return id; },
+    clearTimeout(key) { timers.delete(key); },
+    fetch(url, options) {
+      const response = deferred();
+      requests.push({ url, options, ...response });
+      return response.promise;
+    },
+    cancelRouteComputation() { cancellations++; }, clearRouteLocationChoices() {},
+    applySearchResultToInput(input, item) { input.value = item.label; return true; },
+    getResultPrimary: item => item.label, getResultSecondary: () => '',
+    highlight: value => value, escapeHtml: value => value,
+    showSearchResultsOnMap: data => rendered.push(data),
+    showToast: (...args) => toasts.push(args),
+  });
+  vm.runInContext(section('function makeSuggest(', '\nconst SEARCH_SOURCE_ID'), context);
+  const handle = context.makeSuggest('results', input);
+  return {
+    input, container, requests, toasts, rendered, handle,
+    get cancellations() { return cancellations; },
+    type(value) { input.value = value; input.dispatchEvent(new Event('input')); },
+    key(key) { const event = new Event('keydown'); event.key = key; input.dispatchEvent(event); },
+    flush() { const jobs = [...timers.values()]; timers.clear(); return jobs.map(fn => fn()); },
+  };
+}
+
+test('search ignores a stale JSON body during the next debounce interval', async () => {
+  const h = searchHarness();
+  h.type('Berlin');
+  assert.equal(h.input.attributes['aria-expanded'], 'true');
+  const [first] = h.flush();
+  const body = deferred();
+  h.requests[0].resolve({ ok: true, json: () => body.promise });
+  await Promise.resolve();
+  h.type('Hamburg');
+  assert.equal(h.requests[0].options.signal.aborted, true);
+  body.resolve([{ label: 'Berlin' }]);
+  await first;
+  assert.equal(h.rendered.length, 0);
+  assert.equal(h.container.children[0].textContent, 'Suche…');
+  const [second] = h.flush();
+  h.requests[1].resolve({ ok: true, json: async () => [{ label: 'Hamburg' }] });
+  await second;
+  assert.equal(h.rendered[0][0].label, 'Hamburg');
+});
+
+test('clearing a search allows the same query to run again', async () => {
+  const h = searchHarness();
+  h.type('Berlin');
+  const [first] = h.flush();
+  h.type('');
+  h.requests[0].resolve({ ok: true, json: async () => [{ label: 'Berlin' }] });
+  await first;
+  assert.equal(h.container.style.display, 'none');
+  assert.equal(h.rendered.length, 0);
+  h.type('Berlin');
+  const [retry] = h.flush();
+  assert.equal(h.requests.length, 2);
+  h.requests[1].resolve({ ok: true, json: async () => [] });
+  await retry;
+});
+
+test('Escape cancels both scheduled and running searches', async () => {
+  const h = searchHarness();
+  h.type('Berlin');
+  h.key('Escape');
+  assert.equal(h.flush().length, 0);
+  h.type('Berlin');
+  const [pending] = h.flush();
+  h.key('Escape');
+  assert.equal(h.requests[0].options.signal.aborted, true);
+  h.requests[0].resolve({ ok: false, status: 500 });
+  await pending;
+  assert.equal(h.toasts.length, 0);
+  assert.equal(h.input.attributes['aria-expanded'], 'false');
+});
+
+test('destroy detaches input handlers and silences late network failures', async () => {
+  const h = searchHarness();
+  h.type('Berlin');
+  const [pending] = h.flush();
+  h.handle.destroy();
+  h.requests[0].reject(new Error('connection lost'));
+  await pending;
+  h.type('Hamburg');
+  assert.equal(h.flush().length, 0);
+  assert.equal(h.toasts.length, 0);
+});
+
+function routeHarness() {
+  const elements = Object.fromEntries(['from', 'to', 'status', 'routeDetails', 'routeActions', 'optimize'].map(id => [id, new Element()]));
+  elements.from.value = 'Start';
+  elements.to.value = 'Ziel';
+  const requests = [], rendered = [], toasts = [], busy = [];
+  const request = (from, to, options, signal) => {
+    const pending = deferred();
+    requests.push({ signal, ...pending });
+    return pending.promise;
+  };
+  const context = vm.createContext({
+    AbortController, console,
+    document: { getElementById: id => elements[id] },
+    debouncedCompute: { cancel() {} },
+    routeLocationForInput: input => ({ query: input.value }),
+    routeLocationHasValue: location => Boolean(location.query),
+    syncInputClearState() {}, routeOptionsFromUI: () => ({}),
+    setMapsLinks() {}, showSpinner() {}, setComputeDisabled: value => busy.push(value),
+    waypoints: [], stops: [], apiRoute: request, apiTripSolve: request,
+    renderPath: (path, data) => rendered.push(data),
+    setResolvedRouteResponsePoint() {}, clearRouteLocationChoices() {},
+    renderManeuvers() {}, renderStopList() {}, renderDisambiguationButtons() {},
+    showToast: (...args) => toasts.push(args),
+  });
+  vm.runInContext(section('let routeRequest = null;', '\nfunction formatMeters('), context);
+  return { context, elements, requests, rendered, toasts, busy };
+}
+
+test('only the latest route may render or release the busy state', async () => {
+  const h = routeHarness();
+  const first = h.context.compute();
+  const second = h.context.compute();
+  assert.equal(h.requests[0].signal.aborted, true);
+  h.requests[0].resolve({ path: ['old'], distance_m: 100 });
+  await first;
+  assert.equal(h.rendered.length, 0);
+  assert.equal(h.busy.at(-1), true);
+  h.requests[1].resolve({ path: ['new'], distance_m: 200 });
+  await second;
+  assert.equal(h.rendered.length, 1);
+  assert.equal(h.rendered[0].distance_m, 200);
+  assert.equal(h.busy.at(-1), false);
+});
+
+test('reset cancels an in-flight trip without restoring its result', async () => {
+  const h = routeHarness();
+  h.context.stops.push({ id: 'stop' });
+  const pending = h.context.compute();
+  h.context.cancelRouteComputation();
+  assert.equal(h.requests[0].signal.aborted, true);
+  h.requests[0].resolve({ path: ['stale trip'], distance_m: 100 });
+  await pending;
+  assert.equal(h.rendered.length, 0);
+  assert.equal(h.toasts.length, 0);
+  assert.equal(h.elements.status.textContent, 'Bereit');
+  assert.equal(h.busy.at(-1), false);
+});
+
+test('a failed superseded route cannot replace the current status', async () => {
+  const h = routeHarness();
+  const first = h.context.compute();
+  const second = h.context.compute();
+  h.requests[0].reject(new Error('old request failed'));
+  await first;
+  assert.equal(h.elements.status.textContent, 'Berechne...');
+  assert.equal(h.toasts.length, 0);
+  h.requests[1].resolve({ path: [], distance_m: 200 });
+  await second;
+});
+
+test('swapping endpoints invalidates a pending search without editing its label', async () => {
+  const h = searchHarness();
+  h.type('Berlin');
+  const [pending] = h.flush();
+  h.input.value = 'Hamburg';
+  h.input.dispatchEvent(new Event('routepointchange'));
+  h.requests[0].resolve({ ok: true, json: async () => [{ label: 'Berlin' }] });
+  await pending;
+  assert.equal(h.input.value, 'Hamburg');
+  assert.equal(h.container.style.display, 'none');
+  assert.equal(h.rendered.length, 0);
+});
+
+test('route and trip clients pass the cancellation signal to fetch', async () => {
+  const calls = [];
+  const context = vm.createContext({
+    fetch: async (url, options) => { calls.push({ url, options }); return { ok: true, json: async () => ({}) }; },
+    document: { getElementById: () => ({ checked: false, value: '' }) },
+    waypoints: [], stops: [],
+  });
+  vm.runInContext(section('async function apiRoute(', '\nfunction clearRouteLocationChoices('), context);
+  const controller = new AbortController();
+  await context.apiRoute({ query: 'start' }, { query: 'end' }, {}, controller.signal);
+  await context.apiTripSolve({ query: 'start' }, { query: 'end' }, {}, controller.signal);
+  assert.equal(calls.length, 2);
+  for (const call of calls) {
+    assert.equal(call.options.signal, controller.signal);
+    assert.equal(call.options.method, 'POST');
+  }
+});
+
+test('batch waypoint removal does not issue intermediate route requests', () => {
+  let computes = 0, destroyed = 0, removed = 0;
+  const context = vm.createContext({
+    compute() { computes++; },
+    waypoints: [1, 2, 3].map(id => ({ id, suggestHandle: { destroy() { destroyed++; } }, wrapper: { remove() { removed++; } } })),
+  });
+  vm.runInContext(section('function removeWaypoint(', '\nfunction makeSuggest('), context);
+  context.removeWaypoint(1, false);
+  context.removeWaypoint(2, false);
+  assert.equal(computes, 0);
+  context.removeWaypoint(3);
+  assert.equal(computes, 1);
+  assert.equal(destroyed, 3);
+  assert.equal(removed, 3);
+});
+
+test('cancelled debounce cannot restart a reset route', () => {
+  const timers = new Map();
+  const context = vm.createContext({
+    setTimeout(fn) { timers.set(1, fn); return 1; },
+    clearTimeout(id) { timers.delete(id); },
+  });
+  vm.runInContext(section('function debounce(', '\n// debounced wrapper'), context);
+  let calls = 0;
+  const run = context.debounce(() => calls++, 300);
+  run();
+  run.cancel();
+  for (const fn of timers.values()) fn();
+  assert.equal(calls, 0);
+});
+
+
+test('selecting a suggestion cancels pending automatic route work', async () => {
+  const h = searchHarness();
+  h.type('Berlin');
+  const [pending] = h.flush();
+  h.requests[0].resolve({ ok: true, json: async () => [{ label: 'Berlin Hauptbahnhof' }] });
+  await pending;
+  const before = h.cancellations;
+  h.container.children[0].onclick();
+  assert.equal(h.cancellations, before + 1);
+  assert.equal(h.input.value, 'Berlin Hauptbahnhof');
+  assert.equal(h.input.attributes['aria-expanded'], 'false');
+});
+
+test('route inputs preserve selected addresses across focus without polling', () => {
+  const containers = { 'from-container': new Element(), 'to-container': new Element() };
+  const context = vm.createContext({
+    document: { getElementById: id => containers[id], createElement: () => new Element() },
+    clearResolvedRoutePoint() {},
+    setInterval() { throw new Error('route inputs must not poll'); },
+  });
+  vm.runInContext(section('function preventAutofill()', '\n// Call this immediately'), context);
+  context.preventAutofill();
+  const input = containers['from-container'].children[0].children[0];
+  input.value = 'Hauptstraße 5';
+  input.dispatchEvent(new Event('focus'));
+  input.dispatchEvent(new Event('change'));
+  input.dispatchEvent(new Event('blur'));
+  assert.equal(input.value, 'Hauptstraße 5');
+  assert.equal(input.attributes.autocomplete, 'off');
+});
+
+function gisHarness() {
+  const status = new Element();
+  const timers = new Map();
+  const requests = [];
+  let timerID = 0;
+  const context = vm.createContext({
+    AbortController, URLSearchParams,
+    map: { isStyleLoaded: () => false, getSource: () => null, once() {} },
+    document: { getElementById: () => status },
+    registerMapLayerRehydrate() {},
+    formatMeters: value => String(value),
+    setTimeout(fn) { timers.set(++timerID, fn); return timerID; },
+    clearTimeout(id) { timers.delete(id); },
+    fetch(url, options) { const request = deferred(); requests.push({ url, options, ...request }); return request.promise; },
+  });
+  vm.runInContext(section('let gisMeasureActive = false;', "document.getElementById('gisViewport')"), context);
+  return { context, status, requests, flush() { const jobs = [...timers.values()]; timers.clear(); return jobs.map(fn => fn()); } };
+}
+
+test('GIS measurement clearing aborts work and ignores delayed results', async () => {
+  const h = gisHarness();
+  vm.runInContext('gisMeasurePoints = [[12,48],[12.01,48.01]]; updateGISMeasurement();', h.context);
+  const [pending] = h.flush();
+  assert.equal(h.requests.length, 1);
+  vm.runInContext('gisMeasurePoints = []; updateGISMeasurement();', h.context);
+  assert.equal(h.requests[0].options.signal.aborted, true);
+  h.requests[0].resolve({ ok: true, json: async () => ({ length_m: 1000 }) });
+  await pending;
+  assert.match(h.status.textContent, /^0 Messpunkte/);
+});
+
+test('GIS display unwraps antimeridian segments without changing submitted positions', () => {
+  const h = gisHarness();
+  const input = [[179,0],[-179,1],[178,2]];
+  const output = h.context.gisDisplayCoordinates(input);
+  assert.equal(output[1][0], 181);
+  assert.equal(input[1][0], -179);
+  assert.equal(h.context.gisLongitude(540), -180);
+});
+
+
+test('GIS measurement updates its source while the map is loading data', () => {
+  const h = gisHarness();
+  let rendered;
+  h.context.map.getSource = () => ({ setData(data) { rendered = data; } });
+  vm.runInContext('gisMeasurePoints = [[12,48],[12.01,48.01]]; renderGISMeasurement();', h.context);
+  assert.equal(rendered.features.length, 3);
+  assert.equal(rendered.features[2].geometry.type, 'LineString');
+});
+
+test('offline label collisions preserve touching edges and reject overlapping names', () => {
+  const context = vm.createContext({});
+  vm.runInContext(section('function offlineLabelBoxesOverlap(', '\nfunction setOfflineLabelsVisible'), context);
+  const box = {left: 10, right: 100, top: 10, bottom: 30};
+  assert.equal(context.offlineLabelBoxesOverlap(box, {left: 90, right: 150, top: 20, bottom: 40}), true);
+  assert.equal(context.offlineLabelBoxesOverlap(box, {left: 100, right: 150, top: 10, bottom: 30}), false);
+  assert.equal(context.offlineLabelBoxesOverlap(box, {left: 10, right: 100, top: 31, bottom: 50}), false);
+});
+
+test('AI destination choices route to selected coordinates and retain an existing start', async () => {
+  const from = new Element(); from.value = 'Gewählter Start';
+  const to = new Element();
+  const container = new Element();
+  let selected, computes = 0;
+  const context = vm.createContext({
+    document: { createElement: () => new Element(), getElementById: id => id === 'from' ? from : to },
+    setResolvedSearchResult(input, suggestion) { selected = suggestion; input.value = suggestion.label; return true; },
+    clearResolvedRoutePoint() {}, syncInputClearState() {},
+    async compute() { computes++; },
+  });
+  vm.runInContext(source.slice(source.indexOf('function appendAITargetChoices(')), context);
+  context.appendAITargetChoices(container, { from: {query:'48.6,12.7'}, suggestions:[{label:'FOCUS Cinemas',lat:48.78,lon:12.87}] });
+  const button = container.children[0].children[0];
+  assert.equal(button.textContent, 'FOCUS Cinemas');
+  button.dispatchEvent(new Event('click'));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(selected.lon,12.87);
+  assert.equal(from.value,'Gewählter Start');
+  assert.equal(computes,1);
+  assert.equal(button.disabled,false);
+});

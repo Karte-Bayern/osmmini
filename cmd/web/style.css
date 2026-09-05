@@ -22,8 +22,8 @@
   --text-3:     rgba(122,156,197,0.55);
 
   /* Sidebar */
-  --sidebar-bg: #080f1e;
-  --sidebar-w:  380px;
+  --sidebar-bg: #101827;
+  --sidebar-w:  400px;
 
   /* Input */
   --input-bg:   rgba(6,12,26,0.8);
@@ -32,8 +32,8 @@
   --suggest-bg: #0a1424;
 
   /* Card */
-  --card-bg:    rgba(12,20,36,0.7);
-  --card-r:     14px;
+  --card-bg:    #172234;
+  --card-r:     12px;
 
   /* Animation */
   --dur: 0.18s;
@@ -60,10 +60,10 @@
   --text-2:     #4a6080;
   --text-3:     rgba(74,96,128,0.5);
 
-  --sidebar-bg: #ffffff;
+  --sidebar-bg: #f4f6f9;
   --input-bg:   rgba(255,255,255,0.9);
   --suggest-bg: #ffffff;
-  --card-bg:    rgba(255,255,255,0.8);
+  --card-bg:    #ffffff;
 }
 
 /* ─── Reset / Base ─── */
@@ -85,55 +85,60 @@ a { color: var(--primary); text-decoration: none; }
 .app {
   display: grid;
   grid-template-columns: var(--sidebar-w) 1fr;
-  height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 }
 
 .sidebar {
-  background: var(--sidebar-bg);
-  border-right: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  padding: 0;
-  /* allow internal scrolling when many cards are expanded */
-  height: 100vh;
-  max-height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  min-width: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  z-index: 10;
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--border);
   scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
+  scrollbar-color: var(--border-focus) transparent;
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
+  z-index: 10;
 }
-.sidebar::-webkit-scrollbar { width: 4px; }
-.sidebar::-webkit-scrollbar-track { background: transparent; }
-.sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
-
-/* The route is the primary job, while AI, territory and settings are
-   secondary tools. Keeping that distinction in the layout avoids losing the
-   start/goal fields while a user browses a long settings card. */
+/* One scroll surface: expanded routing results never cover the tools below. */
 .sidebar-primary {
-  position: sticky;
-  top: 0;
-  z-index: 30;
-  padding: 14px 14px 11px;
-  background: linear-gradient(180deg, var(--sidebar-bg) 84%, color-mix(in srgb, var(--sidebar-bg) 82%, transparent));
-  box-shadow: 0 8px 16px -14px rgba(0,0,0,.75);
+  position: relative;
+  padding: 16px;
+  background: var(--sidebar-bg);
 }
 .sidebar-secondary {
   display: grid;
-  gap: 8px;
-  padding: 2px 14px 24px;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 10px;
+  padding: 0 16px 24px;
 }
 .sidebar-secondary::before {
   content: 'Werkzeuge';
-  padding: 8px 2px 0;
-  color: var(--text-3);
-  font-size: 10px;
-  font-weight: 750;
-  letter-spacing: .11em;
-  text-transform: uppercase;
+  padding: 12px 2px 2px;
+  border-top: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .02em;
 }
+.sidebar :is(input, select, textarea) { min-width: 0; max-width: 100%; }
+.sidebar :is(button, a, input, select, textarea):focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
+}
+.sidebar .card { min-width: 0; box-shadow: none; backdrop-filter: none; }
+.sidebar .card-header-left { min-width: 0; }
+.sidebar .card-header h2 { font-size: 13px; letter-spacing: 0; text-transform: none; color: var(--text); }
+.sidebar .card-header { min-height: 52px; padding: 12px 14px; }
+.sidebar .card-body { padding: 2px 14px 16px; }
+.sidebar .btn-collapse { width: 30px; height: 30px; border-color: transparent; background: var(--surface); }
+.sidebar .setting-select { min-height: 38px; }
+.sidebar .btn { min-height: 38px; }
+.sidebar .ai-card:not(.collapsed) { border-color: var(--border-focus); }
 
 .map-pane { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
 .map { width: 100%; height: 100%; background: #0a1220; }
@@ -323,7 +328,7 @@ a { color: var(--primary); text-decoration: none; }
 
 /* Collapsed tool cards work as a dense, scannable command list. */
 .sidebar-secondary .card {
-  background: color-mix(in srgb, var(--card-bg) 90%, transparent);
+  background: var(--card-bg);
 }
 .sidebar-secondary .card-header {
   min-height: 48px;
@@ -960,7 +965,9 @@ input:-webkit-autofill:focus {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: 260px;
+  max-height: min(420px, 45dvh);
+  min-height: 72px;
+  overscroll-behavior: contain;
   overflow-y: auto;
   margin-bottom: 10px;
   padding-right: 2px;
@@ -978,7 +985,9 @@ input:-webkit-autofill:focus {
   word-break: break-word;
   white-space: pre-wrap;
   animation: fadeSlide var(--dur) var(--ease) both;
-  max-width: 92%;
+  max-width: 94%;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .ai-message strong { font-weight: 700; }
 .ai-user {
@@ -1025,10 +1034,15 @@ input:-webkit-autofill:focus {
 .btn-ai-clear:hover { background: rgba(239,68,68,0.08); border-color: rgba(239,68,68,0.3); color: var(--error); }
 
 .ai-input-row {
-  display: flex;
-  gap: 7px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 40px;
+  gap: 8px;
   align-items: center;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
 }
+.ai-input-row input { width: 100%; min-width: 0; min-height: 40px; }
+.ai-input-row .btn-send { width: 40px; height: 40px; box-shadow: none; }
 .ai-input-row input {
   flex: 1;
   padding: 8px 12px;
@@ -1574,10 +1588,11 @@ input:-webkit-autofill:focus {
 .tinytiles-preset span { margin-top: 2px; color: var(--text-2); font-size: 10px; line-height: 1.3; }
 .tinytiles-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 12px;
 }
-.tinytiles-actions .btn-primary { flex: 1; }
+.tinytiles-actions .btn { flex: 1 1 150px; white-space: normal; min-width: 0; }
 .tinytiles-postcode-lookup {
   margin-top: 12px;
   padding: 10px;
@@ -1935,7 +1950,7 @@ body.map-welcome-open { overflow: hidden; }
 .toast.info    { border-left: 3px solid var(--primary); }
 
 /* ─── Local tinyTiles labels ───
-   These are Leaflet DOM labels, not MapLibre symbol layers. This makes the
+   These are MapLibre DOM markers using local system fonts. This makes the
    minimal local vector style readable even when no glyph/font files exist. */
 .offline-label-anchor {
   background: transparent !important;
@@ -1943,25 +1958,33 @@ body.map-welcome-open { overflow: hidden; }
   pointer-events: none !important;
 }
 .offline-map-label {
-  display: block;
+  display: var(--offline-label-display, block);
   width: max-content;
-  transform: translate(-50%, -50%);
   white-space: nowrap;
   pointer-events: none;
-  color: #243346;
+  color: var(--offline-label-color, #243346);
   font-family: system-ui, sans-serif;
   font-weight: 600;
   line-height: 1.15;
-  text-shadow: -1px -1px 2px rgba(255,255,255,.95), 1px -1px 2px rgba(255,255,255,.95), -1px 1px 2px rgba(255,255,255,.95), 1px 1px 2px rgba(255,255,255,.95);
+  text-shadow: -1px -1px 2px var(--offline-label-halo, rgba(255,255,255,.95)), 1px -1px 2px var(--offline-label-halo, rgba(255,255,255,.95)), -1px 1px 2px var(--offline-label-halo, rgba(255,255,255,.95)), 1px 1px 2px var(--offline-label-halo, rgba(255,255,255,.95));
 }
 .offline-label-place .offline-map-label {
-  font-size: 13px;
+  font-size: calc(13px * var(--offline-label-size, 1));
   font-weight: 750;
   letter-spacing: .01em;
 }
+.offline-label-place[data-rank="100"] .offline-map-label,
+.offline-label-place[data-rank="80"] .offline-map-label {
+  font-size: calc(15px * var(--offline-label-size, 1));
+}
+.offline-label-place[data-rank="30"] .offline-map-label,
+.offline-label-place[data-rank="15"] .offline-map-label {
+  font-size: calc(12px * var(--offline-label-size, 1));
+  font-weight: 600;
+}
 .offline-label-road .offline-map-label {
-  color: #4c5d71;
-  font-size: 11px;
+  color: var(--offline-label-color, #4c5d71);
+  font-size: calc(11px * var(--offline-label-size, 1));
   font-weight: 550;
 }
 
@@ -2097,9 +2120,10 @@ body.map-welcome-open { overflow: hidden; }
 /* ─── Responsive (mobile) ─── */
 @media (max-width: 768px) {
   :root { --sidebar-w: 100%; }
-  .app { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+  .app { height: 100dvh; grid-template-columns: 1fr; grid-template-rows: minmax(0, 52dvh) minmax(0, 1fr); }
   .sidebar {
-    max-height: 52vh;
+    height: 100%;
+    max-height: 52dvh;
     border-right: none;
     border-bottom: 1px solid var(--border);
     padding: 0;
@@ -2114,7 +2138,7 @@ body.map-welcome-open { overflow: hidden; }
   .route-card { margin-top: 7px; padding: 10px; }
   .sidebar-quick-actions { margin-top: 7px; }
   .map { height: 100%; }
-  .map-pane { min-height: 48vh; }
+  .map-pane { min-height: 0; }
   .settings-grid { grid-template-columns: 1fr; }
   .tile-source-card { grid-template-columns: 70px minmax(0, 1fr) 18px; }
   .tile-source-preview { min-height: 58px; }
@@ -2142,3 +2166,27 @@ body.map-welcome-open { overflow: hidden; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }
+
+/* GIS controls reuse the sidebar's existing palette and responsive sizing. */
+.gis-tools { padding: 12px; }
+.gis-tools summary { cursor: pointer; font-weight: 600; }
+.gis-tools label { display: block; margin: 10px 0 4px; font-size: 12px; }
+.gis-tools .setting-input { width: 100%; box-sizing: border-box; }
+.gis-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.gis-tools p { font-size: 12px; line-height: 1.5; }
+.gis-tools button[aria-pressed="true"] { outline: 2px solid var(--accent, #4da3ff); }
+
+/* Offline style controls fit the sidebar independently of viewport width. */
+.offline-style-editor { margin: 14px 0; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--card-bg); }
+.offline-style-editor summary { cursor: pointer; color: var(--text); font-weight: 650; }
+.offline-style-editor summary:focus-visible { outline: 2px solid var(--primary); outline-offset: 4px; }
+.offline-style-colors { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; margin: 14px 0; }
+.offline-style-colors label { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 12px; color: var(--text-2); }
+.offline-style-colors input[type="color"] { flex: 0 0 36px; width: 36px; height: 30px; padding: 2px; border: 1px solid var(--border); border-radius: 6px; background: var(--input-bg); cursor: pointer; }
+.offline-style-range { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin: 14px 0; color: var(--text-2); font-size: 12px; }
+.offline-style-range input { grid-column: 1 / -1; width: 100%; accent-color: var(--primary); }
+.offline-style-range output { font-variant-numeric: tabular-nums; }
+.offline-style-editor .checkbox { margin: 8px 0; }
+
+.ai-target-choices { display: grid; gap: 8px; margin-top: 10px; }
+.ai-target-choices .btn { white-space: normal; text-align: left; overflow-wrap: anywhere; }

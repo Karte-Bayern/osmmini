@@ -45,6 +45,7 @@ type OperationsStore struct {
 	mu      sync.RWMutex
 	path    string
 	records []OperationRecord
+	newest  []int // Record offsets, newest first; persisted append order stays intact.
 }
 
 func NewOperationsStore(path string) *OperationsStore { return &OperationsStore{path: path} }
@@ -59,13 +60,41 @@ func (s *OperationsStore) Load() error {
 	if err != nil {
 		return err
 	}
-	if err := json.Unmarshal(data, &s.records); err != nil {
+	var records []OperationRecord
+	if err := json.Unmarshal(data, &records); err != nil {
 		return fmt.Errorf("decode operations log: %w", err)
 	}
+	newest := make([]int, len(records))
+	for i := range records {
+		newest[i] = i
+	}
+	sort.Slice(newest, func(i, j int) bool {
+		a, b := newest[i], newest[j]
+		if records[a].CreatedAt.Equal(records[b].CreatedAt) {
+			return a > b
+		}
+		return records[a].CreatedAt.After(records[b].CreatedAt)
+	})
+	// Publish only after successful decoding, preserving a usable store if a
+	// reload encounters an invalid or partially written external file.
+	s.records, s.newest = records, newest
 	return nil
 }
 
+func cloneOperation(record OperationRecord) OperationRecord {
+	if record.Latitude != nil {
+		lat := *record.Latitude
+		record.Latitude = &lat
+	}
+	if record.Longitude != nil {
+		lon := *record.Longitude
+		record.Longitude = &lon
+	}
+	return record
+}
+
 func (s *OperationsStore) Create(input OperationRecord) (OperationRecord, error) {
+	input = cloneOperation(input)
 	if err := validateOperation(&input); err != nil {
 		return OperationRecord{}, err
 	}
@@ -88,7 +117,14 @@ func (s *OperationsStore) Create(input OperationRecord) (OperationRecord, error)
 		s.records = s.records[:len(s.records)-1]
 		return OperationRecord{}, err
 	}
-	return input, nil
+	idx := len(s.records) - 1
+	position := sort.Search(len(s.newest), func(i int) bool {
+		return !s.records[s.newest[i]].CreatedAt.After(input.CreatedAt)
+	})
+	s.newest = append(s.newest, 0)
+	copy(s.newest[position+1:], s.newest[position:len(s.newest)-1])
+	s.newest[position] = idx
+	return cloneOperation(input), nil
 }
 
 func (s *OperationsStore) List(kind string, limit int) []OperationRecord {
@@ -98,16 +134,16 @@ func (s *OperationsStore) List(kind string, limit int) []OperationRecord {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	result := make([]OperationRecord, 0, min(limit, len(s.records)))
-	for i := len(s.records) - 1; i >= 0 && len(result) < limit; i-- {
-		record := s.records[i]
+	for _, idx := range s.newest {
+		if len(result) >= limit {
+			break
+		}
+		record := s.records[idx]
 		if kind != "" && record.Type != kind {
 			continue
 		}
-		result = append(result, record)
+		result = append(result, cloneOperation(record))
 	}
-	// Existing manually edited JSON files can be unordered. Keep the HTTP
-	// contract newest-first without mutating the persisted audit history.
-	sort.SliceStable(result, func(i, j int) bool { return result[i].CreatedAt.After(result[j].CreatedAt) })
 	return result
 }
 

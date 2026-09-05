@@ -15,11 +15,11 @@
   },
   "tiles": {
     "cache_dir": "tiles-cache",
-    "upstream": "https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
     "user_agent": "osmmini-routerd/1.0 (offline routing)",
-    "map_type": "raster-direct",
-    "attribution": "© OpenStreetMap contributors © CARTO",
-    "max_zoom": 19
+    "map_type": "vector",
+    "attribution": "© OpenStreetMap contributors",
+    "max_zoom": 14,
+    "style_url": "/static/styles/tinytiles-minimal.json"
   },
   "ai": {},
   "save_poi_cache": true,

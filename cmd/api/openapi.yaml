@@ -5,6 +5,62 @@ info:
 servers:
   - url: /
 paths:
+  /api/v1/geo/pois:
+    get:
+      summary: Local POIs as GeoJSON Points (nodes and way centroids)
+      description: Supply bbox OR lat/lon/radius_m. Radius results are ordered by great-circle distance. Includes matched and truncated metadata; limit caps the export. Relations are not included.
+      parameters:
+        - { name: bbox, in: query, schema: { type: string }, description: 'minLon,minLat,maxLon,maxLat; non-wrapping WGS84 box' }
+        - { name: lat, in: query, schema: { type: number, minimum: -90, maximum: 90 } }
+        - { name: lon, in: query, schema: { type: number, minimum: -180, maximum: 180 } }
+        - { name: radius_m, in: query, schema: { type: number, exclusiveMinimum: 0, maximum: 100000 } }
+        - { name: q, in: query, schema: { type: string } }
+        - { name: category, in: query, schema: { type: string }, description: 'Exact OSM value in amenity, shop, tourism, leisure, office, place or emergency' }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 1000, default: 100 } }
+      responses:
+        '200':
+          description: GeoJSON FeatureCollection; coordinates are longitude then latitude
+          content:
+            application/geo+json:
+              schema:
+                type: object
+                required: [type, features, matched, truncated]
+                properties:
+                  type: { type: string, const: FeatureCollection }
+                  features: { type: array, items: { type: object } }
+                  matched: { type: integer }
+                  truncated: { type: boolean }
+        '400': { description: Invalid or conflicting spatial parameters }
+        '503': { description: POI index still loading }
+  /api/v1/geo/measure:
+    post:
+      summary: Measure a polyline using great-circle segment distances
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [coordinates]
+              properties:
+                coordinates:
+                  type: array
+                  minItems: 2
+                  maxItems: 10000
+                  items: { type: array, minItems: 2, maxItems: 2, items: { type: number } }
+      responses:
+        '200':
+          description: Spherical measurement in metres (not road distance or an ellipsoidal survey)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  length_m: { type: number }
+                  segments_m: { type: array, items: { type: number } }
+                  model: { type: string, const: sphere }
+                  earth_radius_m: { type: number, const: 6371000 }
+        '400': { description: Invalid coordinates or point count }
   /api/v1/health:
     get:
       summary: Health check

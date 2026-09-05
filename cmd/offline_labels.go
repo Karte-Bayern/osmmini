@@ -93,10 +93,12 @@ func placeLabelLimit(zoom int) int {
 }
 
 func streetLabelLimit(zoom int) int {
+	// Supply enough spatially distributed candidates for the browser's
+	// screen-space collision check, including on wide desktop viewports.
 	if zoom >= 15 {
-		return 56
+		return 160
 	}
-	return 32
+	return 96
 }
 
 func (s *server) placeLabels(window osmmini.CoordWindow, limit int) []offlineMapLabel {

@@ -1,6 +1,9 @@
 package osmmini
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestParseAddressGuessKeepsPOINamesIntact(t *testing.T) {
 	q := ParseAddressGuess("Berlin Hauptbahnhof")
@@ -83,5 +86,29 @@ func TestFindBestAddressRejectsHouseNumberOnlyMatch(t *testing.T) {
 	// into the first arbitrary address with house number 3.
 	if got, ok := FindBestAddress(entries, ParseAddressGuess("RUBIX — Scheiblerstraße 3")); ok {
 		t.Fatalf("FindBestAddress() = %#v, want no house-number-only match", got)
+	}
+}
+
+func TestSearchAddressesUnlimitedKeepsBoundedRanking(t *testing.T) {
+	entries := []AddressEntry{
+		{ID: 3, Tags: Tags{"name": "Hauptstraße"}},
+		{ID: 2, Tags: Tags{"name": "Hauptstraße"}},
+		{ID: 1, Tags: Tags{"name": "Hauptstraße"}},
+		{ID: 4, Tags: Tags{"name": "Nebenstraße"}},
+	}
+	q := ParseAddressGuess("Hauptstraße")
+	all := SearchAddresses(entries, q, 0)
+	if len(all) != 3 {
+		t.Fatalf("results = %#v", all)
+	}
+	for _, limit := range []int{1, 2, 3, 4, int(^uint(0) >> 1)} {
+		got := SearchAddresses(entries, q, limit)
+		want := all[:min(limit, len(all))]
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("limit %d: got %#v, want %#v", limit, got, want)
+		}
+	}
+	if got := SearchAddresses(nil, q, 100); len(got) != 0 {
+		t.Fatalf("empty index: %#v", got)
 	}
 }

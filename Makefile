@@ -11,7 +11,7 @@ GEOFABRIK_URL ?= https://download.geofabrik.de/europe/germany/bayern-latest.osm.
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build run bayern offline maplibre-assets pbf-download offline-prep test test-race vet fmt check check-js clean
+.PHONY: help build run bayern offline maplibre-assets pbf-download offline-prep test test-js test-race vet fmt check check-js clean
 
 help: ## Show available commands.
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-12s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -37,12 +37,12 @@ offline: ## Run the fully local tinyTiles profile; set ADMIN_TOKEN and PBF.
 	fi
 	OSMMINI_ADMIN_TOKEN="$(ADMIN_TOKEN)" $(GO) run ./cmd -pbf "$(PBF)" -settings settings.tinytiles.json -listen "$(LISTEN)"
 
-maplibre-assets: ## Refresh the pinned local MapLibre GL assets (network required).
+maplibre-assets: ## Refresh the pinned MapLibre 6.7.0 ESM assets (network required).
 	@mkdir -p cmd/web/static/maplibre
-	curl -fsSL --retry 3 https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js -o cmd/web/static/maplibre/maplibre-gl.js
-	curl -fsSL --retry 3 https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css -o cmd/web/static/maplibre/maplibre-gl.css
-	@echo "be9633c4d870e26fb37f1cfe5c5a77181667114003ea16207ac7850d8da8add1  cmd/web/static/maplibre/maplibre-gl.js" | shasum -a 256 -c -
-	@echo "576b085fdd9487a65a19215328c1e086c07ce5bf6da09b666b3806d3d008dae9  cmd/web/static/maplibre/maplibre-gl.css" | shasum -a 256 -c -
+	@set -e; for asset in maplibre-gl.mjs maplibre-gl-shared.mjs maplibre-gl-worker.mjs maplibre-gl.css; do \
+		curl -fsSL --retry 3 "https://unpkg.com/maplibre-gl@6.7.0/dist/$$asset" -o "cmd/web/static/maplibre/$$asset"; \
+	done
+	shasum -a 256 -c cmd/web/static/maplibre/SHA256SUMS
 
 pbf-download: ## Download a Geofabrik PBF extract into PBF (set GEOFABRIK_URL to pick a region; skips if PBF already exists, use FORCE=1 to refetch).
 	@if [ -e "$(PBF)" ] && [ "$(FORCE)" != "1" ]; then \
@@ -56,7 +56,7 @@ offline-prep: pbf-download maplibre-assets ## Prepare everything needed for a fu
 	@echo ""
 	@echo "Offline assets ready:"
 	@echo "  PBF:      $(PBF)"
-	@echo "  MapLibre: cmd/web/static/maplibre/maplibre-gl.{js,css}"
+	@echo "  MapLibre: cmd/web/static/maplibre/maplibre-gl.mjs + shared/worker modules + CSS"
 	@echo ""
 	@echo "Next: build the local tinyTiles map + start the offline profile:"
 	@echo "  make offline ADMIN_TOKEN=<token>"
@@ -74,10 +74,14 @@ vet: ## Run Go static analysis.
 fmt: ## Format all Go packages.
 	$(GO) fmt ./...
 
-check: test vet build ## Run the standard Go verification suite.
+check: test vet build check-js test-js ## Run Go checks, build, and browser JavaScript checks (requires Node.js).
+
+test-js: ## Run browser request and interaction regression tests (requires Node.js).
+	node --test cmd/web_test/*.test.cjs
 
 check-js: ## Validate the browser JavaScript syntax (requires Node.js).
 	node --check cmd/web/app.js
+	node --check cmd/web/offline-style.js
 
 clean: ## Remove locally built binaries.
 	rm -rf "$(BIN_DIR)"

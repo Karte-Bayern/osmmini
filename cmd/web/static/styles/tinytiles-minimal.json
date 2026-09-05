@@ -1,19 +1,15 @@
 {
-  "version": 8,
-  "name": "tinyTiles minimal offline",
-  "sources": {
-    "tinytiles": {
-      "type": "vector",
-      "url": "/tinytiles/tilejson.json"
-    }
-  },
-  "layers": [
-    {"id":"background","type":"background","paint":{"background-color":"#edf2e4"}},
-    {"id":"water","type":"fill","source":"tinytiles","source-layer":"water","paint":{"fill-color":"#9dc9e8","fill-opacity":0.9}},
-    {"id":"forest","type":"fill","source":"tinytiles","source-layer":"landcover","filter":["==",["get","class"],"forest"],"paint":{"fill-color":"#b7d7a8","fill-opacity":0.85}},
-    {"id":"farmland","type":"fill","source":"tinytiles","source-layer":"landcover","filter":["in",["get","class"],["literal",["farmland","meadow"]]],"paint":{"fill-color":"#e5dfad","fill-opacity":0.72}},
-    {"id":"buildings","type":"fill","source":"tinytiles","source-layer":"building","paint":{"fill-color":"#d9c5b0","fill-outline-color":"#bdab99"}},
-    {"id":"roads-casing","type":"line","source":"tinytiles","source-layer":"transportation","paint":{"line-color":"#bcae9f","line-width":["interpolate",["linear"],["zoom"],5,0.5,10,1.8,14,4]}},
-    {"id":"roads","type":"line","source":"tinytiles","source-layer":"transportation","paint":{"line-color":"#ffffff","line-width":["interpolate",["linear"],["zoom"],5,0.3,10,1.2,14,3]}}
+  "version":8,
+  "name":"OSMmini offline",
+  "sources":{"tinytiles":{"type":"vector","url":"/tinytiles/tilejson.json"}},
+  "layers":[
+    {"id":"background","type":"background","paint":{"background-color":"#f4f2eb"}},
+    {"id":"forest","type":"fill","source":"tinytiles","source-layer":"landcover","filter":["==",["get","class"],"forest"],"paint":{"fill-color":"#c6d9ba","fill-opacity":0.85}},
+    {"id":"farmland","type":"fill","source":"tinytiles","source-layer":"landcover","filter":["in",["get","class"],["literal",["farmland","meadow"]]],"paint":{"fill-color":["match",["get","class"],"meadow","#dce5c7","#eee7ce"],"fill-opacity":0.75}},
+    {"id":"water","type":"fill","source":"tinytiles","source-layer":"water","paint":{"fill-color":"#aad3df","fill-opacity":1}},
+    {"id":"buildings","type":"fill","source":"tinytiles","source-layer":"building","paint":{"fill-color":"#d8cec3","fill-outline-color":"#b9ada0","fill-opacity":["interpolate",["linear"],["zoom"],12,0.5,14,0.9]},"minzoom":12},
+    {"id":"roads-casing","type":"line","source":"tinytiles","source-layer":"transportation","filter":["!=",["get","class"],"path"],"layout":{"line-cap":"round","line-join":"round","line-sort-key":["match",["get","class"],"motorway",7,"trunk",6,"primary",5,"secondary",4,"tertiary",3,"residential",2,1]},"paint":{"line-color":["match",["get","class"],["motorway","trunk"],"#c59b6d",["primary","secondary"],"#c5b68a","#c4bdb3"],"line-width":["interpolate",["linear"],["zoom"],5,0.9,10,["match",["get","class"],["motorway","trunk"],3.4,["primary","secondary"],2.6,"tertiary",1.8,1.2],14,["match",["get","class"],["motorway","trunk"],8,["primary","secondary"],6.8,"tertiary",5.8,4.2],18,["match",["get","class"],["motorway","trunk"],26,["primary","secondary"],22,"tertiary",18,12]]}},
+    {"id":"roads","type":"line","source":"tinytiles","source-layer":"transportation","filter":["!=",["get","class"],"path"],"layout":{"line-cap":"round","line-join":"round","line-sort-key":["match",["get","class"],"motorway",7,"trunk",6,"primary",5,"secondary",4,"tertiary",3,"residential",2,1]},"paint":{"line-color":["match",["get","class"],["motorway","trunk"],"#f1c582",["primary","secondary"],"#f8e4ac","#ffffff"],"line-width":["interpolate",["linear"],["zoom"],5,0.5,10,["match",["get","class"],["motorway","trunk"],2.2,["primary","secondary"],1.6,"tertiary",1.0,0.6],14,["match",["get","class"],["motorway","trunk"],6,["primary","secondary"],4.8,"tertiary",4,2.8],18,["match",["get","class"],["motorway","trunk"],22,["primary","secondary"],18,"tertiary",14,9]]}},
+    {"id":"paths","type":"line","source":"tinytiles","source-layer":"transportation","minzoom":14,"filter":["==",["get","class"],"path"],"layout":{"line-cap":"round","line-join":"round"},"paint":{"line-color":"#a3927c","line-dasharray":[2,2],"line-width":["interpolate",["linear"],["zoom"],14,1,18,2.5]}}
   ]
 }

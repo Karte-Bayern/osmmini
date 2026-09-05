@@ -34,6 +34,7 @@ const map = new maplibregl.Map({
 });
 map.addControl(new maplibregl.NavigationControl(), 'top-left');
 map.addControl(new maplibregl.AttributionControl());
+OfflineMapStyle.bind(queueOfflineLabels);
 // map.once('style.load')/isStyleLoaded() can both be satisfied a tick before
 // addSource/addLayer are actually safe to call on the *very first* style
 // (an inline object, not a fetched URL) — 'load' fires exactly once, only
@@ -294,6 +295,8 @@ function offlineLabelElement(kind, name) {
 
 async function refreshOfflineLabels() {
   if (!offlineLabelsEnabled) return;
+  offlineLabelsRequest?.abort();
+  offlineLabelsRequest = null;
   const zoom = map.getZoom();
   if (zoom < 7) {
     clearOfflineLabelMarkers();
@@ -320,21 +323,36 @@ async function refreshOfflineLabels() {
         const coord = normalizeLatLon(label.lat, label.lon);
         const name = String(label.name || '').trim();
         if (!coord || !name) return null;
-        return { lat: coord.lat, lon: coord.lon, name, kind: label.kind === 'place' ? 'place' : 'road' };
+        return { lat: coord.lat, lon: coord.lon, name, rank: Number(label.rank) || 0, kind: label.kind === 'place' ? 'place' : 'road' };
       })
       .filter(Boolean)
-      // MapLibre markers stack in DOM append order (no zIndexOffset like
-      // Leaflet) — add 'road' labels first so 'place' labels render on top.
-      .sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'place' ? 1 : -1));
+      // Reserve space for important places before considering street names.
+      .sort((a, b) => (a.kind === b.kind ? b.rank - a.rank : a.kind === 'place' ? -1 : 1));
+    const occupied = [];
+    const viewport = map.getContainer().getBoundingClientRect();
     for (const label of labels) {
-      const marker = new maplibregl.Marker({ element: offlineLabelElement(label.kind, label.name), anchor: 'center' })
+      const element = offlineLabelElement(label.kind, label.name);
+      element.dataset.rank = String(label.rank);
+      const marker = new maplibregl.Marker({ element, anchor: 'center' })
         .setLngLat([label.lon, label.lat])
         .addTo(map);
+      const rect = element.getBoundingClientRect();
+      const box = { left: rect.left - 5, right: rect.right + 5, top: rect.top - 3, bottom: rect.bottom + 3 };
+      if (box.left < viewport.left || box.right > viewport.right || box.top < viewport.top || box.bottom > viewport.bottom ||
+          occupied.some(other => offlineLabelBoxesOverlap(box, other))) {
+        marker.remove();
+        continue;
+      }
+      occupied.push(box);
       offlineLabelMarkers.push(marker);
     }
   } catch (error) {
     if (error?.name !== 'AbortError') console.debug('Offline labels are temporarily unavailable', error);
   }
+}
+
+function offlineLabelBoxesOverlap(a, b) {
+  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
 }
 
 function setOfflineLabelsVisible(enabled) {
@@ -764,6 +782,7 @@ document.getElementById('addFireStationBtn')?.addEventListener('click', () => {
 });
 
 map.on('click', async (ev) => {
+  if (gisMeasureActive) return;
   if (!fireStationAddMode) return;
   fireStationAddMode = false;
   const btn = document.getElementById('addFireStationBtn');
@@ -1013,6 +1032,7 @@ async function applyTileLayer(settings, { directPreview = false } = {}) {
   const generation = ++tileLayerGeneration;
   const tiles = (settings && settings.tiles) || {};
   const mapType = (tiles.map_type || 'raster').toLowerCase();
+  if (!isTinyTilesSettings(tiles)) OfflineMapStyle.activate(map, false);
   const attribution = escapeHtml(tiles.attribution || '');
   const maxZoom = Number.isInteger(tiles.max_zoom) && tiles.max_zoom > 0 ? tiles.max_zoom : 19;
   const directRaster = directPreview || usesDirectRaster(mapType, tiles);
@@ -1033,6 +1053,7 @@ async function applyTileLayer(settings, { directPreview = false } = {}) {
       updateMapModeUI(tiles);
       setOfflineLabelsVisible(isTinyTilesSettings(tiles));
       setOfflineWaterwaysVisible(isTinyTilesSettings(tiles));
+      OfflineMapStyle.activate(map, isTinyTilesSettings(tiles));
       rehydrateMapLayers();
       return true;
     } catch (e) {
@@ -1194,14 +1215,16 @@ function promptReferencesMap(prompt) {
 // Debounce helper for performance (defined early so UI code can reference it)
 function debounce(func, wait) {
   let timeout;
-  return function executedFunction(...args) {
+  function executedFunction(...args) {
     const later = () => {
       clearTimeout(timeout);
       func(...args);
     };
     clearTimeout(timeout);
     timeout = setTimeout(later, wait);
-  };
+  }
+  executedFunction.cancel = () => clearTimeout(timeout);
+  return executedFunction;
 }
 
 // debounced wrapper used by inputs (compute is hoisted)
@@ -1299,6 +1322,7 @@ function preventAutofill() {
     clearBtn.addEventListener('click', () => {
       clearResolvedRoutePoint(input);
       input.value = '';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
       wrap.classList.remove('has-value');
       input.focus();
       // Hide suggestions
@@ -1310,39 +1334,20 @@ function preventAutofill() {
     wrap.appendChild(clearBtn);
     container.appendChild(wrap);
     
-    // Update has-value class and autofill detection
-    let lastValue = '';
-    let autofillTimer = null;
+    // Native input events and the existing programmatic setters keep the
+    // clear button in sync. Polling cannot distinguish autofill from a valid
+    // search/GPS selection and used to overwrite those selections.
     function updateClearVisible() {
       wrap.classList.toggle('has-value', !!input.value);
     }
-    input.addEventListener('input', (e) => {
+    input.addEventListener('input', () => {
       clearResolvedRoutePoint(input);
-      lastValue = e.target.value;
       updateClearVisible();
     });
-    input.addEventListener('focus', () => {
-      // Only watch while the input is focused; clear on blur to avoid leaking.
-      autofillTimer = setInterval(() => {
-        const currentValue = input.value;
-        if (currentValue !== lastValue && currentValue.includes(' ')) {
-          const isLikelyAutofill = /\d+|straße|str\.|platz|weg/i.test(currentValue) &&
-                                    lastValue.length < 3;
-          if (isLikelyAutofill) {
-            input.value = lastValue;
-          }
-        }
-        updateClearVisible();
-      }, 100);
-    });
-    input.addEventListener('blur', () => {
-      if (autofillTimer !== null) {
-        clearInterval(autofillTimer);
-        autofillTimer = null;
-      }
-      updateClearVisible();
-    });
-    
+    for (const event of ['change', 'focus', 'blur', 'routepointchange']) {
+      input.addEventListener(event, updateClearVisible);
+    }
+
     return input;
   }
   
@@ -1718,8 +1723,8 @@ async function apiPutSettings(settings) {
   return res.json();
 }
 
-async function apiRoute(from,to,options){
-  const res = await fetch('/api/v1/route',{method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({from, to, options})});
+async function apiRoute(from,to,options,signal){
+  const res = await fetch('/api/v1/route',{signal, method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({from, to, options})});
   if(!res.ok){
     const err = await res.json().catch(()=>({}));
     const ex = new Error(err.error || res.statusText);
@@ -1729,7 +1734,7 @@ async function apiRoute(from,to,options){
   return res.json();
 }
 
-async function apiTripSolve(from,to,options){
+async function apiTripSolve(from,to,options,signal){
   const optimize = document.getElementById('optimize').checked;
   const allStops = [];
   waypoints.forEach(wp=>{
@@ -1741,7 +1746,7 @@ async function apiTripSolve(from,to,options){
   stops.forEach(s=> allStops.push({id:s.id, location:{lat:s.lat, lon:s.lon}}));
   const vehicleCapacity = parseFloat(document.getElementById('vehicleCapacity')?.value) || 0;
   const plan = { start:from, end:to, stops: allStops, dependencies:[], optimize, vehicle_capacity: vehicleCapacity || undefined };
-  const res = await fetch('/api/v1/trip/solve', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({plan, options})});
+  const res = await fetch('/api/v1/trip/solve', {signal, method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({plan, options})});
   if(!res.ok){
     const err = await res.json().catch(()=>({}));
     const ex = new Error(err.error || res.statusText);
@@ -1879,7 +1884,22 @@ function renderPath(path, meta){
   updateTerritoryRouteTransitions(path);
 }
 
+let routeRequest = null;
+
+function cancelRouteComputation() {
+  debouncedCompute.cancel();
+  if (!routeRequest) return;
+  routeRequest.abort();
+  routeRequest = null;
+  showSpinner(false);
+  setComputeDisabled(false);
+  document.getElementById('status').textContent = 'Bereit';
+}
+
 async function compute() {
+  cancelRouteComputation();
+  const request = new AbortController();
+  routeRequest = request;
   const fromEl = document.getElementById('from');
   const toEl = document.getElementById('to');
   const from = routeLocationForInput(fromEl);
@@ -1909,7 +1929,8 @@ async function compute() {
         showToast('Bitte Start und Ziel eingeben', 'info');
         return;
       }
-      const data = await apiRoute(from, to, options);
+      const data = await apiRoute(from, to, options, request.signal);
+      if (routeRequest !== request) return;
       renderPath(data.path, data);
       // Preserve the exact resolved positions behind the friendly labels. A
       // later change of profile/objective must route to this same point rather
@@ -1932,7 +1953,8 @@ async function compute() {
       setMapsLinks(data.google_maps_url, data.apple_maps_url);
       showToast(`Route berechnet: ${(data.distance_m/1000).toFixed(1)} km`, 'success', 2000);
     } else {
-      const data = await apiTripSolve(from, to, options);
+      const data = await apiTripSolve(from, to, options, request.signal);
+      if (routeRequest !== request) return;
       renderPath(data.path, data);
       // aggregate maneuvers from legs if present
       (function(){
@@ -1956,6 +1978,7 @@ async function compute() {
       }
     }
   } catch (e) {
+    if (routeRequest !== request || e?.name === 'AbortError') return;
     document.getElementById('status').textContent = '❌ Fehler';
     try {
       if (e && e.details && Array.isArray(e.details.suggestions) && e.details.suggestions.length > 0) {
@@ -1967,8 +1990,11 @@ async function compute() {
     console.error(e);
   }
   finally {
-    showSpinner(false);
-    setComputeDisabled(false);
+    if (routeRequest === request) {
+      routeRequest = null;
+      showSpinner(false);
+      setComputeDisabled(false);
+    }
   }
 }
 
@@ -2042,6 +2068,7 @@ function renderManeuvers(steps) {
 
 document.getElementById('go').addEventListener('click', e=>{ e.preventDefault(); compute(); });
 document.getElementById('clear').addEventListener('click', () => {
+  cancelRouteComputation();
   // Clear map markers and route polyline
   while(stops.length){ const s=stops.pop(); s.marker.remove(); } 
   stopSeq=1; 
@@ -2057,16 +2084,18 @@ document.getElementById('clear').addEventListener('click', () => {
     clearResolvedRoutePoint(fromEl);
     clearRouteLocationChoices(fromEl);
     fromEl.value = '';
+    fromEl.dispatchEvent(new Event('input', { bubbles: true }));
     fromEl.closest('.input-clear-wrap')?.classList.remove('has-value');
   }
   if (toEl) {
     clearResolvedRoutePoint(toEl);
     clearRouteLocationChoices(toEl);
     toEl.value = '';
+    toEl.dispatchEvent(new Event('input', { bubbles: true }));
     toEl.closest('.input-clear-wrap')?.classList.remove('has-value');
   }
   // Clear waypoints
-  [...waypoints].forEach(w => removeWaypoint(w.id));
+  [...waypoints].forEach(w => removeWaypoint(w.id, false));
   document.getElementById('status').textContent = 'Bereit';
   document.getElementById('distance').textContent = '';
   const detailsEl = document.getElementById('routeDetails');
@@ -2088,6 +2117,7 @@ document.getElementById('zoomToRoute')?.addEventListener('click', () => {
 });
 
 document.getElementById('clearRoute')?.addEventListener('click', () => {
+  cancelRouteComputation();
   if(polyline) polyline.remove();
   if(startMarker) startMarker.remove();
   if(endMarker) endMarker.remove();
@@ -2290,6 +2320,7 @@ async function executeAgentActions(actions, session_id) {
 window.executeAgentActions = executeAgentActions;
 
 map.on('click', ev=>{
+  if (gisMeasureActive) { addGISMeasurePoint(ev); return; }
   // Marker/popup DOM elements don't stop click propagation to the map by
   // default, so without this guard every click on an existing marker (a
   // fire station, hydrant, search result, or another stop) or its popup
@@ -2370,7 +2401,7 @@ function addWaypoint() {
   
   // Also trigger on Enter key for immediate compute
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
+    if (e.key === 'Enter' && !e.defaultPrevented) {
       e.preventDefault();
       compute();
     }
@@ -2390,13 +2421,13 @@ function addWaypointWithValue(val) {
   return wp;
 }
 
-function removeWaypoint(id) {
+function removeWaypoint(id, recompute = true) {
   const idx = waypoints.findIndex(w => w.id === id);
   if (idx >= 0) {
     waypoints[idx].suggestHandle?.destroy();
     waypoints[idx].wrapper.remove();
     waypoints.splice(idx, 1);
-    compute();
+    if (recompute) compute();
   }
 }
 
@@ -2416,7 +2447,17 @@ function makeSuggest(containerId, inputOrId) {
   let ctrl = null;
   let selectedIndex = -1;
 
+  function cancelPending() {
+    seq++;
+    clearTimeout(timeout);
+    timeout = null;
+    if (ctrl) ctrl.abort();
+    ctrl = null;
+  }
+
   function hide() {
+    cancelPending();
+    selectedIndex = -1;
     container.style.display = 'none';
     container.innerHTML = '';
     input.setAttribute('aria-expanded', 'false');
@@ -2428,15 +2469,12 @@ function makeSuggest(containerId, inputOrId) {
     input.setAttribute('aria-expanded', 'true');
   }
 
-  let lastQuery = '';
-  input.addEventListener('input', () => {
+  function onInput() {
+    cancelRouteComputation();
+    cancelPending();
     clearRouteLocationChoices(input);
     const q = input.value.trim();
-    if (timeout) clearTimeout(timeout);
-    if (ctrl) { ctrl.abort(); ctrl = null; }
     if (q.length < 2) { hide(); return; }
-    if (q === lastQuery) return; // Skip duplicate queries
-    lastQuery = q;
 
     // Show loading indicator immediately using DOM APIs (no innerHTML)
     container.innerHTML = '';
@@ -2444,14 +2482,16 @@ function makeSuggest(containerId, inputOrId) {
     loadingItem.className = 'item suggest-loading';
     loadingItem.textContent = 'Suche\u2026';
     container.appendChild(loadingItem);
-    container.style.display = 'block';
+    show();
+    input.removeAttribute('aria-activedescendant');
     selectedIndex = -1;
 
+    const mySeq = seq;
     timeout = setTimeout(async () => {
-      const mySeq = ++seq;
       ctrl = new AbortController();
       try {
         const res = await fetch('/api/v1/search?limit=6&q=' + encodeURIComponent(q), { signal: ctrl.signal });
+        if (mySeq !== seq) return;
         if (!res.ok) {
           hide();
           showToast('Suche fehlgeschlagen (Fehler ' + res.status + ')', 'error', 2500);
@@ -2494,6 +2534,7 @@ function makeSuggest(containerId, inputOrId) {
           el.addEventListener('mouseover', () => { selectedIndex = i; updateActive(); });
           el.onclick = () => {
             if (!applySearchResultToInput(input, item)) return;
+            cancelRouteComputation();
             hide();
             clearRouteLocationChoices(input);
             const target = input.id === 'from' ? 'Start' : input.id === 'to' ? 'Ziel' : 'Zwischenstopp';
@@ -2507,15 +2548,21 @@ function makeSuggest(containerId, inputOrId) {
         updateActive();
         show();
       } catch (err) {
-        if (err && err.name === 'AbortError') return;
+        if (mySeq !== seq || (err && err.name === 'AbortError')) return;
         hide();
         showToast('Suche fehlgeschlagen: ' + (err && err.message ? err.message : 'Netzwerkfehler'), 'error', 2500);
       }
     }, 220);
-  });
+  }
+  input.addEventListener('input', onInput);
+  function onPointChange() {
+    cancelRouteComputation();
+    hide();
+  }
+  input.addEventListener('routepointchange', onPointChange);
 
   // keyboard navigation for suggestions
-  input.addEventListener('keydown', (ev) => {
+  function onKeyDown(ev) {
     if (ev.key === 'Escape') { hide(); return; }
     const items = Array.from(container.querySelectorAll('.item:not(.suggest-loading)'));
     if (!items.length) return;
@@ -2532,7 +2579,8 @@ function makeSuggest(containerId, inputOrId) {
         ev.preventDefault(); items[selectedIndex].click();
       }
     }
-  });
+  }
+  input.addEventListener('keydown', onKeyDown);
 
   function updateActive() {
     const items = Array.from(container.querySelectorAll('.item:not(.suggest-loading)'));
@@ -2557,8 +2605,10 @@ function makeSuggest(containerId, inputOrId) {
   return {
     destroy() {
       document.removeEventListener('click', onDocumentClick);
-      if (timeout) clearTimeout(timeout);
-      if (ctrl) ctrl.abort();
+      input.removeEventListener('input', onInput);
+      input.removeEventListener('routepointchange', onPointChange);
+      input.removeEventListener('keydown', onKeyDown);
+      hide();
     }
   };
 }
@@ -3193,7 +3243,7 @@ function tilePresetCategory(preset) {
 }
 
 function isRecommendedTilePreset(preset) {
-  return ['tinytiles_local', 'carto_voyager', 'basemap_de', 'bayern_vector_standard'].includes(preset?.id);
+  return ['tinytiles_local', 'basemap_de', 'bayern_vector_standard'].includes(preset?.id);
 }
 
 function tilePresetKindLabel(preset) {
@@ -3206,7 +3256,6 @@ function tilePresetKindLabel(preset) {
 function tilePresetDescription(preset) {
   if (preset?.id === 'tinytiles_local') return 'Aus deiner PBF – ohne externe Tile-API';
   if (tilePresetCategory(preset) === 'bayern') return preset.map_type === 'vector' ? 'Bayern · detaillierte Vektorkarte' : 'Bayern · amtliche Karte';
-  if (['carto_voyager', 'carto_light', 'carto_dark'].includes(preset?.id)) return 'Global · zuverlässige Onlinekarte';
   if (preset?.id === 'basemap_de') return 'Deutschland · amtliche Basiskarte';
   return 'Online · Kartenquelle des Anbieters';
 }
@@ -3407,7 +3456,7 @@ function renderWelcomeOnlineCards() {
   const container = document.getElementById('mapWelcomeOnlineCards');
   if (!container) return;
   container.replaceChildren();
-  const wanted = ['carto_voyager', 'basemap_de', 'bayern_vector_standard'];
+  const wanted = ['basemap_de', 'bayern_vector_standard'];
   const choices = wanted.map((id) => tilePresets.find((preset) => preset.id === id)).filter(Boolean);
   choices.forEach((preset) => container.appendChild(createTileSourceCard(preset, { compact: true })));
 }
@@ -5463,7 +5512,7 @@ async function sendAIQuery() {
       const showRouteIntent = /(route.*(karte|anzeigen|zeige|einblenden)|auf der karte anzeigen|route anzeigen|ausgeben|abbiegehinweise|abbiegehinweis|anweisungen)/i.test(lowerPrompt);
       const fromEl = document.getElementById('from');
       const toEl = document.getElementById('to');
-      if (showRouteIntent) {
+      if (showRouteIntent && !/\b(nach|zu|zum|zur|von)\s+\S/i.test(lowerPrompt)) {
         if (polyline) {
           map.fitBounds(polyline.getBounds(), { padding: 40 });
           const dist = document.getElementById('detailDistance')?.textContent || '';
@@ -5489,7 +5538,7 @@ async function sendAIQuery() {
     // If user issues a correction/negation asking for recalculation, trigger a fresh compute
     try {
       const correctionRE = /\b(falsch|nein|nö|nicht richtig|nicht korrekt|korrigier|korrigiere|noch ?mal|erneut|rechn(e|et|ung)|berechne|neu berechnen|neu berechnen)\b/i;
-      if (correctionRE.test(lowerPrompt)) {
+      if (correctionRE.test(lowerPrompt) && !/\b(nach|zu|zum|zur|von)\s+\S/i.test(lowerPrompt)) {
         loadingMsg.innerHTML = '<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">lokal</div>Berechne Route neu...';
         try {
           await compute();
@@ -5499,7 +5548,7 @@ async function sendAIQuery() {
         return;
       }
     } catch (e) {}
-    if ((lowerPrompt.includes('wie lange') || lowerPrompt.includes('dauert') || lowerPrompt.includes('wie lang')) && lastAIResponse && lastAIResponse.route) {
+    if (!/\b(nach|zu|zum|zur|von)\s+\S/i.test(lowerPrompt) && (lowerPrompt.includes('wie lange') || lowerPrompt.includes('dauert') || lowerPrompt.includes('wie lang')) && lastAIResponse && lastAIResponse.route) {
       // show assistant quick reply with duration/distance
       const meta = lastAIResponse.route;
       const distKm = (meta.distance_m/1000).toFixed(2);
@@ -5559,7 +5608,7 @@ async function sendAIQuery() {
     // remember for follow-ups
     try { lastAIResponse = data; } catch(e){}
     // Build the base message text first; we'll append route info below if present.
-    loadingMsg.innerHTML = `<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">${escapeHtml(data.provider)}/${escapeHtml(data.model)}</div>${escapeHtml(data.response)}`;
+    loadingMsg.innerHTML = `<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">${escapeHtml(data.provider)}/${escapeHtml(data.model)}</div>${escapeHtml(data.response).replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')}`;
     // If the AI returned a computed route, render it on the map and fill inputs
     try {
       if (data && data.route && data.route.path && data.route.path.length) {
@@ -5568,8 +5617,8 @@ async function sendAIQuery() {
         try {
           const fromEl = document.getElementById('from');
           const toEl = document.getElementById('to');
-          if (fromEl && data.from && (data.from.query || data.from.label)) fromEl.value = data.from.label || data.from.query;
-          if (toEl && data.to && (data.to.query || data.to.label)) toEl.value = data.to.label || data.to.query;
+          if (fromEl && data.from) setResolvedRouteResponsePoint(fromEl, data.from);
+          if (toEl && data.to) setResolvedRouteResponsePoint(toEl, data.to);
         } catch (e) {}
         setMapsLinks(data.route.google_maps_url || data.route.googleMapsURL || '', data.route.apple_maps_url || data.route.appleMapsURL || '');
         // Append a compact route summary badge to the message
@@ -5579,7 +5628,7 @@ async function sendAIQuery() {
           const durText = durMin >= 60 ? Math.floor(durMin/60) + 'h ' + (durMin%60) + 'min' : (durMin > 0 ? durMin + ' min' : '');
           const parts = [distKm, durText].filter(Boolean).join(' • ');
           if (parts) {
-            loadingMsg.innerHTML += `<div style="margin-top:8px;padding:6px 10px;border-radius:6px;background:rgba(110,242,160,0.12);border:1px solid rgba(110,242,160,0.3);font-size:12px;color:#6ef2a0;">✅ Route berechnet: <strong>${parts}</strong></div>`;
+            loadingMsg.innerHTML += `<div style="margin-top:8px;padding:6px 10px;border-radius:6px;background:var(--success-dim);border:1px solid var(--border);font-size:12px;color:var(--success);">✅ Route berechnet: <strong>${parts}</strong></div>`;
           }
         } catch (_e) {}
         showToast(`KI: Route ${(data.route.distance_m/1000).toFixed(1)} km berechnet`, 'success', 2000);
@@ -5588,9 +5637,10 @@ async function sendAIQuery() {
       if (data && data.suggestions && Array.isArray(data.suggestions) && data.suggestions.length) {
         // the map marker display expects objects with lat/lon/label
         showSearchResultsOnMap(data.suggestions);
+        if (data.model === 'target-choice') appendAITargetChoices(loadingMsg, data);
         // if user asked for stops (via / mit / stop), auto-add suggestions as waypoints
         const p = prompt.toLowerCase();
-        if (p.includes('mit') || p.includes('via') || p.includes('stopp') || p.includes('stopps') || p.includes('zwischen')) {
+        if (data.model !== 'target-choice' && (p.includes('mit') || p.includes('via') || p.includes('stopp') || p.includes('stopps') || p.includes('zwischen'))) {
           const toAdd = data.suggestions.map(s => getResultInputValue(s) || s.Label || '').filter(Boolean);
           if (toAdd.length === 0) {
             /* nothing */
@@ -5648,3 +5698,156 @@ document.querySelectorAll('.btn').forEach(btn => {
     setTimeout(() => this.style.transform = '', 100);
   });
 });
+
+// GIS tools: bounded local POI queries and independent great-circle measurement.
+let gisMeasureActive = false;
+let gisMeasurePoints = [];
+let gisPOIData = null;
+let gisPOIRequest = null;
+let gisMeasureRequest = null;
+let gisMeasureTimer = null;
+const GIS_MEASURE_SOURCE = 'gis-measure';
+
+function gisLongitude(lon) { return ((lon + 180) % 360 + 360) % 360 - 180; }
+function gisPOIParams(nearby) {
+  const params = new URLSearchParams({ limit: '320', q: document.getElementById('gisQuery').value.trim(), category: document.getElementById('gisCategory').value });
+  if (nearby) {
+    const center = map.getCenter();
+    params.set('lat', center.lat); params.set('lon', gisLongitude(center.lng));
+    params.set('radius_m', document.getElementById('gisRadius').value);
+  } else {
+    const bounds = map.getBounds();
+    // Wide/wrapped map views use a global longitude interval; latitude
+    // remains viewport-bounded. Radius queries support dateline wrapping.
+    let west = bounds.getWest(), east = bounds.getEast();
+    if (west < -180 || east > 180 || east - west >= 360) { west = -180; east = 180; }
+    params.set('bbox', [west, Math.max(-90, bounds.getSouth()), east, Math.min(90, bounds.getNorth())].join(','));
+  }
+  return params;
+}
+
+async function queryGISPOIs(nearby) {
+  gisPOIRequest?.abort();
+  const request = new AbortController(); gisPOIRequest = request;
+  const status = document.getElementById('gisStatus');
+  status.textContent = 'POIs werden gesucht …';
+  document.getElementById('gisExport').disabled = true;
+  gisPOIData = null;
+  try {
+    const response = await fetch('/api/v1/geo/pois?' + gisPOIParams(nearby), { signal: request.signal });
+    const data = await response.json();
+    if (gisPOIRequest !== request) return;
+    if (!response.ok) throw new Error(data.error || 'POI-Suche fehlgeschlagen');
+    gisPOIData = data;
+    showSearchResultsOnMap(data.features.map(feature => ({
+      id: feature.properties.osm_id, kind: feature.properties.kind,
+      label: feature.properties.label, lon: feature.geometry.coordinates[0], lat: feature.geometry.coordinates[1],
+    })));
+    document.getElementById('gisExport').disabled = false;
+    status.textContent = `${data.features.length} von ${data.matched} POIs angezeigt${data.truncated ? ' – Ausschnitt oder Filter eingrenzen.' : '.'}`;
+  } catch (error) {
+    if (gisPOIRequest !== request || error.name === 'AbortError') return;
+    status.textContent = error.message;
+  } finally { if (gisPOIRequest === request) gisPOIRequest = null; }
+}
+
+function gisDisplayCoordinates(points) {
+  const display = [];
+  for (const [lon, lat] of points) {
+    let unwrapped = lon;
+    if (display.length) {
+      const previous = display[display.length - 1][0];
+      while (unwrapped - previous > 180) unwrapped -= 360;
+      while (unwrapped - previous < -180) unwrapped += 360;
+    }
+    display.push([unwrapped, lat]);
+  }
+  return display;
+}
+
+function renderGISMeasurement() {
+  if (!map.getSource(GIS_MEASURE_SOURCE) && !map.isStyleLoaded()) {
+    map.once('idle', renderGISMeasurement);
+    return;
+  }
+  const displayPoints = gisDisplayCoordinates(gisMeasurePoints);
+  const features = displayPoints.map(coordinates => ({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates } }));
+  if (gisMeasurePoints.length >= 2) features.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: displayPoints } });
+  const data = { type: 'FeatureCollection', features };
+  if (!map.getSource(GIS_MEASURE_SOURCE)) {
+    map.addSource(GIS_MEASURE_SOURCE, { type: 'geojson', data });
+    map.addLayer({ id: 'gis-measure-line', type: 'line', source: GIS_MEASURE_SOURCE, filter: ['==', '$type', 'LineString'], paint: { 'line-color': '#f59e0b', 'line-width': 3 } });
+    map.addLayer({ id: 'gis-measure-points', type: 'circle', source: GIS_MEASURE_SOURCE, filter: ['==', '$type', 'Point'], paint: { 'circle-color': '#f59e0b', 'circle-radius': 5, 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' } });
+  } else { map.getSource(GIS_MEASURE_SOURCE).setData(data); }
+}
+registerMapLayerRehydrate(renderGISMeasurement);
+
+function updateGISMeasurement() {
+  clearTimeout(gisMeasureTimer);
+  gisMeasureRequest?.abort(); gisMeasureRequest = null;
+  renderGISMeasurement();
+  const status = document.getElementById('gisMeasureStatus');
+  if (gisMeasurePoints.length < 2) { status.textContent = `${gisMeasurePoints.length} Messpunkt${gisMeasurePoints.length === 1 ? '' : 'e'} – mindestens zwei Punkte setzen.`; return; }
+  status.textContent = `${gisMeasurePoints.length} Messpunkte – berechne …`;
+  gisMeasureTimer = setTimeout(async () => {
+    const request = new AbortController(); gisMeasureRequest = request;
+    try {
+      const response = await fetch('/api/v1/geo/measure', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: request.signal, body: JSON.stringify({ coordinates: gisMeasurePoints }) });
+      const data = await response.json();
+      if (gisMeasureRequest !== request) return;
+      if (!response.ok) throw new Error(data.error || 'Messung fehlgeschlagen');
+      status.textContent = `${formatMeters(data.length_m)} · ${gisMeasurePoints.length} Punkte · Luftlinie auf der Erdkugel`;
+    } catch (error) {
+      if (gisMeasureRequest === request && error.name !== 'AbortError') status.textContent = error.message;
+    } finally { if (gisMeasureRequest === request) gisMeasureRequest = null; }
+  }, 100);
+}
+function addGISMeasurePoint(event) {
+  if (event.originalEvent?.target?.closest?.('.maplibregl-marker, .maplibregl-popup')) return;
+  if (gisMeasurePoints.length >= 10000) { showToast('Maximal 10.000 Messpunkte', 'info'); return; }
+  gisMeasurePoints.push([gisLongitude(event.lngLat.lng), event.lngLat.lat]);
+  updateGISMeasurement();
+}
+
+document.getElementById('gisViewport')?.addEventListener('click', () => queryGISPOIs(false));
+document.getElementById('gisNearby')?.addEventListener('click', () => queryGISPOIs(true));
+document.getElementById('gisMeasure')?.addEventListener('click', event => {
+  gisMeasureActive = !gisMeasureActive;
+  event.currentTarget.setAttribute('aria-pressed', String(gisMeasureActive));
+  event.currentTarget.textContent = gisMeasureActive ? 'Messmodus beenden' : 'Strecke messen';
+  map.getCanvas().style.cursor = gisMeasureActive ? 'crosshair' : '';
+});
+document.getElementById('gisUndo')?.addEventListener('click', () => { gisMeasurePoints.pop(); updateGISMeasurement(); });
+document.getElementById('gisMeasureClear')?.addEventListener('click', () => { gisMeasurePoints = []; updateGISMeasurement(); });
+document.getElementById('gisExport')?.addEventListener('click', () => {
+  if (!gisPOIData) return;
+  const url = URL.createObjectURL(new Blob([JSON.stringify(gisPOIData)], { type: 'application/geo+json' }));
+  const link = document.createElement('a'); link.href = url; link.download = 'osmmini-pois.geojson'; link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
+
+
+function appendAITargetChoices(container, data) {
+  const choices = document.createElement('div');
+  choices.className = 'ai-target-choices';
+  for (const suggestion of data.suggestions.slice(0, 6)) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'btn btn-ghost';
+    button.textContent = suggestion.label || suggestion.name || 'Ziel auswählen';
+    button.addEventListener('click', async () => {
+      const from = document.getElementById('from');
+      const to = document.getElementById('to');
+      if (!setResolvedSearchResult(to, suggestion)) return;
+      if (from && !from.value.trim() && data.from?.query) {
+        clearResolvedRoutePoint(from);
+        from.value = data.from.query;
+        syncInputClearState('from');
+      }
+      button.disabled = true;
+      try { await compute(); } finally { button.disabled = false; }
+    });
+    choices.appendChild(button);
+  }
+  container.appendChild(choices);
+}

@@ -53,6 +53,17 @@ OSMMINI_ADMIN_TOKEN='choose-a-secret' go run ./cmd \
 This visual basemap is regional. Keep the global profile or select another
 global preset when users should browse outside Bavaria.
 
+The default map uses the local tinyTiles style; generate its tiles with
+**Offline-Karte erzeugen** after loading a PBF. Online sources remain available
+in settings. The offline style distinguishes road classes and paths, while
+local labels are spread across the viewport and hidden when they overlap.
+
+Under **Einstellungen → Offline-Karte → Kartenstil anpassen**, choose Natur,
+Atlas, Nacht, or Hoher Kontrast, or customize colors, road width, label size,
+and the visibility of buildings, paths, and labels. Changes preview immediately
+on the local map; **Stil speichern** keeps them in this browser's local storage.
+Online sources are unaffected and no tile rebuild is needed.
+
 ## Fully offline tinyTiles profile
 
 [`settings.tinytiles.json`](settings.tinytiles.json) activates osmmini's
@@ -218,7 +229,7 @@ Flags
 - `-tinytiles-max-memory-mb`: Maximum memory (MB) tinyTiles may use while building a `.ttiles` artifact (default `768`); raise this for larger PBF regions
 - `-tinytiles-readers`: Concurrent readers for a served offline map (default `4`)
 - `-tinytiles-reader-memory-mb`: tinySQL page-cache memory per reader while serving (default `32`); the aggregate reader budget is this value times `-tinytiles-readers`
-- `-tinytiles-tile-cache-mb`: Hot immutable tile cache in tinyTiles 2.3 (default `64`; use `-1` to disable it)
+- `-tinytiles-tile-cache-mb`: Hot immutable tile cache in tinyTiles 2.4 (default `64`; use `-1` to disable it)
 - `-operations-file`: Local JSON file for delivery proofs and maintenance records (default `operations.json`)
 - `-deployment-mode`: `browser-local`, `single-user` (default) or `multi-user`
 - `-operators-file`: JSON map of operator name to token; required in `multi-user` mode
@@ -226,6 +237,110 @@ Flags
 - `region-extract -pbf FILE -bbox minLon,minLat,maxLon,maxLat -output REGION.osm.pbf`: Create a complete, streaming regional PBF for routing, search, and tinyTiles; uses `osmium`
 - `-build-ch`: Build experimental Contraction Hierarchies after graph load (default false)
 - `-admin-token`: Optional bearer token (or `OSMMINI_ADMIN_TOKEN`); when set, it is required for settings updates. When unset, settings updates are unauthenticated.
+
+## Project structure and development checks
+
+- The root Go package provides streaming OSM extraction (`extract.go`), the
+  routing graph, address search and maneuvers (`router.go`), and territory and
+  dispatch calculations (`territory*.go`, `dispatch.go`).
+- `cmd/main.go` assembles the server, HTTP API, settings, search and trip solver.
+  Feature-specific handlers live beside it; `cmd/route_cache.go` contains the
+  bounded route-response cache and its expiry lifecycle.
+- `cmd/tinytiles*.go`, `cmd/offline_labels.go` and `cmd/pbf_index.go` provide
+  offline map generation, viewport overlays and PBF sidecar integration.
+- `cmd/web/index.html`, `app.js` and `style.css` form the embedded browser UI.
+  MapLibre assets are vendored separately. Search and route requests cancel
+  superseded work and discard late responses, including after a reset.
+- `cmd/api/openapi.yaml` documents the API; `cmd/docs` serves its viewer.
+  `cmd/wasm` and `cmd/export-graph` provide the separate browser-routing tools.
+
+Run `make check` for Go tests, static analysis, a server build, JavaScript
+syntax validation and browser interaction regression tests. This requires Go
+and Node.js; the JavaScript tests use Node's built-in test runner with a small
+DOM/network harness, without downloading dependencies or map tiles. They
+cover request ordering, cancellation, repeated searches and waypoint reset.
+Run `make test-race` to check concurrent Go access, or `make test-js` to run
+only the browser regression tests.
+
+For a reproducible cache-capacity benchmark:
+
+```bash
+go test ./cmd -run '^$' -bench '^BenchmarkRouteCacheEviction$' -benchmem
+```
+
+This measures inserting into a full 4,096-entry route cache, excluding fixture
+setup. It measures cache maintenance rather than pathfinding or PBF import.
+
+## GIS tools
+
+Open **GIS & Geo-Werkzeuge** in the sidebar to search POIs in the viewport or
+within 1–50 km of the map centre, filter by name/category, and download the
+shown results as GeoJSON. The UI shows at most 320 points and reports when the
+result is truncated. API callers can request up to 1,000 points:
+
+```text
+GET /api/v1/geo/pois?bbox=12.0,48.0,12.5,48.5&category=cafe
+GET /api/v1/geo/pois?lat=48.7&lon=12.7&radius_m=5000&limit=100
+POST /api/v1/geo/measure
+{"coordinates":[[12.7,48.7],[12.71,48.71]]}
+```
+
+GeoJSON uses `[longitude, latitude]`. OSM nodes and mean way coordinates are
+exported as Points; polygon geometries and relations are not part of this
+endpoint. Radius results are sorted by spherical distance and support poles
+and antimeridian crossings. The spatial index is published with the POI index;
+the endpoint returns 503 while that index is still loading.
+
+**Strecke messen** lets you click a polyline independently of route stops,
+remove its last point, or clear the measurement. Lengths are sums of
+spherical great-circle distances, not driving distances or survey-grade
+ellipsoidal measurements. Measurement layers survive map-source switches.
+
+The spatial grid shares existing tag maps and retains one representative point
+per POI. It adds index memory in exchange for fast viewport/radius queries;
+text search also reuses the precomputed way coordinates. Benchmark:
+
+```bash
+go test ./cmd -run '^$' -bench '^BenchmarkGeoViewport100k$' -benchmem
+```
+
+## POI search and cache memory
+
+POI text normalization uses a single pass and avoids allocations for text that
+is already normalized. Search evaluates text scores before resolving way
+centroids and skips candidates that cannot enter the bounded result list.
+It does not retain an additional copy of normalized text for every POI.
+
+`cmd/poi_cache.go` reads and writes the existing version-3 JSON cache one entity
+at a time. Startup installs the decoded maps directly, avoiding a full-file
+JSON buffer and duplicate map tables. Saves use a temporary file and atomic
+replacement; a failed encoding leaves the previous cache intact.
+
+```bash
+go test ./cmd -run '^$' -bench 'BenchmarkPOINormalization$|BenchmarkPOISearch5000$' -benchmem
+```
+
+## Routing and trip optimization
+
+Routing cost queries use bounded initial map reservations that grow with the
+visited graph. Node-only Dijkstra skips predecessor storage and path
+reconstruction when only a cost is requested. Directed dead ends remain valid
+route destinations, and cancelled requests stop before allocating search state.
+
+`cmd/tsp.go` contains the trip optimizers: up to 16 stops use exact subset
+Dynamic Programming; 17–60 stops use nearest-neighbor construction followed by
+2-opt. Dependencies are checked for cycles before routing. Each solve shares a
+directed node-pair cost cache, including between the greedy and 2-opt phases.
+The 2-opt search evaluates reversed interior edges as well as endpoints, so it
+does not assume symmetric road costs. The larger-tour solver remains a
+heuristic and does not guarantee the global optimum.
+
+Additional benchmarks (synthetic graphs, no PBF or map downloads required):
+
+```bash
+go test . -run '^$' -bench 'BenchmarkShortRouteCost$' -benchmem
+go test ./cmd -run '^$' -bench 'BenchmarkTSPExact12$' -benchmem
+```
 
 ## Tile sources and production use
 
@@ -250,3 +365,7 @@ Frontend / assets
 - `make offline-prep` runs `make pbf-download` and `make maplibre-assets`
   together as a one-shot "get everything needed for a fully offline
   deployment" step.
+
+MapLibre GL JS is pinned to **6.7.0**. `make maplibre-assets` downloads and
+checksums the local ES module, shared module, worker, and stylesheet. WebGL2
+and a modern browser are required; no CDN is used at runtime.

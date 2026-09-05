@@ -680,7 +680,7 @@ func (r *Router) StreetLabels(window CoordWindow, limit int) []MapLabel {
 			}
 		}
 	}
-	return sortStreetLabelCandidates(byStreet, limit)
+	return sortStreetLabelCandidates(byStreet, window, limit)
 }
 
 func (r *Router) streetLabelsScan(window CoordWindow, center Coord, limit int) []MapLabel {
@@ -708,30 +708,21 @@ func (r *Router) streetLabelsScan(window CoordWindow, center Coord, limit int) [
 			candidates = append(candidates, mapLabelCandidate{label: MapLabel{Name: entry.Display, Coord: best}, dist: bestDist})
 		}
 	}
-	slices.SortFunc(candidates, func(a, b mapLabelCandidate) int {
-		if a.dist < b.dist {
-			return -1
-		}
-		if a.dist > b.dist {
-			return 1
-		}
-		return strings.Compare(a.label.Name, b.label.Name)
-	})
-	if len(candidates) > limit {
-		candidates = candidates[:limit]
-	}
-	out := make([]MapLabel, len(candidates))
-	for i, candidate := range candidates {
-		out[i] = candidate.label
-	}
-	return out
+	return distributeStreetLabelCandidates(candidates, window, limit)
 }
 
-func sortStreetLabelCandidates(byStreet map[string]mapLabelCandidate, limit int) []MapLabel {
+func sortStreetLabelCandidates(byStreet map[string]mapLabelCandidate, window CoordWindow, limit int) []MapLabel {
 	candidates := make([]mapLabelCandidate, 0, len(byStreet))
 	for _, candidate := range byStreet {
 		candidates = append(candidates, candidate)
 	}
+	return distributeStreetLabelCandidates(candidates, window, limit)
+}
+
+// Take one candidate per viewport cell before taking a second from any cell.
+// A global nearest-first limit otherwise spends the entire label budget in
+// the centre of the map, even when streets near its edges are visible.
+func distributeStreetLabelCandidates(candidates []mapLabelCandidate, window CoordWindow, limit int) []MapLabel {
 	slices.SortFunc(candidates, func(a, b mapLabelCandidate) int {
 		if a.dist < b.dist {
 			return -1
@@ -739,14 +730,46 @@ func sortStreetLabelCandidates(byStreet map[string]mapLabelCandidate, limit int)
 		if a.dist > b.dist {
 			return 1
 		}
-		return strings.Compare(a.label.Name, b.label.Name)
+		if name := strings.Compare(a.label.Name, b.label.Name); name != 0 {
+			return name
+		}
+		if a.label.Coord.Lat < b.label.Coord.Lat {
+			return -1
+		}
+		if a.label.Coord.Lat > b.label.Coord.Lat {
+			return 1
+		}
+		if a.label.Coord.Lon < b.label.Coord.Lon {
+			return -1
+		}
+		if a.label.Coord.Lon > b.label.Coord.Lon {
+			return 1
+		}
+		return 0
 	})
-	if len(candidates) > limit {
-		candidates = candidates[:limit]
+	side := max(1, min(8, int(math.Sqrt(float64(limit)))))
+	cells := make([][]MapLabel, side*side)
+	for _, candidate := range candidates {
+		coord := candidate.label.Coord
+		x := min(side-1, max(0, int((coord.Lon-window.MinLon)/(window.MaxLon-window.MinLon)*float64(side))))
+		y := min(side-1, max(0, int((coord.Lat-window.MinLat)/(window.MaxLat-window.MinLat)*float64(side))))
+		cells[y*side+x] = append(cells[y*side+x], candidate.label)
 	}
-	out := make([]MapLabel, len(candidates))
-	for i, candidate := range candidates {
-		out[i] = candidate.label
+	out := make([]MapLabel, 0, min(limit, len(candidates)))
+	for depth := 0; len(out) < limit; depth++ {
+		added := false
+		for _, cell := range cells {
+			if depth < len(cell) {
+				out = append(out, cell[depth])
+				added = true
+				if len(out) == limit {
+					return out
+				}
+			}
+		}
+		if !added {
+			break
+		}
 	}
 	return out
 }
@@ -1029,7 +1052,7 @@ func SearchAddresses(entries []AddressEntry, q AddressQuery, limit int) []Addres
 		e AddressEntry
 		s int
 	}
-	if limit <= 0 {
+	if limit <= 0 || limit > len(entries) {
 		limit = len(entries)
 	}
 	if limit == 0 {
@@ -1040,6 +1063,7 @@ func SearchAddresses(entries []AddressEntry, q AddressQuery, limit int) []Addres
 	// With the UI's small limits this has the same ranking at a fraction of
 	// the work for a large regional address index.
 	sc := make([]scored, 0, limit)
+	allResults := limit == len(entries)
 	query := normalizeAddressQuery(q)
 	better := func(a, b scored) bool {
 		return a.s > b.s || (a.s == b.s && a.e.ID < b.e.ID)
@@ -1050,6 +1074,10 @@ func SearchAddresses(entries []AddressEntry, q AddressQuery, limit int) []Addres
 			continue
 		}
 		candidate := scored{e: e, s: s}
+		if allResults {
+			sc = append(sc, candidate)
+			continue
+		}
 		if len(sc) == limit && !better(candidate, sc[len(sc)-1]) {
 			continue
 		}
@@ -1062,6 +1090,19 @@ func SearchAddresses(entries []AddressEntry, q AddressQuery, limit int) []Addres
 		}
 		copy(sc[insertAt+1:], sc[insertAt:len(sc)-1])
 		sc[insertAt] = candidate
+	}
+	// Unlimited callers need every match. Collect then sort once rather than
+	// repeatedly shifting an ever-growing result slice (quadratic work).
+	if allResults {
+		slices.SortStableFunc(sc, func(a, b scored) int {
+			if better(a, b) {
+				return -1
+			}
+			if better(b, a) {
+				return 1
+			}
+			return 0
+		})
 	}
 	res := make([]AddressEntry, len(sc))
 	for i := range sc {
@@ -1103,9 +1144,14 @@ func (r *Router) Route(from, to int64) ([]int64, float64, error) {
 }
 
 func (r *Router) RouteCostWithOptions(ctx context.Context, from, to int64, opt RouteOptions) (float64, error) {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+	}
 	opt = opt.withDefaults()
 	if opt.Engine == EngineDijkstraNode {
-		_, cost, err := r.dijkstraNode(ctx, from, to, opt)
+		_, cost, err := r.dijkstraNodeSearch(ctx, from, to, opt, false)
 		return cost, err
 	}
 	if opt.Engine == EngineCH {
@@ -1120,6 +1166,11 @@ func (r *Router) RouteCostWithOptions(ctx context.Context, from, to int64, opt R
 }
 
 func (r *Router) RouteWithOptions(ctx context.Context, from, to int64, opt RouteOptions) (RouteResult, error) {
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return RouteResult{}, err
+		}
+	}
 	opt = opt.withDefaults()
 	if opt.Engine == EngineDijkstraNode {
 		path, cost, err := r.dijkstraNode(ctx, from, to, opt)
@@ -1489,6 +1540,10 @@ func (h *chPQ) Pop() any          { old := *h; n := len(old); it := old[n-1]; *h
 // turn/state penalties. It is useful as an alternative algorithm and for
 // testing differences to the turn-aware A*/Dijkstra implementation.
 func (r *Router) dijkstraNode(ctx context.Context, from, to int64, opt RouteOptions) ([]int64, float64, error) {
+	return r.dijkstraNodeSearch(ctx, from, to, opt, true)
+}
+
+func (r *Router) dijkstraNodeSearch(ctx context.Context, from, to int64, opt RouteOptions, wantPath bool) ([]int64, float64, error) {
 	if from == to {
 		return []int64{from}, 0, nil
 	}
@@ -1518,8 +1573,11 @@ func (r *Router) dijkstraNode(ctx context.Context, from, to int64, opt RouteOpti
 	// actual search, since a typical route only ever touches a small
 	// fraction of the graph. Same lazy convention the turn-aware A* already
 	// uses for its gScore map.
-	dist := make(map[int64]float64, 1<<16)
-	prev := make(map[int64]int64, 1<<16)
+	dist := make(map[int64]float64, min(1024, len(r.g.coords)))
+	var prev map[int64]int64
+	if wantPath {
+		prev = make(map[int64]int64, min(1024, len(r.g.coords)))
+	}
 	dist[from] = 0
 	push(&dijkstraItem{id: from, dist: 0})
 
@@ -1550,7 +1608,9 @@ func (r *Router) dijkstraNode(ctx context.Context, from, to int64, opt RouteOpti
 			alt := dist[u] + r.edgeCost(e, opt)
 			if d, ok := dist[v]; !ok || alt < d {
 				dist[v] = alt
-				prev[v] = u
+				if wantPath {
+					prev[v] = u
+				}
 				push(&dijkstraItem{id: v, dist: alt})
 			}
 		}
@@ -1558,6 +1618,9 @@ func (r *Router) dijkstraNode(ctx context.Context, from, to int64, opt RouteOpti
 
 	if _, ok := dist[to]; !ok {
 		return nil, 0, ErrRouteNoPath
+	}
+	if !wantPath {
+		return nil, dist[to], nil
 	}
 	// reconstruct path
 	path := make([]int64, 0)
@@ -1683,16 +1746,13 @@ func (r *Router) astar(ctx context.Context, from, to int64, opt RouteOptions, wa
 	if len(r.g.adj[from]) == 0 {
 		return turnState{}, 0, nil, ErrRouteStartUnreachable
 	}
-	if len(r.g.adj[to]) == 0 {
-		return turnState{}, 0, nil, ErrRouteTargetUnreachable
-	}
 
 	if wantPath {
-		came = make(map[turnState]turnState, 1<<16)
+		came = make(map[turnState]turnState, min(1024, len(r.g.coords)))
 	}
 
 	start := turnState{prev: 0, cur: from}
-	gScore := make(map[turnState]float64, 1<<16)
+	gScore := make(map[turnState]float64, min(1024, len(r.g.coords)))
 	gScore[start] = 0
 
 	pq := priorityQueue{}

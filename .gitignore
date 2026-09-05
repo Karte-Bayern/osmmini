@@ -8,6 +8,9 @@ wasm_exec.js
 leaflet.css
 leaflet.js
 maplibre-gl.js
+maplibre-gl*.mjs
 maplibre-gl.css
 leaflet-maplibre-gl.js
 osmmini-server
+operations.json
+operators.json

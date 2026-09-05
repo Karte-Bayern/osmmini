@@ -25,6 +25,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	tinytiles "github.com/Karte-Bayern/tinyTiles/v2"
 	tinytilesserver "github.com/Karte-Bayern/tinyTiles/v2/server"
@@ -76,9 +77,6 @@ const (
 	bayernWMTSAttribution   = "© Datenquellen: Bayerische Vermessungsverwaltung, GeoBasis-DE / BKG 2023 – Daten verändert"
 	bayernWMTSWebkarte      = "https://wmtsod1.bayernwolke.de/wmts/by_webkarte/smerc/{z}/{x}/{y}"
 	bayernWMTSAerial        = "https://wmtsod1.bayernwolke.de/wmts/by_dop/smerc/{z}/{x}/{y}"
-	cartoLightTiles         = "https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"
-	cartoDarkTiles          = "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
-	cartoVoyagerTiles       = "https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png"
 	legacyBasemapDETiles    = "https://sgx.geodatenzentrum.de/wmts_basemapde/tile/1.0.0/basemap_de_webkarte/default/GLOBAL_WEBMERCATOR/{z}/{y}/{x}.png"
 	basemapDETiles          = "https://sgx.geodatenzentrum.de/wmts_basemapde/tile/1.0.0/de_basemapde_web_raster_farbe/default/GLOBAL_WEBMERCATOR/{z}/{y}/{x}.png"
 )
@@ -86,21 +84,6 @@ const (
 // BuiltinTilePresets lists the map/tile sources available out of the box.
 // These are served via GET /api/v1/tile-sources.
 var BuiltinTilePresets = []TileSourcePreset{
-	{
-		ID: "carto_voyager", Label: "Globale Onlinekarte", MapType: "raster-direct",
-		Upstream:    cartoVoyagerTiles,
-		Attribution: "© OpenStreetMap contributors © CARTO", MaxZoom: 19,
-	},
-	{
-		ID: "carto_light", Label: "Globale Onlinekarte (hell)", MapType: "raster-direct",
-		Upstream:    cartoLightTiles,
-		Attribution: "© OpenStreetMap contributors © CARTO", MaxZoom: 19,
-	},
-	{
-		ID: "carto_dark", Label: "Globale Onlinekarte (dunkel)", MapType: "raster-direct",
-		Upstream:    cartoDarkTiles,
-		Attribution: "© OpenStreetMap contributors © CARTO", MaxZoom: 19,
-	},
 	{
 		ID: "basemap_de", Label: "Basemap.de (BKG, direkt)", MapType: "raster-direct",
 		Upstream:    basemapDETiles,
@@ -267,18 +250,40 @@ func (s *server) buildBrandAliases() {
 // normalizeForCompare returns a lowercased, ASCII-fied string without punctuation
 // suitable for simple fuzzy matching.
 func normalizeForCompare(s string) string {
-	s = strings.ToLower(s)
-	// replace German umlauts and common punctuation
-	repl := strings.NewReplacer("ä", "ae", "ö", "oe", "ü", "ue", "ß", "ss", "'", "", "\u2019", "", "\u2018", "", "-", " ", ",", " ", ".", " ")
-	s = repl.Replace(s)
-	// remove other punctuation
-	trimmed := make([]rune, 0, len(s))
-	for _, r := range s {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == ' ' {
-			trimmed = append(trimmed, r)
+	// The common already-normalized case needs no allocation.
+	clean := true
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == ' ') {
+			clean = false
+			break
 		}
 	}
-	return strings.TrimSpace(string(trimmed))
+	if clean {
+		return strings.TrimSpace(s)
+	}
+	var out strings.Builder
+	out.Grow(len(s))
+	for _, r := range s {
+		r = unicode.ToLower(r)
+		switch r {
+		case 'ä':
+			out.WriteString("ae")
+		case 'ö':
+			out.WriteString("oe")
+		case 'ü':
+			out.WriteString("ue")
+		case 'ß':
+			out.WriteString("ss")
+		case '-', ',', '.':
+			out.WriteByte(' ')
+		default:
+			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == ' ' {
+				out.WriteByte(byte(r))
+			}
+		}
+	}
+	return strings.TrimSpace(out.String())
 }
 
 // Settings holds the server configuration persisted in the settings.json
@@ -407,6 +412,15 @@ func publicSettings(v Settings) Settings {
 // assumed higher (e.g. 150 km/h). Adjust `settings.json` to override.
 func DefaultSettings(cacheDir, upstream string) Settings {
 	mapType := "raster"
+	styleURL := ""
+	maxZoom := 19
+	attribution := defaultTileAttribution(upstream)
+	if upstream == "" {
+		mapType = "vector"
+		styleURL = "/static/styles/tinytiles-minimal.json"
+		maxZoom = 14
+		attribution = "© OpenStreetMap contributors"
+	}
 	if isOSMStandardTileURL(upstream) {
 		// Browser requests retain the web page's Referer and use the browser's
 		// user agent, unlike the server-side proxy that OSM's public tile policy
@@ -436,8 +450,9 @@ func DefaultSettings(cacheDir, upstream string) Settings {
 			Upstream:     upstream,
 			UserAgent:    "osmmini-routerd/1.0 (offline routing)",
 			MapType:      mapType,
-			Attribution:  defaultTileAttribution(upstream),
-			MaxZoom:      19,
+			StyleURL:     styleURL,
+			Attribution:  attribution,
+			MaxZoom:      maxZoom,
 			MemCacheSize: tileMemCacheDefaultMaxItems,
 		},
 		// persist POI cache files by default
@@ -1200,163 +1215,6 @@ type TripSolveResponse struct {
 	CapacityWarning string  `json:"capacity_warning,omitempty"`
 }
 
-// ---- Route result cache ----
-
-// routeCacheKey uniquely identifies a route request for caching purposes.
-type routeCacheKey struct {
-	fromNode int64
-	toNode   int64
-	// include routing-relevant options in the key
-	engine              string
-	objective           string
-	profile             string
-	pro                 bool
-	emergency           bool
-	leftTurn            float64
-	rightTurn           float64
-	uTurn               float64
-	crossing            float64
-	maxSpeed            float64
-	heightM             float64
-	weightT             float64
-	noLeft              bool
-	trafficLightPenalty float64
-}
-
-// routeCacheEntry holds a cached route response with its expiry time.
-type routeCacheEntry struct {
-	resp      RouteResponse
-	expiresAt time.Time
-}
-
-// routeCacheDefaultMaxItems is the default capacity bound for the route cache.
-const routeCacheDefaultMaxItems = 4096
-
-// RouteCache is a bounded in-memory cache for route responses.
-// It uses a simple RW-mutex protected map with TTL eviction.
-// Maximum capacity is capped so it never grows unbounded.
-type RouteCache struct {
-	mu       sync.RWMutex
-	entries  map[routeCacheKey]*routeCacheEntry
-	ttl      time.Duration
-	maxItems int
-}
-
-func newRouteCache(ttl time.Duration, maxItems int) *RouteCache {
-	if ttl <= 0 {
-		ttl = 5 * time.Minute
-	}
-	if maxItems <= 0 {
-		maxItems = routeCacheDefaultMaxItems
-	}
-	c := &RouteCache{
-		entries:  make(map[routeCacheKey]*routeCacheEntry, 64),
-		ttl:      ttl,
-		maxItems: maxItems,
-	}
-	// Background eviction goroutine: purge expired entries every TTL/2.
-	go func() {
-		ticker := time.NewTicker(ttl / 2)
-		defer ticker.Stop()
-		for range ticker.C {
-			c.evict()
-		}
-	}()
-	return c
-}
-
-func (c *RouteCache) cacheKey(fromNode, toNode int64, opt osmmini.RouteOptions) routeCacheKey {
-	return routeCacheKey{
-		fromNode:            fromNode,
-		toNode:              toNode,
-		engine:              string(opt.Engine),
-		objective:           string(opt.Objective),
-		profile:             string(opt.Profile),
-		pro:                 opt.Pro,
-		emergency:           opt.EmergencyMode,
-		leftTurn:            opt.Weights.LeftTurn,
-		rightTurn:           opt.Weights.RightTurn,
-		uTurn:               opt.Weights.UTurn,
-		crossing:            opt.Weights.Crossing,
-		maxSpeed:            opt.Weights.MaxSpeedKph,
-		heightM:             opt.Weights.VehicleHeightM,
-		weightT:             opt.Weights.VehicleWeightT,
-		noLeft:              opt.Weights.NoLeftTurn,
-		trafficLightPenalty: opt.Weights.TrafficLightPenalty,
-	}
-}
-
-func (c *RouteCache) get(key routeCacheKey) (RouteResponse, bool) {
-	c.mu.RLock()
-	e, ok := c.entries[key]
-	c.mu.RUnlock()
-	if !ok || time.Now().After(e.expiresAt) {
-		return RouteResponse{}, false
-	}
-	return e.resp, true
-}
-
-func (c *RouteCache) set(key routeCacheKey, resp RouteResponse) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	// When at capacity, evict all entries that are already expired.
-	// If still at capacity afterwards, remove entries with the earliest
-	// expiry time to make room (approximate LRU via expiry ordering).
-	if len(c.entries) >= c.maxItems {
-		now := time.Now()
-		for k, e := range c.entries {
-			if now.After(e.expiresAt) {
-				delete(c.entries, k)
-			}
-		}
-		// If still full, remove the half with the soonest expiry.
-		if len(c.entries) >= c.maxItems {
-			type kv struct {
-				k routeCacheKey
-				t time.Time
-			}
-			evictions := make([]kv, 0, len(c.entries))
-			for k, e := range c.entries {
-				evictions = append(evictions, kv{k, e.expiresAt})
-			}
-			// Sort ascending so we remove the shortest-lived first.
-			for i := 1; i < len(evictions); i++ {
-				for j := i; j > 0 && evictions[j].t.Before(evictions[j-1].t); j-- {
-					evictions[j], evictions[j-1] = evictions[j-1], evictions[j]
-				}
-			}
-			for _, kv := range evictions[:len(evictions)/2] {
-				delete(c.entries, kv.k)
-			}
-		}
-	}
-	c.entries[key] = &routeCacheEntry{resp: resp, expiresAt: time.Now().Add(c.ttl)}
-}
-
-func (c *RouteCache) evict() {
-	now := time.Now()
-	c.mu.Lock()
-	for k, e := range c.entries {
-		if now.After(e.expiresAt) {
-			delete(c.entries, k)
-		}
-	}
-	c.mu.Unlock()
-}
-
-func (c *RouteCache) Invalidate() {
-	c.mu.Lock()
-	c.entries = make(map[routeCacheKey]*routeCacheEntry, 64)
-	c.mu.Unlock()
-}
-
-// Size returns the current number of cached entries.
-func (c *RouteCache) Size() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return len(c.entries)
-}
-
 // ---- Server ----
 
 // aiProbeCache holds a cached AI provider status result with a short TTL
@@ -1413,6 +1271,7 @@ type server struct {
 	// POI / area index populated at startup (best-effort). These maps are
 	// populated by loadPOIIndex and protected by poiMu.
 	poiMu          sync.RWMutex
+	poiGeo         *poiGeoIndex
 	poiNodes       map[int64]osmmini.Coord
 	poiTaggedNodes map[int64]osmmini.Node
 	poiPlaceCells  map[int64][]offlineMapLabel
@@ -1507,7 +1366,7 @@ func main() {
 	listen := flag.String("listen", ":8080", "HTTP listen address")
 	settingsPath := flag.String("settings", "settings.json", "Settings JSON file")
 	tilesDir := flag.String("tiles-dir", "tiles-cache", "Tile cache directory")
-	tileUpstream := flag.String("tile-upstream", cartoLightTiles, "Tile upstream template")
+	tileUpstream := flag.String("tile-upstream", "", "Tile upstream template (empty uses the local offline map)")
 	buildCH := flag.Bool("build-ch", false, "Build experimental Contraction Hierarchies after graph load")
 	adminToken := flag.String("admin-token", os.Getenv("OSMMINI_ADMIN_TOKEN"), "Optional bearer token; when set, it is required for settings updates")
 	tinyTilesDir := flag.String("tinytiles-dir", "offline-tiles", "Directory for generated tinyTiles .ttiles artifacts")
@@ -1608,6 +1467,7 @@ func main() {
 
 	tileCache := NewTileCache(store.Get().Tiles)
 	rCache := newRouteCache(5*time.Minute, routeCacheDefaultMaxItems)
+	defer rCache.Close()
 
 	indexTmpl := template.Must(template.ParseFS(embedded, "web/index.html"))
 	openapiBytes, _ := embedded.ReadFile("api/openapi.yaml")
@@ -1786,6 +1646,8 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("/api/v1/deployment", s.handleDeployment)
 	mux.HandleFunc("/api/v1/profiles", s.handleProfiles)
 	mux.HandleFunc("/api/v1/use-cases", s.handleUseCases)
+	mux.HandleFunc("/api/v1/geo/pois", s.handleGeoPOIs)
+	mux.HandleFunc("/api/v1/geo/measure", s.handleGeoMeasure)
 	mux.HandleFunc("/api/v1/search", s.handleSearch)
 	mux.HandleFunc("/api/v1/route", s.handleRoute)
 	mux.HandleFunc("/api/v1/trip/solve", s.handleTripSolve)
@@ -1830,8 +1692,8 @@ func (s *server) loadPOIIndex(pbfPath string) error {
 	// startup responsive.
 	cachePath := pbfPath + ".poi.json"
 	if poiCacheIsFresh(pbfPath, cachePath) {
-		if loadErr := s.loadPOICache(cachePath, nodes, taggedNodes, ways, rels); loadErr == nil {
-			s.installPOIIndex(nodes, taggedNodes, ways, rels)
+		if cached, loadErr := readPOICache(cachePath); loadErr == nil {
+			s.installPOIIndex(cached.Nodes, cached.TaggedNodes, cached.Ways, cached.Rels)
 			return nil
 		}
 	}
@@ -2011,7 +1873,9 @@ func (s *server) completePOIIndex(cachePath string, nodes map[int64]osmmini.Coor
 
 func (s *server) installPOIIndex(nodes map[int64]osmmini.Coord, taggedNodes map[int64]osmmini.Node, ways map[int64]osmmini.Way, rels map[int64]osmmini.Relation) {
 	placeCells := buildPlaceLabelCells(taggedNodes)
+	geoIndex := buildPOIGeoIndex(nodes, taggedNodes, ways)
 	s.poiMu.Lock()
+	s.poiGeo = geoIndex
 	s.poiNodes = nodes
 	s.poiTaggedNodes = taggedNodes
 	s.poiPlaceCells = placeCells
@@ -2030,62 +1894,6 @@ func (s *server) installPOIIndex(nodes map[int64]osmmini.Coord, taggedNodes map[
 	s.aiMu.Unlock()
 }
 
-// loadPOICache attempts to populate the provided maps from a JSON cache file.
-func (s *server) loadPOICache(path string, nodes map[int64]osmmini.Coord, taggedNodes map[int64]osmmini.Node, ways map[int64]osmmini.Way, rels map[int64]osmmini.Relation) error {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	var payload struct {
-		Version     int                        `json:"version"`
-		Nodes       map[int64]osmmini.Coord    `json:"nodes"`
-		TaggedNodes map[int64]osmmini.Node     `json:"tagged_nodes"`
-		Ways        map[int64]osmmini.Way      `json:"ways"`
-		Rels        map[int64]osmmini.Relation `json:"rels"`
-	}
-	if err := json.Unmarshal(b, &payload); err != nil {
-		return err
-	}
-	if payload.Version != poiCacheVersion {
-		return fmt.Errorf("unsupported POI cache version %d", payload.Version)
-	}
-	for k, v := range payload.Nodes {
-		nodes[k] = v
-	}
-	for k, v := range payload.TaggedNodes {
-		taggedNodes[k] = v
-	}
-	for k, v := range payload.Ways {
-		ways[k] = v
-	}
-	for k, v := range payload.Rels {
-		rels[k] = v
-	}
-	return nil
-}
-
-// savePOICache writes the POI index to a JSON cache file (best-effort).
-func (s *server) savePOICache(path string, nodes map[int64]osmmini.Coord, taggedNodes map[int64]osmmini.Node, ways map[int64]osmmini.Way, rels map[int64]osmmini.Relation) error {
-	payload := struct {
-		Version     int                        `json:"version"`
-		Nodes       map[int64]osmmini.Coord    `json:"nodes"`
-		TaggedNodes map[int64]osmmini.Node     `json:"tagged_nodes"`
-		Ways        map[int64]osmmini.Way      `json:"ways"`
-		Rels        map[int64]osmmini.Relation `json:"rels"`
-	}{Version: poiCacheVersion, Nodes: nodes, TaggedNodes: taggedNodes, Ways: ways, Rels: rels}
-	b, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
-}
-
-// fetchWikiSummary fetches a short summary for a wiki title (lang, title)
-// and caches the result in-memory. Returns empty string on failure.
 func (s *server) fetchWikiSummary(ctx context.Context, lang, title string) string {
 	if lang == "" {
 		lang = "en"
@@ -3349,11 +3157,13 @@ func (s *server) searchPOIMatches(raw string, limit int) []apiSearchResult {
 	}
 
 	qNorm := normalizeForCompare(raw)
+	if qNorm == "" {
+		return nil
+	}
 	tokens := strings.Fields(qNorm)
 	scoredPOIs := make([]poiSearchCandidate, 0, limit)
-	consider := func(id int64, kind string, tags osmmini.Tags, coord osmmini.Coord) {
-		score := scorePOIResult(tags, qNorm, tokens)
-		if score <= 0 || (s.window != nil && !s.window.Contains(coord)) {
+	consider := func(id int64, kind string, tags osmmini.Tags, coord osmmini.Coord, score int) {
+		if score <= 0 || (len(scoredPOIs) == limit && score < scoredPOIs[len(scoredPOIs)-1].score) || (s.window != nil && !s.window.Contains(coord)) {
 			return
 		}
 		candidate := poiSearchCandidate{
@@ -3364,26 +3174,37 @@ func (s *server) searchPOIMatches(raw string, limit int) []apiSearchResult {
 	}
 
 	s.poiMu.RLock()
-	for _, poiWay := range s.poiWays {
-		var cx, cy float64
-		var cnt int
-		for _, nid := range poiWay.NodeIDs {
-			if c, ok := s.poiNodes[nid]; ok {
-				cx += c.Lat
-				cy += c.Lon
-				cnt++
+	if s.poiGeo != nil {
+		for _, p := range s.poiGeo.entries {
+			consider(p.ID, p.Kind, p.Tags, p.Coord, scorePOIResult(p.Tags, qNorm, tokens))
+		}
+	} else {
+		for _, poiWay := range s.poiWays {
+			score := scorePOIResult(poiWay.Tags, qNorm, tokens)
+			if score <= 0 || (len(scoredPOIs) == limit && score < scoredPOIs[len(scoredPOIs)-1].score) {
+				continue
 			}
+			var cx, cy float64
+			var cnt int
+			for _, nid := range poiWay.NodeIDs {
+				if c, ok := s.poiNodes[nid]; ok {
+					cx += c.Lat
+					cy += c.Lon
+					cnt++
+				}
+			}
+			if cnt == 0 {
+				continue
+			}
+			coord := osmmini.Coord{Lat: cx / float64(cnt), Lon: cy / float64(cnt)}
+			consider(poiWay.ID, "poi", poiWay.Tags, coord, score)
 		}
-		if cnt == 0 {
-			continue
+		for _, poiNode := range s.poiTaggedNodes {
+			coord := osmmini.Coord{Lat: poiNode.Lat, Lon: poiNode.Lon}
+			consider(poiNode.ID, "node", poiNode.Tags, coord, scorePOIResult(poiNode.Tags, qNorm, tokens))
 		}
-		coord := osmmini.Coord{Lat: cx / float64(cnt), Lon: cy / float64(cnt)}
-		consider(poiWay.ID, "poi", poiWay.Tags, coord)
 	}
-	for _, poiNode := range s.poiTaggedNodes {
-		coord := osmmini.Coord{Lat: poiNode.Lat, Lon: poiNode.Lon}
-		consider(poiNode.ID, "node", poiNode.Tags, coord)
-	}
+
 	s.poiMu.RUnlock()
 
 	out := make([]apiSearchResult, 0, len(scoredPOIs))
@@ -3557,8 +3378,11 @@ func scorePOIResult(tags osmmini.Tags, query string, tokens []string) int {
 }
 
 func scoreSearchField(value, query string, tokens []string, exact, prefix, contains, tokenUnit int) int {
+	if value == "" || query == "" {
+		return 0
+	}
 	v := normalizeForCompare(value)
-	if v == "" || query == "" {
+	if v == "" {
 		return 0
 	}
 	switch {
@@ -3816,6 +3640,8 @@ func (s *server) handleRoute(w http.ResponseWriter, r *http.Request) {
 		// Update from/to labels (they depend on the query string, not the node)
 		cached.From = RoutePoint{Input: fromInput, Label: fromLabel, Lat: fromCoord.Lat, Lon: fromCoord.Lon, Node: startID, SnapM: startDist}
 		cached.To = RoutePoint{Input: toInput, Label: toLabel, Lat: toCoord.Lat, Lon: toCoord.Lon, Node: endID, SnapM: endDist}
+		cached.GoogleMapsURL = buildGoogleMapsURL([]osmmini.Coord{fromCoord, toCoord}, 0)
+		cached.AppleMapsURL = buildAppleMapsURL([]osmmini.Coord{fromCoord, toCoord})
 		cached.Cached = true
 		s.prefetchTinyTilesRoute(cached.Path)
 		writeJSON(w, http.StatusOK, cached)
@@ -4101,259 +3927,6 @@ func (s *server) solveTrip(ctx context.Context, plan TripPlan, opt osmmini.Route
 		VehicleCapacity: plan.VehicleCapacity,
 		CapacityWarning: capacityWarning,
 	}, nil
-}
-
-func (s *server) tspExact(ctx context.Context, startNode, endNode int64, stops []stopR, pre []uint64, opt osmmini.RouteOptions) ([]int, error) {
-	n := len(stops)
-	if n == 0 {
-		return nil, nil
-	}
-
-	inf := math.MaxFloat64 / 4
-
-	costStart := make([]float64, n)
-	costEnd := make([]float64, n)
-	costBetween := make([][]float64, n)
-	for i := 0; i < n; i++ {
-		costBetween[i] = make([]float64, n)
-	}
-
-	for i := 0; i < n; i++ {
-		c, err := s.router.RouteCostWithOptions(ctx, startNode, stops[i].node, opt)
-		if err != nil {
-			costStart[i] = inf
-		} else {
-			costStart[i] = c
-		}
-		c2, err := s.router.RouteCostWithOptions(ctx, stops[i].node, endNode, opt)
-		if err != nil {
-			costEnd[i] = inf
-		} else {
-			costEnd[i] = c2
-		}
-	}
-
-	for i := 0; i < n; i++ {
-		for j := 0; j < n; j++ {
-			if i == j {
-				costBetween[i][j] = inf
-				continue
-			}
-			c, err := s.router.RouteCostWithOptions(ctx, stops[i].node, stops[j].node, opt)
-			if err != nil {
-				costBetween[i][j] = inf
-			} else {
-				costBetween[i][j] = c
-			}
-		}
-	}
-
-	size := 1 << uint(n)
-	dp := make([][]float64, size)
-	par := make([][]int16, size)
-	for m := 0; m < size; m++ {
-		dp[m] = make([]float64, n)
-		par[m] = make([]int16, n)
-		for i := 0; i < n; i++ {
-			dp[m][i] = inf
-			par[m][i] = -1
-		}
-	}
-
-	for i := 0; i < n; i++ {
-		if pre[i] == 0 && costStart[i] < inf {
-			m := 1 << uint(i)
-			dp[m][i] = costStart[i]
-			par[m][i] = -1
-		}
-	}
-
-	for m := 0; m < size; m++ {
-		for last := 0; last < n; last++ {
-			if dp[m][last] >= inf {
-				continue
-			}
-			for nxt := 0; nxt < n; nxt++ {
-				if (m & (1 << uint(nxt))) != 0 {
-					continue
-				}
-				if (uint64(m) & pre[nxt]) != pre[nxt] {
-					continue
-				}
-				nm := m | (1 << uint(nxt))
-				c := dp[m][last] + costBetween[last][nxt]
-				if c < dp[nm][nxt] {
-					dp[nm][nxt] = c
-					par[nm][nxt] = int16(last)
-				}
-			}
-		}
-	}
-
-	all := size - 1
-	best := inf
-	bestLast := -1
-	for last := 0; last < n; last++ {
-		if dp[all][last] >= inf || costEnd[last] >= inf {
-			continue
-		}
-		c := dp[all][last] + costEnd[last]
-		if c < best {
-			best = c
-			bestLast = last
-		}
-	}
-	if bestLast == -1 {
-		return nil, errors.New("tsp: no feasible order (unreachable legs or dependency cycle)")
-	}
-
-	order := make([]int, 0, n)
-	m := all
-	cur := bestLast
-	for cur >= 0 {
-		order = append(order, cur)
-		p := par[m][cur]
-		m = m &^ (1 << uint(cur))
-		if p < 0 {
-			break
-		}
-		cur = int(p)
-	}
-	for i, j := 0, len(order)-1; i < j; i, j = i+1, j-1 {
-		order[i], order[j] = order[j], order[i]
-	}
-	return order, nil
-}
-
-func (s *server) tspGreedy(ctx context.Context, startNode, endNode int64, stops []stopR, pre []uint64, opt osmmini.RouteOptions) ([]int, error) {
-	n := len(stops)
-	if n == 0 {
-		return nil, nil
-	}
-	visited := uint64(0)
-	order := make([]int, 0, n)
-	curNode := startNode
-
-	for len(order) < n {
-		best := math.MaxFloat64
-		bestIdx := -1
-		for i := 0; i < n; i++ {
-			bit := uint64(1) << uint64(i)
-			if (visited & bit) != 0 {
-				continue
-			}
-			if (visited & pre[i]) != pre[i] {
-				continue
-			}
-			c, err := s.router.RouteCostWithOptions(ctx, curNode, stops[i].node, opt)
-			if err != nil {
-				continue
-			}
-			if c < best {
-				best = c
-				bestIdx = i
-			}
-		}
-		if bestIdx == -1 {
-			return nil, errors.New("tsp: no eligible next stop (dependency cycle or unreachable stop)")
-		}
-		order = append(order, bestIdx)
-		visited |= uint64(1) << uint64(bestIdx)
-		curNode = stops[bestIdx].node
-	}
-
-	// 2-opt improvement: try swapping segments to find shorter tours
-	if n >= 4 {
-		order = s.tsp2opt(ctx, startNode, endNode, stops, pre, opt, order)
-	}
-
-	_ = endNode
-	return order, nil
-}
-
-// tsp2opt applies the 2-opt local search improvement to the given tour order.
-// It repeatedly reverses sub-segments of the tour if doing so reduces total cost,
-// while respecting dependency constraints. Route costs are cached to avoid
-// redundant pathfinding computations.
-func (s *server) tsp2opt(ctx context.Context, startNode, endNode int64, stops []stopR, pre []uint64, opt osmmini.RouteOptions, order []int) []int {
-	n := len(order)
-	if n < 4 {
-		return order
-	}
-
-	// Cache route costs between node pairs to avoid repeated pathfinding
-	type nodePair struct{ from, to int64 }
-	costCache := make(map[nodePair]float64)
-	cachedCost := func(from, to int64) float64 {
-		key := nodePair{from, to}
-		if c, ok := costCache[key]; ok {
-			return c
-		}
-		c, err := s.router.RouteCostWithOptions(ctx, from, to, opt)
-		if err != nil {
-			c = math.MaxFloat64
-		}
-		costCache[key] = c
-		return c
-	}
-
-	// helper to compute total tour cost for a given order
-	tourCost := func(ord []int) float64 {
-		total := 0.0
-		prev := startNode
-		for _, idx := range ord {
-			c := cachedCost(prev, stops[idx].node)
-			if c >= math.MaxFloat64/4 {
-				return math.MaxFloat64
-			}
-			total += c
-			prev = stops[idx].node
-		}
-		c := cachedCost(prev, endNode)
-		if c >= math.MaxFloat64/4 {
-			return math.MaxFloat64
-		}
-		total += c
-		return total
-	}
-
-	// check if an order respects all dependency constraints
-	depsOK := func(ord []int) bool {
-		mask := uint64(0)
-		for _, idx := range ord {
-			if (mask & pre[idx]) != pre[idx] {
-				return false
-			}
-			mask |= 1 << uint64(idx)
-		}
-		return true
-	}
-
-	bestCost := tourCost(order)
-	improved := true
-	for improved {
-		improved = false
-		for i := 0; i < n-1; i++ {
-			for j := i + 2; j < n; j++ {
-				// try reversing the segment between i+1 and j
-				newOrder := make([]int, n)
-				copy(newOrder, order)
-				for l, r := i+1, j; l < r; l, r = l+1, r-1 {
-					newOrder[l], newOrder[r] = newOrder[r], newOrder[l]
-				}
-				if !depsOK(newOrder) {
-					continue
-				}
-				newCost := tourCost(newOrder)
-				if newCost < bestCost {
-					order = newOrder
-					bestCost = newCost
-					improved = true
-				}
-			}
-		}
-	}
-	return order
 }
 
 // ---- Location resolve + window enforcement ----
@@ -5669,7 +5242,7 @@ func extractPOIFromPrompt(lower string) (keyword, tagKey, tagVal string) {
 // fillerPrefixes are conversational filler words that may precede an actual command.
 var fillerPrefixes = []string{
 	"äh, ", "äh ", "ähm, ", "ähm ", "hmm, ", "hmm ", "ok, ", "ok ",
-	"also, ", "also ", "bitte ", "bitte, ",
+	"also, ", "also ", "bitte ", "bitte, ", "oder ", "alternativ ", "stattdessen ",
 }
 
 func classifyPromptIntent(prompt string) promptIntent {
@@ -5917,18 +5490,40 @@ func (s *server) handleIntentLocally(ctx context.Context, w http.ResponseWriter,
 		// "Flughafenstraße, Nürnberg" winning over the actual airport.
 		// Use distance-sorted lookup when user coordinates are available.
 		destStr := intent.Destination
-		if hasCoord {
+		destLabel := ""
+		if candidates, scoped := s.aiScopedPOITargets(intent.Destination); scoped {
+			if len(candidates) != 1 {
+				message := "Mehrere passende Ziele gefunden. Bitte wähle eines aus."
+				if len(candidates) == 0 {
+					message = "Kein passendes Ziel in den lokalen Kartendaten gefunden. Bitte präzisiere Name oder Ort."
+				}
+				writeJSON(w, http.StatusOK, aiQueryResponse{Provider: "local", Model: "target-choice", Response: message, Suggestions: candidates, From: &aiLocation{Query: from}})
+				return true
+			}
+			destLabel = candidates[0].Label
+			destStr = fmt.Sprintf("%.6f,%.6f", candidates[0].Lat, candidates[0].Lon)
+		} else if hasCoord {
 			if coord, lbl, ok := s.resolvePOIFuzzyNear(intent.Destination, qlat, qlon); ok {
-				_ = lbl
+				destLabel = lbl
 				destStr = fmt.Sprintf("%.6f,%.6f", coord.Lat, coord.Lon)
 			}
-		} else if coord, _, ok := s.resolvePOIFuzzy(intent.Destination); ok {
+		} else if coord, lbl, ok := s.resolvePOIFuzzy(intent.Destination); ok {
+			destLabel = lbl
 			destStr = fmt.Sprintf("%.6f,%.6f", coord.Lat, coord.Lon)
 		}
 		rr, fromAI, toAI, err := s.computeRouteFromLocQuery(ctx, from, destStr, opt)
 		if err != nil {
+			var ambiguity *locationResolveError
+			if errors.As(err, &ambiguity) && ambiguity.Query == destStr && len(ambiguity.Suggestions) > 0 {
+				writeJSON(w, http.StatusOK, aiQueryResponse{Provider: "local", Model: "target-choice", Response: "Mehrere Ziele gefunden. Bitte wähle das gewünschte Ziel aus.", Suggestions: ambiguity.Suggestions, From: &aiLocation{Query: from}})
+				return true
+			}
 			writeJSONError(w, http.StatusNotFound, routeErrorMessage(err))
 			return true
+		}
+		if destLabel != "" {
+			toAI.Label, toAI.Query = destLabel, intent.Destination
+			rr.To.Label, rr.To.Input = destLabel, intent.Destination
 		}
 		resp := fmt.Sprintf("Route nach **%s**: %.1f km, ca. %s.", toAI.Label, rr.DistanceM/1000, formatDur(rr.DurationS))
 		writeJSON(w, http.StatusOK, aiQueryResponse{Provider: "local", Model: "navigate", Response: resp, Route: rr, From: fromAI, To: toAI})
@@ -6189,139 +5784,86 @@ func extractRouteAction(text string) (from, to, cleanText string, found bool) {
 // entries like "Flughafenstraße, Nürnberg" from winning over "Flughafen München"
 // when the user is near Munich.
 func (s *server) resolvePOIFuzzyNear(query string, lat, lon float64) (osmmini.Coord, string, bool) {
-	norm := normalizeForCompare(query)
-	if norm == "" {
-		return osmmini.Coord{}, "", false
-	}
-	type cand struct {
-		coord osmmini.Coord
-		label string
-		dist  float64
-	}
-	var cands []cand
-	s.poiMu.RLock()
-	for _, w := range s.poiWays {
-		name := normalizeForCompare(w.Tags["name"])
-		brand := normalizeForCompare(w.Tags["brand"])
-		if !strings.Contains(name, norm) && !strings.Contains(norm, name) &&
-			!strings.Contains(brand, norm) && !strings.Contains(norm, brand) {
-			continue
-		}
-		var cx, cy float64
-		var cnt int
-		for _, nid := range w.NodeIDs {
-			if c, ok := s.poiNodes[nid]; ok {
-				cx += c.Lat
-				cy += c.Lon
-				cnt++
-			}
-		}
-		if cnt == 0 {
-			continue
-		}
-		coord := osmmini.Coord{Lat: cx / float64(cnt), Lon: cy / float64(cnt)}
-		lbl := w.Tags["name"]
-		if lbl == "" {
-			lbl = w.Tags["brand"]
-		}
-		cands = append(cands, cand{coord: coord, label: lbl, dist: haversineMeters(lat, lon, coord.Lat, coord.Lon)})
-	}
-	for _, n := range s.poiTaggedNodes {
-		name := normalizeForCompare(n.Tags["name"])
-		brand := normalizeForCompare(n.Tags["brand"])
-		if !strings.Contains(name, norm) && !strings.Contains(norm, name) &&
-			!strings.Contains(brand, norm) && !strings.Contains(norm, brand) {
-			continue
-		}
-		label := firstNonEmpty(n.Tags["name"], n.Tags["brand"])
-		if label == "" {
-			continue
-		}
-		coord := osmmini.Coord{Lat: n.Lat, Lon: n.Lon}
-		cands = append(cands, cand{coord: coord, label: label, dist: haversineMeters(lat, lon, coord.Lat, coord.Lon)})
-	}
-	s.poiMu.RUnlock()
-	for _, a := range s.addrs {
-		name := normalizeForCompare(a.Tags["name"])
-		if name != "" && (strings.Contains(name, norm) || strings.Contains(norm, name)) {
-			cands = append(cands, cand{coord: a.Coord, label: formatAddressLabel(a.Tags), dist: haversineMeters(lat, lon, a.Coord.Lat, a.Coord.Lon)})
-		}
-	}
-	if len(cands) == 0 {
-		return osmmini.Coord{}, "", false
-	}
-	slices.SortFunc(cands, func(a, b cand) int {
-		if a.dist < b.dist {
-			return -1
-		}
-		if a.dist > b.dist {
-			return 1
-		}
-		return 0
-	})
-	return cands[0].coord, cands[0].label, true
+	return s.resolveNamedPOI(query, &osmmini.Coord{Lat: lat, Lon: lon})
 }
 
-// resolvePOIFuzzy searches the POI way/address index for a name that contains
-// the query string (case-insensitive). Returns the best matching coord and label.
 func (s *server) resolvePOIFuzzy(query string) (osmmini.Coord, string, bool) {
+	return s.resolveNamedPOI(query, nil)
+}
+
+// Match nonempty names only. Exact place names outrank nearby businesses;
+// distance breaks ties between equally relevant matches, never relevance.
+func (s *server) resolveNamedPOI(query string, near *osmmini.Coord) (osmmini.Coord, string, bool) {
 	norm := normalizeForCompare(query)
 	if norm == "" {
 		return osmmini.Coord{}, "", false
 	}
-	s.poiMu.RLock()
-	defer s.poiMu.RUnlock()
-
-	// Search ways first (usually have better centroid data).
-	for _, w := range s.poiWays {
-		name := normalizeForCompare(w.Tags["name"])
-		brand := normalizeForCompare(w.Tags["brand"])
-		if name == "" && brand == "" {
-			continue
+	bestScore := 0
+	bestDistance := math.Inf(1)
+	var bestCoord osmmini.Coord
+	var bestLabel string
+	consider := func(coord osmmini.Coord, tags osmmini.Tags) {
+		if s.enforceWindow && s.window != nil && !s.window.Contains(coord) {
+			return
 		}
-		if !strings.Contains(name, norm) && !strings.Contains(norm, name) &&
-			!strings.Contains(brand, norm) && !strings.Contains(norm, brand) {
-			continue
-		}
-		var cx, cy float64
-		var cnt int
-		for _, nid := range w.NodeIDs {
-			if c, ok := s.poiNodes[nid]; ok {
-				cx += c.Lat
-				cy += c.Lon
-				cnt++
+		score := 0
+		label := ""
+		for _, key := range []string{"name", "brand"} {
+			value := normalizeForCompare(tags[key])
+			if value == "" {
+				continue
+			}
+			match := 0
+			if value == norm {
+				match = 3
+				if key == "name" && tags["place"] != "" {
+					match = 4
+				}
+			} else if strings.Contains(value, norm) {
+				match = 1
+			}
+			if match > score {
+				score, label = match, tags[key]
 			}
 		}
-		if cnt == 0 {
-			continue
+		if score == 0 {
+			return
 		}
-		label := w.Tags["name"]
-		if label == "" {
-			label = w.Tags["brand"]
+		distance := 0.0
+		if near != nil {
+			distance = haversineMeters(near.Lat, near.Lon, coord.Lat, coord.Lon)
 		}
-		return osmmini.Coord{Lat: cx / float64(cnt), Lon: cy / float64(cnt)}, label, true
-	}
-	for _, n := range s.poiTaggedNodes {
-		name := normalizeForCompare(n.Tags["name"])
-		brand := normalizeForCompare(n.Tags["brand"])
-		if name == "" && brand == "" {
-			continue
-		}
-		if !strings.Contains(name, norm) && !strings.Contains(norm, name) &&
-			!strings.Contains(brand, norm) && !strings.Contains(norm, brand) {
-			continue
-		}
-		label := firstNonEmpty(n.Tags["name"], n.Tags["brand"])
-		return osmmini.Coord{Lat: n.Lat, Lon: n.Lon}, label, true
-	}
-	// Fall back to address entries.
-	for _, a := range s.addrs {
-		name := normalizeForCompare(a.Tags["name"])
-		if name != "" && (strings.Contains(name, norm) || strings.Contains(norm, name)) {
-			return a.Coord, formatAddressLabel(a.Tags), true
+		betterTie := distance < bestDistance || (distance == bestDistance && (label < bestLabel || (label == bestLabel && (coord.Lat < bestCoord.Lat || (coord.Lat == bestCoord.Lat && coord.Lon < bestCoord.Lon)))))
+		if score > bestScore || (score == bestScore && betterTie) {
+			bestScore, bestDistance, bestCoord, bestLabel = score, distance, coord, label
 		}
 	}
-	return osmmini.Coord{}, "", false
+	s.poiMu.RLock()
+	for _, node := range s.poiTaggedNodes {
+		consider(osmmini.Coord{Lat: node.Lat, Lon: node.Lon}, node.Tags)
+	}
+	for _, way := range s.poiWays {
+		if way.Tags["name"] == "" && way.Tags["brand"] == "" {
+			continue
+		}
+		var lat, lon float64
+		count := 0
+		for _, id := range way.NodeIDs {
+			if node, ok := s.poiNodes[id]; ok {
+				lat += node.Lat
+				lon += node.Lon
+				count++
+			}
+		}
+		if count > 0 {
+			consider(osmmini.Coord{Lat: lat / float64(count), Lon: lon / float64(count)}, way.Tags)
+		}
+	}
+	s.poiMu.RUnlock()
+	for _, address := range s.addrs {
+		consider(address.Coord, address.Tags)
+	}
+	return bestCoord, bestLabel, bestScore > 0
 }
 
 // computeRouteFromLocQuery resolves from/to location strings and runs the
@@ -6553,6 +6095,7 @@ func haversineMeters(lat1, lon1, lat2, lon2 float64) float64 {
 	dLat := toRad(lat2 - lat1)
 	dLon := toRad(lon2 - lon1)
 	a := math.Sin(dLat/2)*math.Sin(dLat/2) + math.Cos(toRad(lat1))*math.Cos(toRad(lat2))*math.Sin(dLon/2)*math.Sin(dLon/2)
+	a = math.Max(0, math.Min(1, a))
 	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 	return R * c
 }

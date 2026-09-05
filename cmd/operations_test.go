@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -70,5 +72,77 @@ func TestOperationsHandlerValidatesAndCreates(t *testing.T) {
 	s.handleOperations(invalid, httptest.NewRequest(http.MethodPost, "/api/v1/operations", bytes.NewBufferString(`{"type":"pod","asset_code":"QR-42","status":"delivered"}`)))
 	if invalid.Code != http.StatusBadRequest {
 		t.Fatalf("missing recipient status = %d: %s", invalid.Code, invalid.Body.String())
+	}
+}
+
+func TestOperationsUnorderedHistoryLimitsAfterOrdering(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "operations.json")
+	now := time.Now().UTC()
+	records := []OperationRecord{
+		{ID: "newest", Type: operationTypeCheck, CreatedAt: now},
+		{ID: "other", Type: operationTypeMaintenance, CreatedAt: now.Add(-time.Minute)},
+		{ID: "older", Type: operationTypeCheck, CreatedAt: now.Add(-time.Hour)},
+	}
+	data, _ := json.Marshal(records)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	store := NewOperationsStore(path)
+	if err := store.Load(); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"", operationTypeCheck} {
+		got := store.List(kind, 1)
+		if len(got) != 1 || got[0].ID != "newest" {
+			t.Fatalf("kind %q: got %#v", kind, got)
+		}
+	}
+	if !reflect.DeepEqual(store.records, records) {
+		t.Fatal("load changed persisted ordering")
+	}
+	// A typed decode error can partially populate a destination slice.
+	if err := os.WriteFile(path, []byte(`[{"id":"damaged","created_at":42}]`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Load(); err == nil {
+		t.Fatal("expected decode failure")
+	}
+	if got := store.List("", 1); len(got) != 1 || got[0].ID != "newest" {
+		t.Fatalf("failed reload damaged history: %#v", got)
+	}
+}
+
+func TestOperationsCoordinatesDoNotAliasStore(t *testing.T) {
+	store := NewOperationsStore(filepath.Join(t.TempDir(), "operations.json"))
+	lat, lon := 48.0, 12.0
+	created, err := store.Create(OperationRecord{Type: operationTypeCheck, AssetCode: "test", Status: "available", Latitude: &lat, Longitude: &lon})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lat = 0
+	*created.Longitude = 0
+	got := store.List("", 1)
+	if *got[0].Latitude != 48 || *got[0].Longitude != 12 {
+		t.Fatal("caller mutated stored coordinates")
+	}
+	*got[0].Latitude = 1
+	if *store.List("", 1)[0].Latitude != 48 {
+		t.Fatal("list exposes stored coordinates")
+	}
+}
+
+func TestOperationsFailedWriteDoesNotPublishIndex(t *testing.T) {
+	store := NewOperationsStore(filepath.Join(t.TempDir(), "operations.json"))
+	record := OperationRecord{Type: operationTypeCheck, AssetCode: "test", Status: "available"}
+	if _, err := store.Create(record); err != nil {
+		t.Fatal(err)
+	}
+	// Force rename failure without relying on filesystem permission semantics.
+	store.path = t.TempDir()
+	if _, err := store.Create(record); err == nil {
+		t.Fatal("expected write failure")
+	}
+	if len(store.records) != 1 || len(store.newest) != 1 || len(store.List("", 10)) != 1 {
+		t.Fatal("failed write leaked into history")
 	}
 }
