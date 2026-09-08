@@ -1,16 +1,16 @@
 <!doctype html>
-<html lang="de">
+<html lang="de" class="light-mode">
   <head>
     <meta charset="utf-8" />
     <title>OSMmini</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="app-version" content="{{.Version}}">
-    <meta name="theme-color" content="#050d1f">
+    <meta name="theme-color" content="#ffffff">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
     <link rel="stylesheet" href="/static/style.css?v={{.Version}}" />
     <script id="initialSettings" type="application/json">{{.Settings}}</script>
     <style>
-      body { margin: 0; background: #050d1f; }
+      body { margin: 0; background: #eef1ed; }
       .spinner-page {
         position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
         width: 44px; height: 44px;
@@ -25,11 +25,32 @@
   </head>
   <body>
     <div id="pageSpinner" class="spinner-page"></div>
-    <div class="app" style="opacity:0;transition:opacity 0.25s ease;">
+    <div class="app maps-shell" data-view="explore" style="opacity:0;transition:opacity 0.25s ease;">
 
+      <nav class="maps-rail" aria-label="Hauptnavigation">
+        <a class="maps-brand" href="/" aria-label="OSMmini Startseite">m<span>•</span></a>
+        <button type="button" data-map-view="explore" aria-pressed="true"><span aria-hidden="true">◎</span>Entdecken</button>
+        <button type="button" data-map-view="route" aria-pressed="false"><span aria-hidden="true">↱</span>Route</button>
+        <button type="button" data-map-view="tools" aria-pressed="false"><span aria-hidden="true">☷</span>Werkzeuge</button>
+        <div class="maps-rail-footer">OSM<br>mini</div>
+      </nav>
       <aside class="sidebar" aria-label="Routenplanung und Werkzeuge">
         <div class="sidebar-primary">
 
+        <form id="placeSearchForm" class="maps-search" role="search">
+          <span aria-hidden="true">⌕</span>
+          <input id="placeSearch" type="search" autocomplete="off" placeholder="Ort oder Adresse suchen" aria-label="Ort oder Adresse suchen" />
+          <button type="submit" aria-label="Suchen" title="Suchen">→</button>
+          <button type="button" data-map-view="route" aria-label="Routenplaner öffnen" title="Routenplaner öffnen">↱</button>
+        </form>
+        <section class="maps-explore" aria-label="Orte entdecken">
+          <div class="maps-intro"><span class="maps-eyebrow">DEINE KARTE. DEIN WEG.</span><h2>Was liegt vor dir?</h2><p>Finde einen Ort. Entdecke die Umgebung.<br>Und mach dich auf den Weg.</p></div>
+          <div class="maps-local-note"><span aria-hidden="true">⌖</span><div><strong>In deiner Region unterwegs</strong><p>Adressen und Orte aus deiner geladenen OSM-Region.</p></div></div>
+          <div class="maps-results-heading"><h3 id="placeResultsTitle">Orte entdecken</h3><button id="clearPlaces" type="button" hidden>Zurücksetzen</button></div>
+          <p id="placeSearchStatus" role="status" aria-live="polite">Suche nach einem Ort oder wähle eine Kategorie auf der Karte.</p>
+          <div id="placeResults" class="maps-results"></div>
+          <button class="maps-route-cta" type="button" data-map-view="route"><span aria-hidden="true">↱</span><span><strong>Deine nächste Route</strong><small>Start, Ziel und Zwischenstopps planen</small></span><span aria-hidden="true">→</span></button>
+        </section>
         <!-- ── Header ── -->
         <div class="header">
           <div class="logo">
@@ -38,7 +59,7 @@
               <polyline points="12 8 8 12 12 16"/>
               <line x1="16" y1="12" x2="8" y2="12"/>
             </svg>
-            <h1>OSMmini</h1>
+            <h1>OSMmini <span class="maps-wordmark">Maps</span></h1>
           </div>
           <div class="header-actions">
             <button id="useLocationBtn" class="btn-icon" title="Meinen Standort verwenden" aria-label="Standort verwenden">
@@ -732,7 +753,15 @@
       </aside>
 
       <div class="map-pane">
-        <main id="map" class="map"></main>
+        <main id="map" class="map" aria-label="Interaktive Karte"></main>
+        <div class="maps-categories" role="group" aria-label="Orte in der Nähe">
+          <button type="button" data-place-category="cafe"><span aria-hidden="true">☕</span> Cafés</button>
+          <button type="button" data-place-category="supermarket"><span aria-hidden="true">▤</span> Einkaufen</button>
+          <button type="button" data-place-category="pharmacy"><span aria-hidden="true">✚</span> Apotheken</button>
+          <button type="button" data-place-category="hospital"><span aria-hidden="true">♡</span> Krankenhäuser</button>
+        </div>
+        <button id="mapsLayers" class="maps-layers" type="button"><span aria-hidden="true">▱</span>Kartenebenen</button>
+        <button id="mapsLocation" class="maps-location" type="button" title="Meinen Standort anzeigen" aria-label="Meinen Standort anzeigen">⌖</button>
         <div id="tileLoadOverlay" class="tile-load-overlay" role="status" aria-live="polite" aria-atomic="true" hidden>
           <div class="tile-load-card">
             <span id="tileLoadIcon" class="tile-load-icon" aria-hidden="true">◌</span>

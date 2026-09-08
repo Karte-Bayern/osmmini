@@ -32,8 +32,8 @@ const map = new maplibregl.Map({
   // otherwise render twice.
   attributionControl: false,
 });
-map.addControl(new maplibregl.NavigationControl(), 'top-left');
-map.addControl(new maplibregl.AttributionControl());
+map.addControl(new maplibregl.NavigationControl(), 'bottom-right');
+map.addControl(new maplibregl.AttributionControl(), 'bottom-left');
 OfflineMapStyle.bind(queueOfflineLabels);
 // map.once('style.load')/isStyleLoaded() can both be satisfied a tick before
 // addSource/addLayer are actually safe to call on the *very first* style
@@ -1362,8 +1362,7 @@ preventAutofill();
 // Theme Management
 function initTheme() {
   const saved = localStorage.getItem('theme-mode');
-  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-  const isDark = saved ? saved === 'dark' : prefersDark;
+  const isDark = saved === 'dark';
   
   document.documentElement.classList.toggle('light-mode', !isDark);
   updateThemeButton();
@@ -1848,7 +1847,7 @@ function renderPath(path, meta){
   polyline = makeRouteLine(coords.map(c => [c[1], c[0]]));
   startMarker = new maplibregl.Marker({ element: dotElement('#6ef2a0'), anchor: 'center' }).setLngLat([coords[0][1], coords[0][0]]).addTo(map);
   endMarker = new maplibregl.Marker({ element: dotElement('#ffcc66'), anchor: 'center' }).setLngLat([coords[coords.length-1][1], coords[coords.length-1][0]]).addTo(map);
-  map.fitBounds(polyline.getBounds(),{padding:40});
+  map.fitBounds(polyline.getBounds(),{padding: mapsCameraPadding()});
   
   const distKm = (meta.distance_m / 1000).toFixed(2);
   const durMin = Math.round(meta.duration_s / 60);
@@ -2119,7 +2118,7 @@ document.getElementById('clear').addEventListener('click', () => {
 // Route control buttons
 document.getElementById('zoomToRoute')?.addEventListener('click', () => {
   if (polyline) {
-    map.fitBounds(polyline.getBounds(), {padding: 40});
+    map.fitBounds(polyline.getBounds(), {padding: mapsCameraPadding()});
     showToast('Route zentriert', 'info', 1500);
   }
 });
@@ -2790,7 +2789,7 @@ function showSearchResultsOnMap(results) {
   } else if (bounds.length > 1) {
     try {
       const b = bounds.reduce((acc, c) => acc.extend(c), new maplibregl.LngLatBounds(bounds[0], bounds[0]));
-      map.fitBounds(b, { padding: 40 });
+      map.fitBounds(b, { padding: mapsCameraPadding() });
     } catch(e) {}
   }
 }
@@ -3624,6 +3623,7 @@ function openSettingsSection(headerID, contentID, storageKey) {
 }
 
 function showMapSourcePicker(filter = 'recommended') {
+  setMapsView('tools');
   openSettingsSection('mapHeader', 'mapSettings', 'mapSettingsOpen');
   setTileSourceFilter(filter);
   window.setTimeout(() => {
@@ -5132,6 +5132,7 @@ setupCollapsibleSection('tinyTilesHeader', 'tinyTilesSettings', 'tinyTilesSettin
 // controls so keyboard, stored collapse state and all normal interactions
 // stay identical.
 function revealSidebarTool(kind) {
+  setMapsView('tools');
   if (kind === 'map') {
     showMapSourcePicker();
     return;
@@ -5522,7 +5523,7 @@ async function sendAIQuery() {
       const toEl = document.getElementById('to');
       if (showRouteIntent && !/\b(nach|zu|zum|zur|von)\s+\S/i.test(lowerPrompt)) {
         if (polyline) {
-          map.fitBounds(polyline.getBounds(), { padding: 40 });
+          map.fitBounds(polyline.getBounds(), { padding: mapsCameraPadding() });
           const dist = document.getElementById('detailDistance')?.textContent || '';
           const dur = document.getElementById('detailDuration')?.textContent || '';
           loadingMsg.innerHTML = `<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">lokal</div>Route auf der Karte angezeigt${dist || dur ? `: <strong>${escapeHtml(dist)}</strong>${dur ? ` • ${escapeHtml(dur)}` : ''}` : ''}`;
@@ -5840,3 +5841,150 @@ function appendAITargetChoices(container, data) {
   }
   container.appendChild(choices);
 }
+
+
+function mapsCameraPadding() {
+  const mobile = window.innerWidth <= 768;
+  const panelHeight = document.querySelector('.sidebar')?.getBoundingClientRect().height || 0;
+  return mobile
+    ? { top: 60, right: 40, bottom: Math.min(panelHeight + 48, window.innerHeight * .5), left: 40 }
+    : { top: 80, right: 50, bottom: 40, left: 410 };
+}
+
+// Map-first navigation keeps the existing route and specialist tools intact.
+function setMapsView(view) {
+  if (!['explore', 'route', 'tools'].includes(view)) return;
+  document.querySelector('.maps-shell')?.setAttribute('data-view', view);
+  document.querySelectorAll('.maps-rail [data-map-view]').forEach(button => {
+    button.setAttribute('aria-pressed', String(button.dataset.mapView === view));
+  });
+  const sidebar = document.querySelector('.sidebar');
+  if (sidebar) sidebar.scrollTop = 0;
+  map.resize();
+  map.setPadding(mapsCameraPadding());
+}
+
+if (typeof ResizeObserver !== 'undefined') {
+  const mapsPanelObserver = new ResizeObserver(() => map.setPadding(mapsCameraPadding()));
+  const mapsPanel = document.querySelector('.sidebar');
+  if (mapsPanel) mapsPanelObserver.observe(mapsPanel);
+}
+window.addEventListener('resize', () => map.setPadding(mapsCameraPadding()));
+
+document.querySelectorAll('[data-map-view]').forEach(button => {
+  button.addEventListener('click', () => {
+    setMapsView(button.dataset.mapView);
+    document.getElementById(button.dataset.mapView === 'route' ? 'from' : 'placeSearch')?.focus();
+  });
+});
+document.getElementById('mapsLayers')?.addEventListener('click', () => revealSidebarTool('map'));
+document.getElementById('mapsLocation')?.addEventListener('click', () => document.getElementById('useLocationBtn')?.click());
+
+let placeSearchRequest = null;
+let placeSearchTimer = null;
+function cancelPlaceSearch() {
+  clearTimeout(placeSearchTimer);
+  placeSearchRequest?.abort();
+  placeSearchRequest = null;
+}
+function renderPlaceResults(results) {
+  const container = document.getElementById('placeResults');
+  container.replaceChildren();
+  document.querySelector('.maps-explore')?.classList.toggle('has-results', results.length > 0);
+  for (const raw of results) {
+    const place = normalizeSearchResult(raw);
+    if (!place) continue;
+    const row = document.createElement('article');
+    row.className = 'maps-place';
+    const locate = document.createElement('button');
+    locate.type = 'button';
+    locate.className = 'maps-place-locate';
+    const title = document.createElement('strong');
+    title.textContent = getResultPrimary(place) || place.label || 'Ort';
+    const subtitle = document.createElement('span');
+    subtitle.textContent = getResultSecondary(place) || 'Auf der Karte anzeigen';
+    locate.append(title, subtitle);
+    locate.addEventListener('click', () => {
+      showSearchResultsOnMap([place]);
+      map.flyTo({ center: [place.lon, place.lat], zoom: 16 });
+    });
+    const route = document.createElement('button');
+    route.type = 'button';
+    route.className = 'maps-place-route';
+    route.textContent = '↱';
+    route.title = 'Route hierher';
+    route.setAttribute('aria-label', 'Route nach ' + title.textContent);
+    route.addEventListener('click', () => {
+      applySearchResultToInput(document.getElementById('to'), place);
+      setMapsView('route');
+      document.getElementById('from')?.focus();
+    });
+    row.append(locate, route);
+    container.append(row);
+  }
+}
+async function searchPlaces(category = '') {
+  cancelPlaceSearch();
+  const query = document.getElementById('placeSearch').value.trim();
+  if (!category && query.length < 2) return;
+  const request = new AbortController();
+  placeSearchRequest = request;
+  setMapsView('explore');
+  const status = document.getElementById('placeSearchStatus');
+  status.textContent = 'Orte werden gesucht …';
+  document.getElementById('clearPlaces').hidden = false;
+  document.querySelectorAll('[data-place-category]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.placeCategory === category)));
+  const center = map.getCenter();
+  const params = category
+    ? new URLSearchParams({ category, lat: center.lat, lon: center.lng, radius_m: '10000', limit: '50' })
+    : new URLSearchParams({ q: query, limit: '12' });
+  try {
+    const response = await fetch((category ? '/api/v1/geo/pois?' : '/api/v1/search?') + params, { signal: request.signal });
+    if (!response.ok) throw new Error('Suche momentan nicht verfügbar. Bitte erneut versuchen.');
+    const data = await response.json();
+    if (placeSearchRequest !== request) return;
+    const results = category ? (data.features || []).map(feature => ({
+      id: feature.properties.osm_id, kind: feature.properties.kind, label: feature.properties.label,
+      lon: feature.geometry.coordinates[0], lat: feature.geometry.coordinates[1],
+    })) : data;
+    const valid = (Array.isArray(results) ? results : []).map(normalizeSearchResult).filter(Boolean);
+    renderPlaceResults(valid);
+    showSearchResultsOnMap(valid);
+    document.getElementById('placeResultsTitle').textContent = category ? 'In der Nähe' : 'Suchergebnisse';
+    status.textContent = valid.length ? `${valid.length} Orte gefunden${category ? ' · bis 10 km um die Kartenmitte' : ''}` : 'Keine Orte gefunden. Versuche einen anderen Suchbegriff oder Kartenausschnitt.';
+  } catch (error) {
+    if (placeSearchRequest !== request || error.name === 'AbortError') return;
+    renderPlaceResults([]);
+    status.textContent = error.message;
+  } finally {
+    if (placeSearchRequest === request) placeSearchRequest = null;
+  }
+}
+document.getElementById('placeSearchForm')?.addEventListener('submit', event => {
+  event.preventDefault();
+  searchPlaces();
+});
+document.getElementById('placeSearch')?.addEventListener('input', () => {
+  cancelPlaceSearch();
+  if (document.getElementById('placeSearch').value.trim().length >= 2) {
+    placeSearchTimer = setTimeout(() => searchPlaces(), 300);
+  } else {
+    renderPlaceResults([]);
+    document.getElementById('placeSearchStatus').textContent = 'Gib mindestens zwei Zeichen ein.';
+  }
+});
+document.querySelectorAll('[data-place-category]').forEach(button => {
+  button.setAttribute('aria-pressed', 'false');
+  button.addEventListener('click', () => searchPlaces(button.dataset.placeCategory));
+});
+document.getElementById('clearPlaces')?.addEventListener('click', () => {
+  cancelPlaceSearch();
+  document.getElementById('placeSearch').value = '';
+  document.getElementById('clearPlaces').hidden = true;
+  document.getElementById('placeResultsTitle').textContent = 'Orte entdecken';
+  document.getElementById('placeSearchStatus').textContent = 'Suche nach einem Ort oder wähle eine Kategorie auf der Karte.';
+  document.querySelectorAll('[data-place-category]').forEach(button => button.setAttribute('aria-pressed', 'false'));
+  renderPlaceResults([]);
+  clearSearchResults();
+  document.getElementById('placeSearch').focus();
+});

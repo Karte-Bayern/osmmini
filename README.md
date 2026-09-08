@@ -11,7 +11,9 @@ Features
 
 - Build a routing graph from an OSM PBF and serve offline routes via HTTP API
 - Multiple routing engines: `astar`, `dijkstra`, `dijkstra-node` (node-only Dijkstra)
-- Web UI (MapLibre GL) in `cmd/web` with search, trip solver, settings and turn-by-turn maneuvers
+- Map-first web UI (MapLibre GL) in `cmd/web` with floating place search, nearby categories, and separate discovery, routing and tools views
+- Search results can be opened on the map or used directly as an exact route destination; responsive bottom panel on mobile
+- Trip solver, settings and turn-by-turn maneuvers
 - Global raster map profile plus official BayernAtlas vector and WMTS presets
 - Local tinyTiles vector profile for an optional fully offline basemap
 - Tile proxy with a source-namespaced local cache for proxied sources

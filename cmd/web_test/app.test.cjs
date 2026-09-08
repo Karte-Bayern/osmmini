@@ -371,7 +371,7 @@ test('AI destination choices route to selected coordinates and retain an existin
     clearResolvedRoutePoint() {}, syncInputClearState() {},
     async compute() { computes++; },
   });
-  vm.runInContext(source.slice(source.indexOf('function appendAITargetChoices(')), context);
+  vm.runInContext(section('function appendAITargetChoices(', 'function mapsCameraPadding('), context);
   context.appendAITargetChoices(container, { from: {query:'48.6,12.7'}, suggestions:[{label:'FOCUS Cinemas',lat:48.78,lon:12.87}] });
   const button = container.children[0].children[0];
   assert.equal(button.textContent, 'FOCUS Cinemas');
@@ -432,4 +432,74 @@ test('cancelled AI responses cannot overwrite a newer request', async () => {
   assert.equal(elements.aiStop.hidden,true);
   assert.match(elements.aiMessages.children.at(-1).innerHTML,/CURRENT/);
   assert.doesNotMatch(elements.aiMessages.children[1].innerHTML,/STALE/);
+});
+
+function placesHarness() {
+  const elements = Object.fromEntries(['placeSearch','placeResults','placeSearchStatus','placeResultsTitle','clearPlaces','to','from'].map(id => [id, new Element()]));
+  function element() {
+    const el = new Element();
+    el.append = (...children) => el.children.push(...children);
+    el.replaceChildren = (...children) => { el.children = children; };
+    return el;
+  }
+  elements.placeResults = element();
+  const requests = [], views = [], markers = [], selections = [];
+  const context = vm.createContext({
+    document: {getElementById: id => elements[id], querySelector: () => null, querySelectorAll: () => [], createElement: element},
+    AbortController, URLSearchParams, clearTimeout,
+    map: {getCenter: () => ({lat:48.63,lng:12.49}), flyTo(){}},
+    setMapsView: view => views.push(view),
+    normalizeSearchResult: value => Number.isFinite(value.lat) && Number.isFinite(value.lon) ? value : null,
+    getResultPrimary: value => value.label, getResultSecondary: () => '',
+    showSearchResultsOnMap: values => markers.push(values),
+    applySearchResultToInput: (input, place) => selections.push({input, place}),
+    fetch(url, options) { const response = deferred(); requests.push({url, options, ...response}); return response.promise; },
+  });
+  vm.runInContext(section('let placeSearchRequest = null;', "document.getElementById('placeSearchForm')?"), context);
+  return {elements, requests, views, markers, selections, context};
+}
+
+test('discovery search discards an old response after a newer search completes', async () => {
+  const h = placesHarness();
+  h.elements.placeSearch.value = 'old';
+  const first = h.context.searchPlaces();
+  h.elements.placeSearch.value = 'new';
+  const second = h.context.searchPlaces();
+  assert.equal(h.requests[0].options.signal.aborted, true);
+  h.requests[1].resolve({ok:true,json:async()=>[{label:'New',lat:48,lon:12}]});
+  await second;
+  h.requests[0].resolve({ok:true,json:async()=>[{label:'Old',lat:49,lon:13}]});
+  await first;
+  assert.equal(h.markers.length, 1);
+  assert.equal(h.markers[0][0].label, 'New');
+  assert.equal(h.elements.placeSearchStatus.textContent, '1 Orte gefunden');
+});
+
+test('category search uses the map center and preserves coordinates for routing', async () => {
+  const h = placesHarness();
+  const pending = h.context.searchPlaces('cafe');
+  const url = new URL(h.requests[0].url, 'http://localhost');
+  assert.equal(url.pathname, '/api/v1/geo/pois');
+  assert.equal(url.searchParams.get('radius_m'), '10000');
+  assert.equal(url.searchParams.get('lat'), '48.63');
+  h.requests[0].resolve({ok:true,json:async()=>({features:[{properties:{osm_id:123,kind:'node',label:'Café'},geometry:{coordinates:[12.49,48.63]}}]})});
+  await pending;
+  h.elements.placeResults.children[0].children[1].dispatchEvent(new Event('click'));
+  assert.equal(h.selections[0].input, h.elements.to);
+  assert.equal(h.selections[0].place.lon, 12.49);
+  assert.equal(h.views.at(-1), 'route');
+});
+
+test('discovery search provides empty and error states without showing stale rows', async () => {
+  const h = placesHarness();
+  h.elements.placeSearch.value = 'nothing';
+  const empty = h.context.searchPlaces();
+  h.requests[0].resolve({ok:true,json:async()=>[]});
+  await empty;
+  assert.match(h.elements.placeSearchStatus.textContent, /Keine Orte gefunden/);
+  const failed = h.context.searchPlaces();
+  h.requests[1].resolve({ok:false});
+  await failed;
+  assert.match(h.elements.placeSearchStatus.textContent, /erneut versuchen/);
+  assert.equal(h.elements.placeResults.children.length, 0);
 });
