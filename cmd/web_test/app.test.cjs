@@ -382,3 +382,54 @@ test('AI destination choices route to selected coordinates and retain an existin
   assert.equal(computes,1);
   assert.equal(button.disabled,false);
 });
+
+test('AI context preserves selected coordinates and exact route totals', () => {
+  const context = vm.createContext({ resolvedRoutePoint: input => input.point });
+  vm.runInContext(section('function aiRouteContext(', '// Clear chat history'), context);
+  const result = context.aiRouteContext({value:'Selected address', point:{lat:48.6,lon:12.7}}, {value:'Dingolfing'}, {distance_m:12345.67,duration_s:987.6,engine:'local'});
+  assert.equal(result.route_from, '48.6,12.7');
+  assert.equal(result.route_to, 'Dingolfing');
+  assert.equal(result.route_dist_m, 12345.67);
+  assert.equal(result.route_dur_s, 987.6);
+  assert.equal(context.aiRouteContext({value:''}, {value:''}, null).route_dur_s, 0);
+});
+
+test('AI status keeps local navigation available and filters non-chat models', async () => {
+  const elements = Object.fromEntries(['aiStatus','aiModelSelect','aiSend','aiModel','aiStatusBadge'].map(id => [id,new Element()]));
+  elements.aiModel.replaceChildren = function(){this.children=[];};
+  let providers = [];
+  const context = vm.createContext({document:{getElementById:id=>elements[id],createElement:()=>new Element()}, aiRequestController:null, fetch:async()=>({ok:true,json:async()=>({providers})})});
+  vm.runInContext(section('async function checkAIStatus()', 'async function sendAIQuery()'),context);
+  await context.checkAIStatus();
+  assert.equal(elements.aiSend.disabled,false);
+  assert.match(elements.aiStatus.textContent,/ohne Sprachmodell/);
+  providers = [{name:'local',available:true,models:['embed-small','chat-model','reranker']}];
+  await context.checkAIStatus();
+  assert.equal(elements.aiModel.children.length,1);
+  assert.equal(elements.aiModel.children[0].value,'chat-model');
+});
+
+test('cancelled AI responses cannot overwrite a newer request', async () => {
+  const elements = Object.fromEntries(['aiPrompt','aiStop','aiSend','aiMessages','aiModel','from','to'].map(id=>[id,new Element()]));
+  const requests=[];
+  const context=vm.createContext({AbortController,console,document:{getElementById:id=>elements[id],createElement:()=>new Element()},currentRouteMeta:null,currentRouteBBox:null,userLocation:null,map:{getCenter:()=>({lat:48, lng:12})},getAISessionId:()=>'',resolvedRoutePoint:()=>null,cancelRouteComputation(){},fetch:(_url,options)=>{const d=deferred();requests.push({...d,options});return d.promise;},escapeHtml:s=>s||'',setAISessionId(){}});
+  vm.runInContext(section('let aiRequestController = null;', '// Clear chat history'),context);
+  vm.runInContext(section('async function sendAIQuery()', "document.getElementById('aiSend')?.addEventListener"),context);
+  elements.aiPrompt.value='Hallo';
+  const first=context.sendAIQuery();
+  elements.aiPrompt.value='Hallo nochmals';
+  await context.sendAIQuery();
+  assert.equal(requests.length,1);
+  context.cancelAIQuery();
+  assert.equal(requests[0].options.signal.aborted,true);
+  const second=context.sendAIQuery();
+  requests[0].resolve({ok:true,json:async()=>({response:'STALE'})});
+  await first;
+  assert.equal(elements.aiSend.disabled,true);
+  requests[1].resolve({ok:true,json:async()=>({response:'CURRENT'})});
+  await second;
+  assert.equal(elements.aiSend.disabled,false);
+  assert.equal(elements.aiStop.hidden,true);
+  assert.match(elements.aiMessages.children.at(-1).innerHTML,/CURRENT/);
+  assert.doesNotMatch(elements.aiMessages.children[1].innerHTML,/STALE/);
+});

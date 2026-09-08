@@ -1,0 +1,4 @@
+6d35555718b33843d84af1260e70df7b8c9d23daf0aca2ee30297d237f6f0e55  cmd/web/static/maplibre/maplibre-gl.mjs
+64e24fd71a28f597891c8b9b5ead9623aee0e20c0ff9e7e8e3fd9b3949c52407  cmd/web/static/maplibre/maplibre-gl-shared.mjs
+742ce5cfac9eb71015e0893e31b7c2bcffdc6e4bd186007a50eb721d693197b5  cmd/web/static/maplibre/maplibre-gl-worker.mjs
+8e2dbbab312dc57656fbb76e9fa5308c75c9d7c7ba5808a7d55bcdb64cc813fa  cmd/web/static/maplibre/maplibre-gl.css

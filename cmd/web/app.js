@@ -1281,13 +1281,14 @@ registerMapLayerRehydrate(() => {
 
 let polyline = null;
 let startMarker = null, endMarker = null;
+let currentRouteMeta = null;
 let currentRouteBBox = null; // {minLat, minLon, maxLat, maxLon} of the last rendered route
 let lastRoutePath = null; // [{lat, lon}, ...] of the last rendered route, for territory transition lookups
 const stops = []; // map markers
 const waypoints = []; // input waypoints
 let stopSeq = 1;
 let waypointSeq = 1;
-let lastAIResponse = null;
+
 
 // Prevent unwanted browser autofill on input fields.
 function preventAutofill() {
@@ -1829,8 +1830,11 @@ function renderDisambiguationButtons(details) {
 }
 
 function renderPath(path, meta){
+  currentRouteMeta = path.length ? meta : null;
+  currentRouteBBox = null;
   const coords = path.map(p=>[p.lat,p.lon]);
   if(polyline) polyline.remove();
+  polyline = null;
   if(startMarker) startMarker.remove(); if(endMarker) endMarker.remove();
   lastRoutePath = path;
   if(coords.length===0) { updateTerritoryRouteTransitions(null); return; }
@@ -2074,6 +2078,10 @@ document.getElementById('clear').addEventListener('click', () => {
   stopSeq=1; 
   renderStopList(); 
   if(polyline) polyline.remove();
+  polyline = null;
+  currentRouteMeta = null;
+  currentRouteBBox = null;
+  lastRoutePath = null;
   if(startMarker) startMarker.remove();
   if(endMarker) endMarker.remove();
   clearSearchResults();
@@ -2119,6 +2127,10 @@ document.getElementById('zoomToRoute')?.addEventListener('click', () => {
 document.getElementById('clearRoute')?.addEventListener('click', () => {
   cancelRouteComputation();
   if(polyline) polyline.remove();
+  polyline = null;
+  currentRouteMeta = null;
+  currentRouteBBox = null;
+  lastRoutePath = null;
   if(startMarker) startMarker.remove();
   if(endMarker) endMarker.remove();
   const detailsEl = document.getElementById('routeDetails');
@@ -5248,7 +5260,7 @@ if (aiToggle) {
   if(localStorage.getItem('aiOpen') === null) setAIOpen(false); else setAIOpen(localStorage.getItem('aiOpen')==='1');
 }
 
-let aiAvailable = false;
+
 let aiModels = [];
 
 // Persist AI session ID across page reloads via localStorage.
@@ -5265,14 +5277,47 @@ function setAISessionId(sid) {
   }
 }
 
+const aiOutput = AIOutput.create(map, prompt => {
+  if (aiRequestController) { showToast('Bitte laufende Anfrage abwarten oder abbrechen', 'info', 2000); return; }
+  document.getElementById('aiPrompt').value = prompt;
+  sendAIQuery();
+});
+
+let aiRequestController = null;
+let aiRequestMessage = null;
+function cancelAIQuery() {
+  aiRequestController?.abort();
+  aiRequestController = null;
+  if (aiRequestMessage) aiRequestMessage.textContent = 'Anfrage abgebrochen.';
+  aiRequestMessage = null;
+  document.getElementById('aiSend').disabled = false;
+  document.getElementById('aiStop').hidden = true;
+  cancelRouteComputation();
+}
+document.getElementById('aiStop')?.addEventListener('click', cancelAIQuery);
+
+function aiRouteContext(from, to, route) {
+  const location = input => {
+    const point = resolvedRoutePoint(input);
+    return point ? `${point.lat},${point.lon}` : input?.value.trim() || '';
+  };
+  return {
+    route_from: location(from), route_to: location(to),
+    route_dist_m: Number.isFinite(route?.distance_m) ? route.distance_m : 0,
+    route_dur_s: Number.isFinite(route?.duration_s) ? route.duration_s : 0,
+    route_engine: route?.engine || '', route_objective: route?.objective || '',
+  };
+}
+
 // Clear chat history
 document.getElementById('aiClearChat')?.addEventListener('click', () => {
+  aiOutput.clear();
+  cancelAIQuery();
   const messagesEl = document.getElementById('aiMessages');
   if (messagesEl) messagesEl.innerHTML = '';
   // reset session so next message starts a fresh context
   _aiSessionId = '';
   localStorage.removeItem('ai_session_id');
-  lastAIResponse = null;
   showToast('Chatverlauf gelöscht', 'info', 1500);
 });
 
@@ -5280,52 +5325,48 @@ async function checkAIStatus() {
   const statusEl = document.getElementById('aiStatus');
   const modelSelectEl = document.getElementById('aiModelSelect');
   const sendBtn = document.getElementById('aiSend');
-  
+  const select = document.getElementById('aiModel');
+  const previous = select.value;
+  sendBtn.disabled = Boolean(aiRequestController);
+  select.replaceChildren();
+  modelSelectEl.style.display = 'none';
+  aiModels = [];
+  const badge = document.getElementById('aiStatusBadge');
+  badge.textContent = '● Lokal'; badge.className = 'status-badge ok'; badge.style.display = 'inline-flex';
+  statusEl.textContent = 'Lokale Navigation und Ortssuche bereit – ohne Sprachmodell.';
   try {
     const res = await fetch('/api/v1/ai/status');
-    if (!res.ok) throw new Error('AI status check failed');
+    if (!res.ok) throw new Error('Status unavailable');
     const data = await res.json();
-    
-    if (data.available) {
-      aiAvailable = true;
-      aiModels = [];
-      const select = document.getElementById('aiModel');
-      select.innerHTML = '';
-      
-      data.providers.forEach(p => {
-        if (p.available && p.models) {
-          p.models.forEach(m => {
-            aiModels.push({provider: p.name, model: m});
-            const opt = document.createElement('option');
-            opt.value = m;
-            opt.textContent = `${p.name}: ${m}`;
-            select.appendChild(opt);
-          });
-        }
-      });
-      
-      if (aiModels.length > 0) {
-        modelSelectEl.style.display = 'block';
-        sendBtn.disabled = false;
-        const providers = data.providers.filter(p => p.available).map(p => p.name).join(', ');
-        statusEl.textContent = `${providers} · ${aiModels.length} Modell${aiModels.length>1?'e':''}`;
-        const badge = document.getElementById('aiStatusBadge');
-        if (badge) { badge.textContent = '● Online'; badge.className = 'status-badge ok'; badge.style.display = 'inline-flex'; }
-      } else {
-        statusEl.textContent = 'Provider erreichbar, aber keine Modelle geladen.';
+    for (const provider of data.providers || []) {
+      if (!provider.available) continue;
+      for (const model of provider.models || []) {
+        // Embedding models cannot answer chat requests.
+        if (/embed|rerank/i.test(model)) continue;
+        aiModels.push({provider: provider.name, model});
+        const option = document.createElement('option');
+        option.value = model; option.textContent = `${provider.name}: ${model}`;
+        select.appendChild(option);
       }
-    } else {
-      statusEl.textContent = 'Keine KI verfügbar. Starte einen lokalen KI-Dienst oder konfiguriere eine Remote-API.';
     }
-  } catch (e) {
-    statusEl.textContent = 'KI-Status nicht abrufbar.';
+    if (aiModels.length) {
+      if (aiModels.some(item => item.model === previous)) select.value = previous;
+      modelSelectEl.style.display = 'block';
+      statusEl.textContent = `Lokale Navigation + ${aiModels.length} Chat-Modell${aiModels.length === 1 ? '' : 'e'}`;
+      badge.textContent = '● Bereit';
+    }
+  } catch {
+    statusEl.textContent = 'Modellstatus nicht abrufbar. Lokale Navigation kann weiter angefragt werden.';
   }
 }
 
 async function sendAIQuery() {
   const input = document.getElementById('aiPrompt');
   const prompt = input.value.trim();
-  if (!prompt || !aiAvailable) return;
+  if (!prompt || aiRequestController) return;
+  const controller = new AbortController();
+  aiRequestController = controller;
+  document.getElementById('aiStop').hidden = false;
   
   const messagesEl = document.getElementById('aiMessages');
   const sendBtn = document.getElementById('aiSend');
@@ -5339,6 +5380,7 @@ async function sendAIQuery() {
   // Add loading indicator
   const loadingMsg = document.createElement('div');
   loadingMsg.className = 'ai-message ai-assistant';
+  aiRequestMessage = loadingMsg;
   loadingMsg.innerHTML = '<span class="spinner" style="width:14px;height:14px;border-width:2px;"></span> Denke nach...';
   messagesEl.appendChild(loadingMsg);
   messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -5348,31 +5390,6 @@ async function sendAIQuery() {
   
   try {
     const model = document.getElementById('aiModel').value || '';
-    // Helper: attempt a one-time browser geolocation read (short timeout)
-    async function tryObtainUserLocation(ms) {
-      return new Promise((resolve) => {
-        if (userLocation && typeof userLocation.lat === 'number' && typeof userLocation.lon === 'number') {
-          return resolve(userLocation);
-        }
-        if (!navigator.geolocation) return resolve(null);
-        let done = false;
-        const tid = setTimeout(() => { if (!done) { done = true; resolve(null); } }, ms);
-        navigator.geolocation.getCurrentPosition((pos) => {
-          if (done) return;
-          done = true; clearTimeout(tid);
-          userLocation = { lat: pos.coords.latitude, lon: pos.coords.longitude };
-          resolve(userLocation);
-        }, (err) => {
-          if (done) return;
-          done = true; clearTimeout(tid);
-          resolve(null);
-        }, { enableHighAccuracy: true, timeout: ms });
-      });
-    }
-
-    // Try to obtain user location (non-blocking but awaited with short timeout)
-    try { await tryObtainUserLocation(3000); } catch (e) {}
-
     // include map center as location hint if available
     const payload = { prompt, model };
     // propagate AI session id for multi-turn context when available
@@ -5380,17 +5397,7 @@ async function sendAIQuery() {
     if (_sid) payload.session = _sid;
     // include current route context so the LLM has accurate info
     try {
-      const fromVal = document.getElementById('from')?.value?.trim();
-      const toVal = document.getElementById('to')?.value?.trim();
-      const distText = document.getElementById('detailDistance')?.textContent?.trim();
-      const engineText = document.getElementById('detailEngine')?.textContent?.trim();
-      if (fromVal) payload.route_from = fromVal;
-      if (toVal) payload.route_to = toVal;
-      if (distText) {
-        const distKm = parseFloat(distText);
-        if (!isNaN(distKm)) payload.route_dist_m = distKm * 1000;
-      }
-      if (engineText) payload.route_engine = engineText;
+      Object.assign(payload, aiRouteContext(document.getElementById('from'), document.getElementById('to'), currentRouteMeta));
       // include route bounding box for poi_on_route queries
       if (currentRouteBBox) {
         payload.route_bbox_min_lat = currentRouteBBox.minLat;
@@ -5401,7 +5408,7 @@ async function sendAIQuery() {
     } catch (_e) {}
     try {
       // Always include current map center as a hint
-      if (window.map && typeof map.getCenter === 'function') {
+      if (typeof map.getCenter === 'function') {
         const c = map.getCenter();
         if (c && typeof c.lat === 'number' && typeof c.lng === 'number') {
           payload.map_lat = c.lat;
@@ -5420,7 +5427,8 @@ async function sendAIQuery() {
       }
     } catch (e) {}
     // Follow-up handling: if user asks duration and we have a recent route, answer locally
-    const lowerPrompt = (prompt || '').toLowerCase();
+    const visualRequest = /zeichn|markier|pfeil|kreis|diagramm|infokart|button|polygon|visualisier/i.test(prompt);
+    const lowerPrompt = visualRequest ? '' : (prompt || '').toLowerCase();
 
     // Local UX shortcut: chained intent
     // "vom aktuellen Ort zur nächsten Tankstelle und dann weiter zum Flughafen ..."
@@ -5452,7 +5460,7 @@ async function sendAIQuery() {
           if (dist || dur) {
             loadingMsg.innerHTML = `<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">lokal</div>Mehrziel-Route berechnet: <strong>${escapeHtml(dist)}</strong>${dur ? ` • ${escapeHtml(dur)}` : ''}`;
           }
-          sendBtn.disabled = false;
+          if (aiRequestController === controller) sendBtn.disabled = false;
           messagesEl.scrollTop = messagesEl.scrollHeight;
           return;
         }
@@ -5480,7 +5488,7 @@ async function sendAIQuery() {
           if (dist || dur) {
             loadingMsg.innerHTML = `<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">lokal</div>Route aktualisiert: <strong>${escapeHtml(dist)}</strong>${dur ? ` • ${escapeHtml(dur)}` : ''}`;
           }
-          sendBtn.disabled = false;
+          if (aiRequestController === controller) sendBtn.disabled = false;
           messagesEl.scrollTop = messagesEl.scrollHeight;
           return;
         }
@@ -5500,7 +5508,7 @@ async function sendAIQuery() {
         if (dist || dur) {
           loadingMsg.innerHTML = `<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">lokal</div>Route berechnet: <strong>${escapeHtml(dist)}</strong>${dur ? ` • ${escapeHtml(dur)}` : ''}`;
         }
-        sendBtn.disabled = false;
+        if (aiRequestController === controller) sendBtn.disabled = false;
         messagesEl.scrollTop = messagesEl.scrollHeight;
         return;
       }
@@ -5518,7 +5526,7 @@ async function sendAIQuery() {
           const dist = document.getElementById('detailDistance')?.textContent || '';
           const dur = document.getElementById('detailDuration')?.textContent || '';
           loadingMsg.innerHTML = `<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">lokal</div>Route auf der Karte angezeigt${dist || dur ? `: <strong>${escapeHtml(dist)}</strong>${dur ? ` • ${escapeHtml(dur)}` : ''}` : ''}`;
-          sendBtn.disabled = false;
+          if (aiRequestController === controller) sendBtn.disabled = false;
           messagesEl.scrollTop = messagesEl.scrollHeight;
           return;
         }
@@ -5528,7 +5536,7 @@ async function sendAIQuery() {
           const dist = document.getElementById('detailDistance')?.textContent || '';
           const dur = document.getElementById('detailDuration')?.textContent || '';
           loadingMsg.innerHTML = `<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">lokal</div>Route berechnet und angezeigt${dist || dur ? `: <strong>${escapeHtml(dist)}</strong>${dur ? ` • ${escapeHtml(dur)}` : ''}` : ''}`;
-          sendBtn.disabled = false;
+          if (aiRequestController === controller) sendBtn.disabled = false;
           messagesEl.scrollTop = messagesEl.scrollHeight;
           return;
         }
@@ -5543,52 +5551,27 @@ async function sendAIQuery() {
         try {
           await compute();
         } catch (e) { console.warn('recompute failed', e); }
-        sendBtn.disabled = false;
+        if (aiRequestController === controller) sendBtn.disabled = false;
         messagesEl.scrollTop = messagesEl.scrollHeight;
         return;
       }
     } catch (e) {}
-    if (!/\b(nach|zu|zum|zur|von)\s+\S/i.test(lowerPrompt) && (lowerPrompt.includes('wie lange') || lowerPrompt.includes('dauert') || lowerPrompt.includes('wie lang')) && lastAIResponse && lastAIResponse.route) {
+    if (!/\b(nach|zu|zum|zur|von)\s+\S/i.test(lowerPrompt) && (lowerPrompt.includes('wie lange') || lowerPrompt.includes('dauert') || lowerPrompt.includes('wie lang')) && currentRouteMeta) {
       // show assistant quick reply with duration/distance
-      const meta = lastAIResponse.route;
+      const meta = currentRouteMeta;
       const distKm = (meta.distance_m/1000).toFixed(2);
       const durMin = Math.round(meta.duration_s/60);
       const durText = durMin >= 60 ? Math.floor(durMin/60) + 'h ' + (durMin%60) + 'min' : durMin + ' min';
       loadingMsg.innerHTML = `<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">local/assistant</div>Die Fahrt dauert ca. <strong>${durText}</strong> (${distKm} km).`;
-      renderPath(meta.path, meta);
       setMapsLinks(meta.google_maps_url || meta.googleMapsURL || '', meta.apple_maps_url || meta.appleMapsURL || '');
-      sendBtn.disabled = false;
+      if (aiRequestController === controller) sendBtn.disabled = false;
       messagesEl.scrollTop = messagesEl.scrollHeight;
       return;
     }
 
-    // First, try the lightweight local agent retrieval which handles nearest-X queries.
-    try {
-      const agentPayload = Object.assign({}, payload, { session: getAISessionId() });
-      const agentRes = await fetch('/api/v1/agent/query', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(agentPayload) });
-      if (agentRes && agentRes.ok) {
-        const agentData = await agentRes.json();
-        if (agentData && Array.isArray(agentData.actions) && agentData.actions.length) {
-          // detect noop-only
-          const meaningful = agentData.actions.some(a => (a.type && a.type !== 'noop') || (a.Type && a.Type !== 'noop'));
-          if (meaningful) {
-            // ensure session id
-            if (agentData.session_id) setAISessionId(agentData.session_id);
-            loadingMsg.innerHTML = '<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">lokaler Agent</div>Aktionen werden ausgeführt...';
-            await executeAgentActions(agentData.actions, agentData.session_id || getAISessionId());
-            sendBtn.disabled = false;
-            messagesEl.scrollTop = messagesEl.scrollHeight;
-            return;
-          }
-        }
-      }
-    } catch (e) {
-      // non-fatal: fall back to full AI query
-      console.warn('local agent query failed:', e);
-    }
-
     const res = await fetch('/api/v1/ai/query', {
       method: 'POST',
+      signal: controller.signal,
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(payload)
     });
@@ -5599,14 +5582,13 @@ async function sendAIQuery() {
     }
     
     const data = await res.json();
+    if (aiRequestController !== controller) return;
     // persist session id from AI responses for multi-turn requests
     try {
       if (data && (data.session_id || data.sessionId || data.SessionID)) {
         setAISessionId(data.session_id || data.sessionId || data.SessionID);
       }
     } catch (e) {}
-    // remember for follow-ups
-    try { lastAIResponse = data; } catch(e){}
     // Build the base message text first; we'll append route info below if present.
     loadingMsg.innerHTML = `<div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">${escapeHtml(data.provider)}/${escapeHtml(data.model)}</div>${escapeHtml(data.response).replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')}`;
     // If the AI returned a computed route, render it on the map and fill inputs
@@ -5660,10 +5642,10 @@ async function sendAIQuery() {
       // If AI provided structured from/to/waypoints, apply them
       try {
         if (data && data.from) {
-          const fe = document.getElementById('from'); if (fe && (data.from.label || data.from.query)) fe.value = data.from.label || data.from.query;
+          const fe = document.getElementById('from'); if (fe && !setResolvedRouteResponsePoint(fe, data.from) && (data.from.label || data.from.query)) { clearResolvedRoutePoint(fe); fe.value = data.from.label || data.from.query; }
         }
         if (data && data.to) {
-          const te = document.getElementById('to'); if (te && (data.to.label || data.to.query)) te.value = data.to.label || data.to.query;
+          const te = document.getElementById('to'); if (te && !setResolvedRouteResponsePoint(te, data.to) && (data.to.label || data.to.query)) { clearResolvedRoutePoint(te); te.value = data.to.label || data.to.query; }
         }
         if (data && data.waypoints && Array.isArray(data.waypoints)) {
           const qws = data.waypoints.map(w => w && (w.label || w.query)).filter(Boolean);
@@ -5677,13 +5659,20 @@ async function sendAIQuery() {
         }
       } catch (e) {}
     } catch (e) { console.warn('Failed to render AI route/suggestions', e); }
+    aiOutput.render(loadingMsg, data.elements);
   } catch (e) {
+    if (aiRequestController !== controller || e.name === 'AbortError') return;
     loadingMsg.textContent = '❌ ' + (e.message || 'Fehler');
-    loadingMsg.style.color = '#ff6b6b';
+    loadingMsg.style.color = 'var(--error)';
+  } finally {
+    if (aiRequestController === controller) {
+      aiRequestController = null;
+      aiRequestMessage = null;
+      sendBtn.disabled = false;
+      document.getElementById('aiStop').hidden = true;
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
   }
-  
-  sendBtn.disabled = false;
-  messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
 document.getElementById('aiSend')?.addEventListener('click', sendAIQuery);

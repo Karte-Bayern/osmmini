@@ -57,7 +57,8 @@ func TestAINavigationPreservesRequestedDestination(t *testing.T) {
 	})
 	lat, lon := 48.6, 12.7
 	recorder := httptest.NewRecorder()
-	req := aiQueryRequest{Prompt: "route nach Dingolfing", MapLat: &lat, MapLon: &lon}
+	req := aiQueryRequest{Prompt: "route nach Dingolfing", MapLat: &lat, MapLon: &lon, RouteFrom: "48.6,12.7"}
+	lat, lon = 48.63, 12.5 // A panned map must not replace the selected start.
 	if !s.handleIntentLocally(context.Background(), recorder, req, promptIntent{Type: intentNavigate, Destination: "Dingolfing"}) {
 		t.Fatal("not handled")
 	}
@@ -68,7 +69,7 @@ func TestAINavigationPreservesRequestedDestination(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if response.To.Label != "Dingolfing" || response.To.Query != "Dingolfing" || *response.To.Lon != 12.5 || response.Route.To.Node != 2 || response.Route.To.Label != "Dingolfing" {
+	if response.To.Label != "Dingolfing" || response.To.Query != "Dingolfing" || *response.To.Lon != 12.5 || response.Route.From.Node != 1 || response.Route.To.Node != 2 || response.Route.To.Label != "Dingolfing" {
 		t.Fatalf("wrong route: %s", recorder.Body.String())
 	}
 }
@@ -81,6 +82,7 @@ func TestAIScopedCinemaTargets(t *testing.T) {
 	for _, tc := range []struct{ prompt, label string }{
 		{"Kino Dingolfing", "cinema filmpalais"},
 		{"oder Focus Cinema Plattling", "FOCUS Cinemas Kino Center"},
+		{"ok, bitte alternativ Focus Cinema Plattling", "FOCUS Cinemas Kino Center"},
 	} {
 		intent := classifyPromptIntent(tc.prompt)
 		if intent.Type != intentNavigate {
