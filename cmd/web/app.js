@@ -5236,6 +5236,9 @@ document.getElementById('noLeftTurn').addEventListener('change', (ev) => {
 });
 
 // ---- AI Integration ----
+let aiModels = [];
+let aiRequestController = null;
+let aiRequestMessage = null;
 
 // AI card collapse/expand
 const aiToggle = document.getElementById('aiToggle');
@@ -5244,6 +5247,7 @@ const aiCard = document.getElementById('aiCard');
 const aiCardHeader = document.getElementById('aiCardHeader');
 if (aiToggle) {
   function setAIOpen(open){
+    if (document.querySelector('.maps-shell')?.dataset.view === 'assistant') open = true;
     aiBody.style.display = open ? 'block' : 'none';
     aiCard.classList.toggle('collapsed', !open);
     aiToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
@@ -5262,7 +5266,6 @@ if (aiToggle) {
 }
 
 
-let aiModels = [];
 
 // Persist AI session ID across page reloads via localStorage.
 // _aiSessionId holds the current multi-turn session id in memory;
@@ -5282,10 +5285,17 @@ const aiOutput = AIOutput.create(map, prompt => {
   if (aiRequestController) { showToast('Bitte laufende Anfrage abwarten oder abbrechen', 'info', 2000); return; }
   document.getElementById('aiPrompt').value = prompt;
   sendAIQuery();
+}, {
+  cameraPadding: mapsCameraPadding,
+  onRoute(place) {
+    cancelRouteComputation();
+    applySearchResultToInput(document.getElementById('to'), place);
+    setMapsView('route');
+    document.getElementById('from')?.focus();
+    showToast('Ziel übernommen. Start wählen und Route berechnen.', 'info', 2500);
+  },
 });
 
-let aiRequestController = null;
-let aiRequestMessage = null;
 function cancelAIQuery() {
   aiRequestController?.abort();
   aiRequestController = null;
@@ -5428,7 +5438,7 @@ async function sendAIQuery() {
       }
     } catch (e) {}
     // Follow-up handling: if user asks duration and we have a recent route, answer locally
-    const visualRequest = /zeichn|markier|pfeil|kreis|diagramm|infokart|button|polygon|visualisier/i.test(prompt);
+    const visualRequest = /zeichn|markier|pfeil|kreis|diagramm|infokart|ortskart|button|polygon|visualisier/i.test(prompt);
     const lowerPrompt = visualRequest ? '' : (prompt || '').toLowerCase();
 
     // Local UX shortcut: chained intent
@@ -5853,11 +5863,14 @@ function mapsCameraPadding() {
 
 // Map-first navigation keeps the existing route and specialist tools intact.
 function setMapsView(view) {
-  if (!['explore', 'route', 'tools'].includes(view)) return;
+  if (!['explore', 'route', 'tools', 'assistant'].includes(view)) return;
   document.querySelector('.maps-shell')?.setAttribute('data-view', view);
   document.querySelectorAll('.maps-rail [data-map-view]').forEach(button => {
     button.setAttribute('aria-pressed', String(button.dataset.mapView === view));
   });
+  if (view === 'assistant' && document.getElementById('aiBody')?.style.display === 'none') {
+    document.getElementById('aiToggle')?.click();
+  }
   const sidebar = document.querySelector('.sidebar');
   if (sidebar) sidebar.scrollTop = 0;
   map.resize();
@@ -5874,7 +5887,7 @@ window.addEventListener('resize', () => map.setPadding(mapsCameraPadding()));
 document.querySelectorAll('[data-map-view]').forEach(button => {
   button.addEventListener('click', () => {
     setMapsView(button.dataset.mapView);
-    document.getElementById(button.dataset.mapView === 'route' ? 'from' : 'placeSearch')?.focus();
+    document.getElementById(button.dataset.mapView === 'route' ? 'from' : button.dataset.mapView === 'assistant' ? 'aiPrompt' : 'placeSearch')?.focus();
   });
 });
 document.getElementById('mapsLayers')?.addEventListener('click', () => revealSidebarTool('map'));
@@ -5919,7 +5932,14 @@ function renderPlaceResults(results) {
       setMapsView('route');
       document.getElementById('from')?.focus();
     });
-    row.append(locate, route);
+    const ask = document.createElement('button');
+    ask.type = 'button';
+    ask.className = 'maps-place-ask';
+    ask.textContent = '✧';
+    ask.title = 'KI zu diesem Ort fragen';
+    ask.setAttribute('aria-label', 'KI fragen zu ' + title.textContent);
+    ask.addEventListener('click', () => prepareAIQuestion(`Zeige eine Ortskarte für ${place.label || title.textContent} bei ${place.lat}, ${place.lon}. Verwende diese Koordinaten und erfinde keine Öffnungszeiten oder Bewertungen.`));
+    row.append(locate, route, ask);
     container.append(row);
   }
 }
@@ -5987,4 +6007,29 @@ document.getElementById('clearPlaces')?.addEventListener('click', () => {
   renderPlaceResults([]);
   clearSearchResults();
   document.getElementById('placeSearch').focus();
+});
+
+
+// Suggestions prepare an editable draft; only Send starts an AI request.
+function aiStarterPrompt(kind, center, route) {
+  const point = `${center.lat.toFixed(6)}, ${center.lng.toFixed(6)}`;
+  if (kind === 'nearby') return `Finde Cafés in der Nähe der Kartenmitte bei ${point}.`;
+  if (kind === 'circle') return `Zeichne einen Kreis mit 1000 Metern Radius um die Kartenmitte bei ${point}.`;
+  if (kind === 'route') return route
+    ? 'Erkläre meine aktuelle Route anhand der berechneten Entfernung, Dauer und Routenoptionen.'
+    : 'Hilf mir, eine Route zu planen. Frage mich zuerst nach Start und Ziel.';
+  return '';
+}
+function prepareAIQuestion(prompt) {
+  setMapsView('assistant');
+  const input = document.getElementById('aiPrompt');
+  if (input.value.trim() && input.value.trim() !== prompt) {
+    showToast('Dein vorhandener Entwurf bleibt erhalten. Sende oder leere ihn zuerst.', 'info', 3000);
+  } else {
+    input.value = prompt;
+  }
+  input.focus();
+}
+document.querySelectorAll('[data-ai-starter]').forEach(button => {
+  button.addEventListener('click', () => prepareAIQuestion(aiStarterPrompt(button.dataset.aiStarter, map.getCenter(), currentRouteMeta)));
 });

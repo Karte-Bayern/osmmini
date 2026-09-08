@@ -22,7 +22,7 @@ func TestAIUIProtocol(t *testing.T) {
 	if err != nil || len(ui.Search) != 4 {
 		t.Fatal("search limit missing")
 	}
-	for _, p := range []string{"Zeichne einen Kreis um Dingolfing", "Markiere das Kino", "Zeige ein Diagramm"} {
+	for _, p := range []string{"Zeichne einen Kreis um Dingolfing", "Markiere das Kino", "Zeige ein Diagramm", "Zeige eine Ortskarte für das Museum"} {
 		if !wantsAIVisuals(p) {
 			t.Fatal(p)
 		}

@@ -19,7 +19,7 @@ Linien sind direkte geometrische Verbindungen, keine Straßenrouten.
 ## Antwortprotokoll
 
 `POST /api/v1/ai/query` liefert zusätzlich `elements`. Erlaubte Typen sind
-`marker`, `line`, `arrow`, `circle`, `polygon`, `card`, `chart`, `button`.
+`place`, `marker`, `line`, `arrow`, `circle`, `polygon`, `card`, `chart`, `button`.
 Geometrien verwenden `coordinates: [[lon, lat], ...]`. Kreise benötigen
 `radius_m` (1–100000), Farben optional `#RRGGBB`. Ein Button enthält `prompt`;
 er sendet diesen erst nach Klick. Diagramme enthalten `values` mit `label`
@@ -34,3 +34,25 @@ Zeichnungen sind temporär, überleben Kartenstilwechsel und bieten Buttons zum
 Zentrieren und Entfernen. „Chat löschen“ entfernt auch die KI-Zeichnungen.
 Nach einem Neuladen sind sie weg. Diagramme zeigen zusätzlich alle Werte als
 Text. Fehler im Modellprotokoll erscheinen im Chat.
+
+## Assistent in der Kartenoberfläche
+
+Der Eintrag **Assistent** öffnet den bestehenden Chat direkt. Die Vorschläge
+für Cafés, Routenerklärung und einen 1-km-Kreis bereiten einen editierbaren
+Entwurf vor; erst **Senden** startet die Anfrage. Ein vorhandener Entwurf wird
+nicht überschrieben. Auch **KI fragen** an einem Suchtreffer bereitet eine
+Frage mit dessen Namen und exakten Koordinaten vor.
+
+Das Modell kann eine interaktive Ortskarte zurückgeben:
+
+```json
+{"type":"place","label":"Museum","text":"Information aus der Ortssuche","coordinates":[[12.495716,48.627037]]}
+```
+
+**Auf Karte zeigen** zentriert den Ort unter Berücksichtigung der Seitenleiste.
+**Route hierher** übernimmt den Punkt als Ziel und öffnet die Routenansicht;
+ein vorhandener Start bleibt erhalten. Die Berechnung wird dort ausdrücklich
+mit **Route berechnen** gestartet. Ungültige oder mehrere Punkte werden
+zurückgewiesen. Das Modell soll unbekannte Öffnungszeiten und Bewertungen
+nicht ergänzen. Ortskarten und Zeichnungen erfordern ein Chatmodell;
+lokale Ortssuche und Navigation bleiben ohne Modell verfügbar.

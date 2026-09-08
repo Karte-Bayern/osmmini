@@ -19,9 +19,11 @@ Elemente:
 {"type":"arrow","label":"Richtung","coordinates":[[12.5,48.6],[12.6,48.7]]}
 {"type":"circle","label":"Umkreis","coordinates":[[12.5,48.6]],"radius_m":1000}
 {"type":"polygon","label":"Gebiet","coordinates":[[12.5,48.6],[12.6,48.6],[12.6,48.7]]}
+{"type":"place","label":"Ortsname","text":"Belegte Informationen zum Ort","coordinates":[[12.5,48.6]]}
 {"type":"card","label":"Titel","text":"Sachliche Information"}
 {"type":"chart","label":"Vergleich","unit":"km","values":[{"label":"A","value":12},{"label":"B","value":20}]}
 {"type":"button","label":"Mehr Details","prompt":"Zeige Details zu ..."}
+Für gefundene Orte bevorzuge place: Die Oberfläche bietet Karte und Route hierher an. Eine Ortskarte benötigt genau einen gefundenen oder vom Nutzer gelieferten Punkt. Ortskarten berechnen keine Route automatisch. Öffnungszeiten, Bewertungen und Ausstattung nur nennen, wenn diese in den Werkzeugdaten belegt sind; sonst als unbekannt kennzeichnen.
 Koordinaten IMMER [Längengrad,Breitengrad]. Kreisradius 1–100000 Meter. Linien sind geometrische Verbindungen, keine berechneten Routen. Diagramme nur mit belegten Zahlen; nenne die Datenquelle im Text. Buttons lösen erst nach Klick eine neue Anfrage aus. Zeichne nur wenn gewünscht. Bei Zeichen-/Informationsaufträgen KEIN route-action-Block. Bestätige keine Ausführung vorab, die Oberfläche zeigt Ausführungsfehler.
 `
 
@@ -53,7 +55,7 @@ func extractAIUI(text string) (string, aiUIEnvelope, error) {
 }
 func wantsAIVisuals(prompt string) bool {
 	p := strings.ToLower(prompt)
-	for _, word := range []string{"zeichne", "zeichnen", "markiere", "markierung", "pfeil", "kreis", "diagramm", "infokarte", "buttons", "polygon", "visualisiere"} {
+	for _, word := range []string{"zeichne", "zeichnen", "markiere", "markierung", "pfeil", "kreis", "diagramm", "infokarte", "ortskarte", "buttons", "polygon", "visualisiere"} {
 		if strings.Contains(p, word) {
 			return true
 		}

@@ -5,7 +5,8 @@
   function geometry(item) {
     const points = item.coordinates;
     if (!Array.isArray(points) || !points.length || points.length > 500 || !points.every(p => Array.isArray(p) && p.length === 2 && p.every(Number.isFinite) && Math.abs(p[0]) <= 180 && Math.abs(p[1]) <= 85)) throw Error('Ungültige Koordinaten');
-    if (item.type === 'marker') return {type:'Point',coordinates:points[0]};
+    if (item.type === 'place' && points.length !== 1) throw Error('Eine Ortskarte benötigt genau einen Punkt');
+    if (item.type === 'marker' || item.type === 'place') return {type:'Point',coordinates:points[0]};
     if (item.type === 'circle') {
       if (!Number.isFinite(item.radius_m) || item.radius_m < 1 || item.radius_m > 100000) throw Error('Kreisradius muss zwischen 1 und 100000 m liegen');
       const [lon,lat] = points[0].map(v=>v*Math.PI/180), d=item.radius_m/6371008.8;
@@ -24,7 +25,7 @@
     if (!['line','arrow'].includes(item.type) || points.length<2) throw Error('Eine Linie benötigt mindestens zwei Punkte');
     return {type:'LineString',coordinates:points};
   }
-  function create(map, send) {
+  function create(map, send, options = {}) {
     const features=new Map(); let sequence=0;
     const source='ai-drawings';
     function sync(styleReady = false) {
@@ -50,6 +51,16 @@
           if(item.type==='button') {
             if(typeof item.prompt!=='string'||!item.prompt.trim()||item.prompt.length>2000) throw Error('Ungültige Button-Aktion');
             button(box,item.label||'Anfragen',()=>send(item.prompt));
+          } else if(item.type==='place') {
+            const point = geometry(item).coordinates;
+            const text = document.createElement('p');
+            text.textContent = String(item.text || '').slice(0,5000);
+            box.appendChild(text);
+            const coordinates = document.createElement('small');
+            coordinates.textContent = `KI-Ortskarte · ${point[1].toFixed(6)}, ${point[0].toFixed(6)}`;
+            box.appendChild(coordinates);
+            button(box, 'Auf Karte zeigen', () => map.fitBounds([point,point], {padding: options.cameraPadding?.() || 60, maxZoom:16}));
+            if (options.onRoute) button(box, 'Route hierher', () => options.onRoute({label:String(item.label || 'Ort').slice(0,200),lon:point[0],lat:point[1]}));
           } else if(item.type==='card') {
             const text=document.createElement('p');text.textContent=String(item.text||'').slice(0,5000);box.appendChild(text);
           } else if(item.type==='chart') {
@@ -67,7 +78,7 @@
             }
             sync();
             const status=document.createElement('p');status.textContent='Auf der Karte eingezeichnet';box.appendChild(status);
-            const focus=button(box,'Auf Karte zeigen',()=>{const ps=g.type==='Point'?[g.coordinates]:g.type==='Polygon'?g.coordinates[0]:g.coordinates;const xs=ps.map(p=>p[0]),ys=ps.map(p=>p[1]);map.fitBounds([[Math.min(...xs),Math.min(...ys)],[Math.max(...xs),Math.max(...ys)]],{padding:60,maxZoom:15});});
+            const focus=button(box,'Auf Karte zeigen',()=>{const ps=g.type==='Point'?[g.coordinates]:g.type==='Polygon'?g.coordinates[0]:g.coordinates;const xs=ps.map(p=>p[0]),ys=ps.map(p=>p[1]);map.fitBounds([[Math.min(...xs),Math.min(...ys)],[Math.max(...xs),Math.max(...ys)]],{padding:options.cameraPadding?.() || 60,maxZoom:15});});
             const remove=button(box,'Entfernen',()=>{ids.forEach(id=>features.delete(id));sync();status.textContent='Entfernt';focus.disabled=true;remove.disabled=true;});
           }
         } catch(error) {const text=document.createElement('p');text.textContent='Ausgabe nicht ausgeführt: '+error.message;box.appendChild(text);}

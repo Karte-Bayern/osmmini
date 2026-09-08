@@ -25,3 +25,28 @@ test('map objects survive style reload and are individually removable; buttons r
  assert.equal(parent.children.at(-1).children[1].textContent,'<script>bad()</script>');
  output.clear();assert.equal(data.features.length,0);
 });
+
+test('place cards use exact coordinates and only route after a click', () => {
+ class Element {constructor(){this.children=[];this.style={};}appendChild(e){this.children.push(e);}append(...es){this.children.push(...es);}addEventListener(_,fn){this.click=fn;}}
+ global.document={createElement:()=>new Element()};
+ const routed=[],focused=[];
+ const map={on(){},fitBounds:(bounds,options)=>focused.push({bounds,options})};
+ const output=AIOutput.create(map,()=>{}, {onRoute:place=>routed.push(place),cameraPadding:()=>({left:410,right:40,top:80,bottom:40})});
+ const parent=new Element();
+ output.render(parent,[{type:'place',label:'Museum',text:'<img src=x>',coordinates:[[12.495716,48.627037]]}]);
+ assert.equal(routed.length,0);
+ assert.equal(focused.length,0);
+ const card=parent.children[0];
+ assert.equal(card.children[1].textContent,'<img src=x>');
+ card.children[3].click();
+ assert.deepEqual(focused[0].bounds,[[12.495716,48.627037],[12.495716,48.627037]]);
+ assert.equal(focused[0].options.padding.left,410);
+ card.children[4].click();
+ assert.deepEqual(routed,[{label:'Museum',lon:12.495716,lat:48.627037}]);
+ for (const coordinates of [[],[[12,48],[13,49]],[[999,48]],[[12,'48']]]) {
+   const invalid=new Element();
+   output.render(invalid,[{type:'place',coordinates}]);
+   assert.equal(invalid.children[0].children.filter(child=>child.click).length,0);
+   assert.match(invalid.children[0].children.at(-1).textContent,/nicht ausgeführt/);
+ }
+});

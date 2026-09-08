@@ -413,7 +413,7 @@ test('cancelled AI responses cannot overwrite a newer request', async () => {
   const elements = Object.fromEntries(['aiPrompt','aiStop','aiSend','aiMessages','aiModel','from','to'].map(id=>[id,new Element()]));
   const requests=[];
   const context=vm.createContext({AbortController,console,document:{getElementById:id=>elements[id],createElement:()=>new Element()},currentRouteMeta:null,currentRouteBBox:null,userLocation:null,map:{getCenter:()=>({lat:48, lng:12})},getAISessionId:()=>'',resolvedRoutePoint:()=>null,cancelRouteComputation(){},fetch:(_url,options)=>{const d=deferred();requests.push({...d,options});return d.promise;},escapeHtml:s=>s||'',setAISessionId(){}});
-  vm.runInContext(section('let aiRequestController = null;', '// Clear chat history'),context);
+  vm.runInContext('let aiRequestController = null; let aiRequestMessage = null;\n' + section('function cancelAIQuery()', '// Clear chat history'),context);
   vm.runInContext(section('async function sendAIQuery()', "document.getElementById('aiSend')?.addEventListener"),context);
   elements.aiPrompt.value='Hallo';
   const first=context.sendAIQuery();
@@ -502,4 +502,37 @@ test('discovery search provides empty and error states without showing stale row
   await failed;
   assert.match(h.elements.placeSearchStatus.textContent, /erneut versuchen/);
   assert.equal(h.elements.placeResults.children.length, 0);
+});
+
+test('AI starters distinguish map center from user location and require a route for route context', () => {
+  const context=vm.createContext({});
+  vm.runInContext(section('function aiStarterPrompt(', 'function prepareAIQuestion('),context);
+  assert.match(context.aiStarterPrompt('nearby',{lat:48.63,lng:12.49},null), /Kartenmitte bei 48.630000, 12.490000/);
+  assert.match(context.aiStarterPrompt('route',{lat:48,lng:12},null), /zuerst nach Start und Ziel/);
+  assert.match(context.aiStarterPrompt('route',{lat:48,lng:12},{distance_m:1000}), /berechneten Entfernung/);
+  assert.match(context.aiStarterPrompt('circle',{lat:48,lng:12},null), /1000 Metern/);
+});
+
+test('preparing an AI question preserves a user draft and never sends it', () => {
+  const input=new Element(); input.value='Mein Entwurf';
+  const views=[],toasts=[];
+  const context=vm.createContext({document:{getElementById:()=>input},setMapsView:v=>views.push(v),showToast:t=>toasts.push(t)});
+  vm.runInContext(section('function prepareAIQuestion(', "document.querySelectorAll('[data-ai-starter]')"),context);
+  context.prepareAIQuestion('Vorschlag');
+  assert.equal(input.value,'Mein Entwurf');
+  assert.equal(toasts.length,1);
+  input.value='';
+  context.prepareAIQuestion('Vorschlag');
+  assert.equal(input.value,'Vorschlag');
+  assert.deepEqual(views,['assistant','assistant']);
+});
+
+test('restoring an open AI panel initializes request state before checking model availability', () => {
+  const elements=Object.fromEntries(['aiToggle','aiBody','aiCard','aiCardHeader'].map(id=>[id,new Element()]));
+  const context=vm.createContext({document:{getElementById:id=>elements[id],querySelector:()=>null},localStorage:{getItem:()=> '1',setItem(){}},wireCollapsibleHeader(){}});
+  vm.runInContext('let observed; function checkAIStatus(){ observed={models:aiModels.length,busy:aiRequestController!==null}; }',context);
+  vm.runInContext(section('// ---- AI Integration ----', '// Persist AI session'),context);
+  assert.equal(vm.runInContext('observed.models',context),0);
+  assert.equal(vm.runInContext('observed.busy',context),false);
+  assert.equal(elements.aiBody.style.display,'block');
 });

@@ -31,6 +31,7 @@
         <a class="maps-brand" href="/" aria-label="OSMmini Startseite">m<span>•</span></a>
         <button type="button" data-map-view="explore" aria-pressed="true"><span aria-hidden="true">◎</span>Entdecken</button>
         <button type="button" data-map-view="route" aria-pressed="false"><span aria-hidden="true">↱</span>Route</button>
+        <button type="button" data-map-view="assistant" aria-pressed="false"><span aria-hidden="true">✧</span>Assistent</button>
         <button type="button" data-map-view="tools" aria-pressed="false"><span aria-hidden="true">☷</span>Werkzeuge</button>
         <div class="maps-rail-footer">OSM<br>mini</div>
       </nav>
@@ -263,7 +264,14 @@
             </div>
           </div>
           <div class="card-body" id="aiBody" style="display:none">
-            <div id="aiStatus" class="ai-status-bar"></div>
+            <div class="ai-welcome"><span class="maps-eyebrow">DEIN KARTENASSISTENT</span><h3>Frag deine Karte.</h3><p>Orte finden, Routen planen und Ideen auf der Karte sichtbar machen.</p></div>
+            <div id="aiStatus" class="ai-status-bar" role="status"></div>
+            <div class="ai-starters" role="group" aria-label="Frage vorbereiten">
+              <button type="button" data-ai-starter="nearby">Cafés in der Nähe</button>
+              <button type="button" data-ai-starter="route">Meine Route erklären</button>
+              <button type="button" data-ai-starter="circle">1-km-Umkreis zeichnen</button>
+            </div>
+            <p class="ai-context-note">Die Kartenmitte und deine aktuelle Route werden als Kontext verwendet. Vorschläge kannst du vor dem Senden bearbeiten.</p>
             <div id="aiModelSelect" class="ai-model-select" style="display:none">
               <select id="aiModel" class="setting-select" aria-label="KI-Modell auswählen"></select>
             </div>
@@ -276,7 +284,7 @@
             </div>
             <div id="aiMessages" class="ai-messages" role="log" aria-live="polite" aria-label="KI-Nachrichten"></div>
             <div class="ai-input-row">
-              <input id="aiPrompt" type="text" placeholder="Wohin möchtest du fahren?" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="KI-Frage eingeben"/>
+              <input id="aiPrompt" type="text" placeholder="Frag nach Orten, Routen oder Zeichnungen …" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="KI-Frage eingeben"/>
               <button id="aiSend" class="btn-send" disabled title="Senden" aria-label="Nachricht senden">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
               </button>
@@ -807,7 +815,7 @@
       </section>
     </div>
 
-    <script src="/static/ai-ui.js?v={{.Version}}"></script>
+    <script src="/static/ai-ui.js?v={{.Version}}&protocol=2"></script>
     <script src="/static/offline-style.js?v={{.Version}}"></script>
     <script>
       (function(){
