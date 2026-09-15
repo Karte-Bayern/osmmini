@@ -444,6 +444,7 @@ function placesHarness() {
   }
   elements.placeResults = element();
   const requests = [], views = [], markers = [], selections = [];
+  let clears = 0;
   const context = vm.createContext({
     document: {getElementById: id => elements[id], querySelector: () => null, querySelectorAll: () => [], createElement: element},
     AbortController, URLSearchParams, clearTimeout,
@@ -452,11 +453,12 @@ function placesHarness() {
     normalizeSearchResult: value => Number.isFinite(value.lat) && Number.isFinite(value.lon) ? value : null,
     getResultPrimary: value => value.label, getResultSecondary: () => '',
     showSearchResultsOnMap: values => markers.push(values),
+    clearSearchResults() { clears++; },
     applySearchResultToInput: (input, place) => selections.push({input, place}),
     fetch(url, options) { const response = deferred(); requests.push({url, options, ...response}); return response.promise; },
   });
   vm.runInContext(section('let placeSearchRequest = null;', "document.getElementById('placeSearchForm')?"), context);
-  return {elements, requests, views, markers, selections, context};
+  return {elements, requests, views, markers, selections, context, get clears() { return clears; }};
 }
 
 test('discovery search discards an old response after a newer search completes', async () => {
@@ -535,4 +537,55 @@ test('restoring an open AI panel initializes request state before checking model
   assert.equal(vm.runInContext('observed.models',context),0);
   assert.equal(vm.runInContext('observed.busy',context),false);
   assert.equal(elements.aiBody.style.display,'block');
+});
+
+test('compact panel hides its controls and restores content without losing state', () => {
+  const classes = new Set(['panel-expanded']);
+  const elements = Object.fromEntries(['mapsPanelContent','mapsPanelToggle','mapsPanelExpand'].map(id => [id,new Element()]));
+  const shell = {classList:{toggle(name, enabled){if(enabled) classes.add(name); else classes.delete(name);},remove(name){classes.delete(name);}}};
+  let paddingUpdates=0;
+  const context=vm.createContext({document:{querySelector:()=>shell,getElementById:id=>elements[id]},map:{setPadding(){paddingUpdates++;}},mapsCameraPadding:()=>({left:40})});
+  vm.runInContext(section('function setMapsPanelCollapsed(', "document.getElementById('mapsPanelToggle')?"),context);
+  context.setMapsPanelCollapsed(true);
+  assert.equal(elements.mapsPanelContent.hidden,true);
+  assert.equal(elements.mapsPanelToggle.attributes['aria-expanded'],'false');
+  assert.equal(elements.mapsPanelToggle.textContent,'Details zeigen');
+  assert.equal(classes.has('panel-expanded'),false);
+  assert.equal(elements.mapsPanelExpand.attributes['aria-pressed'],'false');
+  context.setMapsPanelCollapsed(false);
+  assert.equal(elements.mapsPanelContent.hidden,false);
+  assert.equal(elements.mapsPanelToggle.attributes['aria-expanded'],'true');
+  assert.equal(paddingUpdates,2);
+});
+
+test('AI composer supports multiline text and does not send during IME composition', () => {
+  let handler,sent=0;
+  const context=vm.createContext({document:{getElementById:()=>({addEventListener:(_name,fn)=>handler=fn})},sendAIQuery(){sent++;}});
+  vm.runInContext(section("document.getElementById('aiPrompt')?.addEventListener('keydown'", '// Visual feedback on button clicks'),context);
+  handler({key:'Enter',shiftKey:true,preventDefault(){throw Error('newline blocked');}});
+  handler({key:'Enter',isComposing:true,preventDefault(){throw Error('composition blocked');}});
+  let prevented=false;
+  handler({key:'Enter',preventDefault(){prevented=true;}});
+  assert.equal(sent,1);
+  assert.equal(prevented,true);
+});
+
+
+test('clearing discovery cancels pending work and removes old markers and result state', async () => {
+  const h = placesHarness();
+  vm.runInContext(section('function resetPlaceSearch(', "document.getElementById('clearPlaces')?.addEventListener"), h.context);
+  h.elements.placeSearch.value = 'Museum';
+  const pending = h.context.searchPlaces();
+  assert.equal(h.clears, 1);
+  assert.equal(h.elements.placeResults.attributes['aria-busy'], 'true');
+  h.context.resetPlaceSearch();
+  assert.equal(h.requests[0].options.signal.aborted, true);
+  assert.equal(h.elements.placeSearch.value, '');
+  assert.equal(h.elements.clearPlaces.hidden, true);
+  assert.equal(h.elements.placeResults.attributes['aria-busy'], 'false');
+  assert.equal(h.clears, 2);
+  h.requests[0].resolve({ok:true,json:async()=>[{label:'Stale',lat:48,lon:12}]});
+  await pending;
+  assert.equal(h.markers.length, 0);
+  assert.equal(h.elements.placeResults.children.length, 0);
 });

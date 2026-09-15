@@ -13,6 +13,8 @@ Features
 - Multiple routing engines: `astar`, `dijkstra`, `dijkstra-node` (node-only Dijkstra)
 - Map-first web UI (MapLibre GL) in `cmd/web` with floating place search, nearby categories, and separate discovery, routing and tools views
 - Search results can be opened on the map or used directly as an exact route destination; responsive bottom panel on mobile
+- Fixed search header, compact map view and expandable mobile panels; Ctrl/Cmd+K focuses search
+- Multiline assistant input: Enter sends, Shift+Enter inserts a newline
 - Trip solver, settings and turn-by-turn maneuvers
 - Global raster map profile plus official BayernAtlas vector and WMTS presets
 - Local tinyTiles vector profile for an optional fully offline basemap

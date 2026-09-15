@@ -2294,6 +2294,21 @@ func readJSON(w http.ResponseWriter, r *http.Request, dst any, maxBytes int64) e
 
 // ---- Handlers ----
 
+// Fingerprint the same local-or-embedded assets served by the hybrid handler.
+// A stable "dev" version otherwise lets browsers reuse CSS/JS from older UIs.
+func webAssetVersion() string {
+	h := sha256.New()
+	for _, name := range []string{"style.css", "app.js", "ai-ui.js", "offline-style.js"} {
+		data, err := os.ReadFile(filepath.Join("cmd", "web", name))
+		if err != nil {
+			data, _ = embedded.ReadFile("web/" + name)
+		}
+		fmt.Fprintf(h, "%s:%d:", name, len(data))
+		h.Write(data)
+	}
+	return fmt.Sprintf("%s-%x", buildVersion, h.Sum(nil)[:8])
+}
+
 func (s *server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
@@ -2307,7 +2322,7 @@ func (s *server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	settings := publicSettings(s.settings.Get())
 
 	_ = s.indexTmpl.Execute(w, map[string]any{
-		"Version": buildVersion,
+		"Version": webAssetVersion(),
 		// html/template serializes structs in a script context as JSON. Passing
 		// a pre-marshaled string here would encode it a second time and make the
 		// browser receive a JSON string instead of a settings object.

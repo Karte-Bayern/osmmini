@@ -5688,7 +5688,7 @@ async function sendAIQuery() {
 
 document.getElementById('aiSend')?.addEventListener('click', sendAIQuery);
 document.getElementById('aiPrompt')?.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') { e.preventDefault(); sendAIQuery(); }
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendAIQuery(); }
 });
 
 // Visual feedback on button clicks
@@ -5856,6 +5856,9 @@ function appendAITargetChoices(container, data) {
 function mapsCameraPadding() {
   const mobile = window.innerWidth <= 768;
   const panelHeight = document.querySelector('.sidebar')?.getBoundingClientRect().height || 0;
+  if (!mobile && document.querySelector('.maps-shell')?.classList.contains('panel-collapsed')) {
+    return { top: panelHeight + 28, right: 50, bottom: 40, left: 40 };
+  }
   return mobile
     ? { top: 60, right: 40, bottom: Math.min(panelHeight + 48, window.innerHeight * .5), left: 40 }
     : { top: 80, right: 50, bottom: 40, left: 410 };
@@ -5865,14 +5868,16 @@ function mapsCameraPadding() {
 function setMapsView(view) {
   if (!['explore', 'route', 'tools', 'assistant'].includes(view)) return;
   document.querySelector('.maps-shell')?.setAttribute('data-view', view);
+  document.getElementById('mapsPanelTitle').textContent = {explore:'Entdecken',route:'Route planen',assistant:'Kartenassistent',tools:'Werkzeuge'}[view];
+  setMapsPanelCollapsed(false);
   document.querySelectorAll('.maps-rail [data-map-view]').forEach(button => {
     button.setAttribute('aria-pressed', String(button.dataset.mapView === view));
   });
   if (view === 'assistant' && document.getElementById('aiBody')?.style.display === 'none') {
     document.getElementById('aiToggle')?.click();
   }
-  const sidebar = document.querySelector('.sidebar');
-  if (sidebar) sidebar.scrollTop = 0;
+  const content = document.getElementById('mapsPanelContent');
+  if (content) content.scrollTop = 0;
   map.resize();
   map.setPadding(mapsCameraPadding());
 }
@@ -5899,6 +5904,7 @@ function cancelPlaceSearch() {
   clearTimeout(placeSearchTimer);
   placeSearchRequest?.abort();
   placeSearchRequest = null;
+  document.getElementById('placeResults')?.setAttribute('aria-busy', 'false');
 }
 function renderPlaceResults(results) {
   const container = document.getElementById('placeResults');
@@ -5917,14 +5923,16 @@ function renderPlaceResults(results) {
     const subtitle = document.createElement('span');
     subtitle.textContent = getResultSecondary(place) || 'Auf der Karte anzeigen';
     locate.append(title, subtitle);
+    locate.setAttribute('aria-pressed', 'false');
     locate.addEventListener('click', () => {
+      container.querySelectorAll('.maps-place-locate').forEach(button => button.setAttribute('aria-pressed', String(button === locate)));
       showSearchResultsOnMap([place]);
       map.flyTo({ center: [place.lon, place.lat], zoom: 16 });
     });
     const route = document.createElement('button');
     route.type = 'button';
     route.className = 'maps-place-route';
-    route.textContent = '↱';
+    route.textContent = 'Route hierher';
     route.title = 'Route hierher';
     route.setAttribute('aria-label', 'Route nach ' + title.textContent);
     route.addEventListener('click', () => {
@@ -5935,7 +5943,7 @@ function renderPlaceResults(results) {
     const ask = document.createElement('button');
     ask.type = 'button';
     ask.className = 'maps-place-ask';
-    ask.textContent = '✧';
+    ask.textContent = 'KI fragen';
     ask.title = 'KI zu diesem Ort fragen';
     ask.setAttribute('aria-label', 'KI fragen zu ' + title.textContent);
     ask.addEventListener('click', () => prepareAIQuestion(`Zeige eine Ortskarte für ${place.label || title.textContent} bei ${place.lat}, ${place.lon}. Verwende diese Koordinaten und erfinde keine Öffnungszeiten oder Bewertungen.`));
@@ -5952,6 +5960,9 @@ async function searchPlaces(category = '') {
   setMapsView('explore');
   const status = document.getElementById('placeSearchStatus');
   status.textContent = 'Orte werden gesucht …';
+  document.getElementById('placeResults').setAttribute('aria-busy', 'true');
+  renderPlaceResults([]);
+  clearSearchResults();
   document.getElementById('clearPlaces').hidden = false;
   document.querySelectorAll('[data-place-category]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.placeCategory === category)));
   const center = map.getCenter();
@@ -5977,7 +5988,10 @@ async function searchPlaces(category = '') {
     renderPlaceResults([]);
     status.textContent = error.message;
   } finally {
-    if (placeSearchRequest === request) placeSearchRequest = null;
+    if (placeSearchRequest === request) {
+      placeSearchRequest = null;
+      document.getElementById('placeResults').setAttribute('aria-busy', 'false');
+    }
   }
 }
 document.getElementById('placeSearchForm')?.addEventListener('submit', event => {
@@ -5989,25 +6003,26 @@ document.getElementById('placeSearch')?.addEventListener('input', () => {
   if (document.getElementById('placeSearch').value.trim().length >= 2) {
     placeSearchTimer = setTimeout(() => searchPlaces(), 300);
   } else {
-    renderPlaceResults([]);
-    document.getElementById('placeSearchStatus').textContent = 'Gib mindestens zwei Zeichen ein.';
+    resetPlaceSearch(false);
+    if (document.getElementById('placeSearch').value.trim()) document.getElementById('placeSearchStatus').textContent = 'Gib mindestens zwei Zeichen ein.';
   }
 });
 document.querySelectorAll('[data-place-category]').forEach(button => {
   button.setAttribute('aria-pressed', 'false');
   button.addEventListener('click', () => searchPlaces(button.dataset.placeCategory));
 });
-document.getElementById('clearPlaces')?.addEventListener('click', () => {
+function resetPlaceSearch(clearInput = true) {
   cancelPlaceSearch();
-  document.getElementById('placeSearch').value = '';
+  if (clearInput) document.getElementById('placeSearch').value = '';
   document.getElementById('clearPlaces').hidden = true;
   document.getElementById('placeResultsTitle').textContent = 'Orte entdecken';
   document.getElementById('placeSearchStatus').textContent = 'Suche nach einem Ort oder wähle eine Kategorie auf der Karte.';
   document.querySelectorAll('[data-place-category]').forEach(button => button.setAttribute('aria-pressed', 'false'));
   renderPlaceResults([]);
   clearSearchResults();
-  document.getElementById('placeSearch').focus();
-});
+  if (clearInput) document.getElementById('placeSearch').focus();
+}
+document.getElementById('clearPlaces')?.addEventListener('click', () => resetPlaceSearch());
 
 
 // Suggestions prepare an editable draft; only Send starts an AI request.
@@ -6032,4 +6047,41 @@ function prepareAIQuestion(prompt) {
 }
 document.querySelectorAll('[data-ai-starter]').forEach(button => {
   button.addEventListener('click', () => prepareAIQuestion(aiStarterPrompt(button.dataset.aiStarter, map.getCenter(), currentRouteMeta)));
+});
+
+
+function setMapsPanelCollapsed(collapsed) {
+  const shell = document.querySelector('.maps-shell');
+  shell.classList.toggle('panel-collapsed', collapsed);
+  const content = document.getElementById('mapsPanelContent');
+  content.hidden = collapsed;
+  const toggle = document.getElementById('mapsPanelToggle');
+  toggle.setAttribute('aria-expanded', String(!collapsed));
+  toggle.textContent = collapsed ? 'Details zeigen' : 'Nur Karte';
+  if (collapsed) {
+    shell.classList.remove('panel-expanded');
+    document.getElementById('mapsPanelExpand').setAttribute('aria-pressed', 'false');
+    document.getElementById('mapsPanelExpand').textContent = 'Mehr Platz';
+  }
+  map.setPadding(mapsCameraPadding());
+}
+document.getElementById('mapsPanelToggle')?.addEventListener('click', () => {
+  setMapsPanelCollapsed(!document.querySelector('.maps-shell').classList.contains('panel-collapsed'));
+});
+document.getElementById('mapsPanelExpand')?.addEventListener('click', () => {
+  const shell = document.querySelector('.maps-shell');
+  const expanded = !shell.classList.contains('panel-expanded');
+  setMapsPanelCollapsed(false);
+  shell.classList.toggle('panel-expanded', expanded);
+  const button = document.getElementById('mapsPanelExpand');
+  button.setAttribute('aria-pressed', String(expanded));
+  button.textContent = expanded ? 'Weniger Platz' : 'Mehr Platz';
+});
+document.addEventListener('keydown', event => {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+    if (!document.getElementById('mapWelcomeOverlay')?.hidden) return;
+    event.preventDefault();
+    setMapsView('explore');
+    document.getElementById('placeSearch').focus();
+  }
 });
