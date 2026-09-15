@@ -41,6 +41,8 @@ inside and outside Bavaria without routing public OSM tiles through this
 server. The map is global; routing, address search and local POIs are limited
 to the PBF extract you loaded.
 
+Category filters and local AI search share a [documented OSM category catalog](cmd/docs/osm-categories.md), including German/English aliases and alternative healthcare, forest and swimming tags.
+
 ## Bavaria profile
 
 For a Bavaria-focused deployment, use the included

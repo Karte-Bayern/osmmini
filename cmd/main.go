@@ -150,38 +150,6 @@ var BuiltinTilePresets = []TileSourcePreset{
 	},
 }
 
-// staticPOIMapping maps normalized query keywords to OSM tag filters
-// used for quick, language-aware POI lookup without LLMs.
-var staticPOIMapping = map[string]map[string]string{
-	// German
-	"tankstelle":  {"amenity": "fuel"},
-	"benzin":      {"amenity": "fuel"},
-	"bahnhof":     {"railway": "station"},
-	"apotheke":    {"amenity": "pharmacy"},
-	"supermarkt":  {"shop": "supermarket"},
-	"bäckerei":    {"shop": "bakery"},
-	"baeckerei":   {"shop": "bakery"},
-	"parkplatz":   {"amenity": "parking"},
-	"bank":        {"amenity": "bank"},
-	"krankenhaus": {"amenity": "hospital"},
-	"schule":      {"amenity": "school"},
-	"museum":      {"tourism": "museum"},
-	"see":         {"natural": "water"},
-	"wald":        {"landuse": "forest"},
-	// English
-	"gas":           {"amenity": "fuel"},
-	"fuel":          {"amenity": "fuel"},
-	"train station": {"railway": "station"},
-	"pharmacy":      {"amenity": "pharmacy"},
-	"supermarket":   {"shop": "supermarket"},
-	"parking":       {"amenity": "parking"},
-	"hospital":      {"amenity": "hospital"},
-	"school":        {"amenity": "school"},
-	// museum already covered above (German/English), skip duplicate
-	"lake":   {"natural": "water"},
-	"forest": {"landuse": "forest"},
-}
-
 // brandAliasMap is populated from the loaded OSM data with compact aliases for
 // POI names and brands. It intentionally contains no application-specific
 // businesses.
@@ -3176,6 +3144,14 @@ func (s *server) searchPOIMatches(raw string, limit int) []apiSearchResult {
 		return nil
 	}
 	tokens := strings.Fields(qNorm)
+	category := lookupPOICategory(raw)
+	scoreTags := func(tags osmmini.Tags) int {
+		score := scorePOIResult(tags, qNorm, tokens)
+		if category != nil && category.matches(tags) {
+			score += 100
+		}
+		return score
+	}
 	scoredPOIs := make([]poiSearchCandidate, 0, limit)
 	consider := func(id int64, kind string, tags osmmini.Tags, coord osmmini.Coord, score int) {
 		if score <= 0 || (len(scoredPOIs) == limit && score < scoredPOIs[len(scoredPOIs)-1].score) || (s.window != nil && !s.window.Contains(coord)) {
@@ -3191,11 +3167,11 @@ func (s *server) searchPOIMatches(raw string, limit int) []apiSearchResult {
 	s.poiMu.RLock()
 	if s.poiGeo != nil {
 		for _, p := range s.poiGeo.entries {
-			consider(p.ID, p.Kind, p.Tags, p.Coord, scorePOIResult(p.Tags, qNorm, tokens))
+			consider(p.ID, p.Kind, p.Tags, p.Coord, scoreTags(p.Tags))
 		}
 	} else {
 		for _, poiWay := range s.poiWays {
-			score := scorePOIResult(poiWay.Tags, qNorm, tokens)
+			score := scoreTags(poiWay.Tags)
 			if score <= 0 || (len(scoredPOIs) == limit && score < scoredPOIs[len(scoredPOIs)-1].score) {
 				continue
 			}
@@ -3216,7 +3192,7 @@ func (s *server) searchPOIMatches(raw string, limit int) []apiSearchResult {
 		}
 		for _, poiNode := range s.poiTaggedNodes {
 			coord := osmmini.Coord{Lat: poiNode.Lat, Lon: poiNode.Lon}
-			consider(poiNode.ID, "node", poiNode.Tags, coord, scorePOIResult(poiNode.Tags, qNorm, tokens))
+			consider(poiNode.ID, "node", poiNode.Tags, coord, scoreTags(poiNode.Tags))
 		}
 	}
 
@@ -3493,6 +3469,8 @@ func formatSearchMatchReason(kind string, tags osmmini.Tags, rawQuery string) st
 		return "Treffer über Straße"
 	case fieldsContainQuery(qNorm, tokens, tags["name"], tags["brand"], tags["operator"]):
 		return "Treffer über Name/Marke"
+	case matchesKnownPOICategory(tags, rawQuery):
+		return "Treffer über Kategorie"
 	case fieldsContainQuery(qNorm, tokens, tags["shop"], tags["amenity"], tags["office"], tags["tourism"], tags["leisure"]):
 		return "Treffer über Kategorie"
 	case fieldsContainQuery(qNorm, tokens, tags["addr:city"], tags["addr:place"]):
@@ -3527,7 +3505,7 @@ func fieldsContainQuery(query string, tokens []string, values ...string) bool {
 }
 
 func primarySearchCategory(tags osmmini.Tags) string {
-	for _, key := range []string{"shop", "amenity", "office", "tourism", "leisure", "railway", "public_transport", "aeroway", "place", "natural"} {
+	for _, key := range []string{"shop", "amenity", "office", "tourism", "leisure", "railway", "public_transport", "aeroway", "place", "natural", "healthcare", "emergency", "craft", "historic", "landuse", "waterway", "highway"} {
 		if v := strings.TrimSpace(tags[key]); v != "" {
 			return v
 		}
@@ -5192,78 +5170,6 @@ type promptIntent struct {
 	POITagVal   string // resolved OSM tag value
 }
 
-// poiKeywordTags maps German and English POI keywords to OSM tag key/value pairs.
-var poiKeywordTags = map[string][2]string{
-	"tankstelle":     {"amenity", "fuel"},
-	"tankstellen":    {"amenity", "fuel"},
-	"benzin":         {"amenity", "fuel"},
-	"diesel":         {"amenity", "fuel"},
-	"gas station":    {"amenity", "fuel"},
-	"fuel":           {"amenity", "fuel"},
-	"bahnhof":        {"railway", "station"},
-	"haltestelle":    {"highway", "bus_stop"},
-	"bushaltestelle": {"highway", "bus_stop"},
-	"apotheke":       {"amenity", "pharmacy"},
-	"pharmacy":       {"amenity", "pharmacy"},
-	"supermarkt":     {"shop", "supermarket"},
-	"supermarket":    {"shop", "supermarket"},
-	"bäckerei":       {"shop", "bakery"},
-	"bakery":         {"shop", "bakery"},
-	"parkplatz":      {"amenity", "parking"},
-	"parking":        {"amenity", "parking"},
-	"bank":           {"amenity", "bank"},
-	"geldautomat":    {"amenity", "atm"},
-	"atm":            {"amenity", "atm"},
-	"krankenhaus":    {"amenity", "hospital"},
-	"hospital":       {"amenity", "hospital"},
-	"schule":         {"amenity", "school"},
-	"school":         {"amenity", "school"},
-	"museum":         {"tourism", "museum"},
-	"hotel":          {"tourism", "hotel"},
-	"gasthaus":       {"amenity", "restaurant"},
-	"restaurant":     {"amenity", "restaurant"},
-	"gaststätte":     {"amenity", "restaurant"},
-	"café":           {"amenity", "cafe"},
-	"cafe":           {"amenity", "cafe"},
-	"kaffee":         {"amenity", "cafe"},
-	"fastfood":       {"amenity", "fast_food"},
-	"fast food":      {"amenity", "fast_food"},
-	"imbiss":         {"amenity", "fast_food"},
-	"arzt":           {"amenity", "doctors"},
-	"zahnarzt":       {"amenity", "dentist"},
-	"post":           {"amenity", "post_office"},
-	"postamt":        {"amenity", "post_office"},
-	"friseur":        {"shop", "hairdresser"},
-	"spielplatz":     {"leisure", "playground"},
-	"schwimmbad":     {"leisure", "swimming_pool"},
-	"freibad":        {"leisure", "swimming_pool"},
-	"hallenbad":      {"leisure", "sports_centre"},
-	"sportplatz":     {"leisure", "pitch"},
-	"park":           {"leisure", "park"},
-	"therme":         {"leisure", "spa"},
-	"sauna":          {"leisure", "sauna"},
-	"wald":           {"natural", "wood"},
-	"wäldchen":       {"natural", "wood"},
-	"forest":         {"landuse", "forest"},
-	"see":            {"natural", "water"},
-	"lake":           {"natural", "water"},
-	"fluss":          {"waterway", "river"},
-	"river":          {"waterway", "river"},
-	"isar":           {"waterway", "river"},
-	"kirche":         {"amenity", "place_of_worship"},
-	"church":         {"amenity", "place_of_worship"},
-	"rathaus":        {"amenity", "townhall"},
-	"bibliothek":     {"amenity", "library"},
-	"library":        {"amenity", "library"},
-	"zoo":            {"tourism", "zoo"},
-	"tierpark":       {"tourism", "zoo"},
-	"kino":           {"amenity", "cinema"},
-	"cinema":         {"amenity", "cinema"},
-	"feuerwehr":      {"amenity", "fire_station"},
-	"polizei":        {"amenity", "police"},
-	"police":         {"amenity", "police"},
-}
-
 // navigatePrefixes are phrase prefixes that signal a navigate intent.
 var navigatePrefixes = []string{
 	"navigation nach ", "navigiere nach ", "navigier nach ",
@@ -5293,14 +5199,13 @@ var leisureKeywords = []string{
 	"erholung", "ausflug", "picknick", "walk", "hiking", "cycling",
 }
 
-// extractPOIFromPrompt finds the first known POI keyword in a lowercased prompt.
-func extractPOIFromPrompt(lower string) (keyword, tagKey, tagVal string) {
-	for kw, tv := range poiKeywordTags {
-		if strings.Contains(lower, kw) {
-			return kw, tv[0], tv[1]
-		}
+// Prefer the longest whole phrase; ties follow the prompt's word order.
+func extractPOIFromPrompt(prompt string) (keyword, tagKey, tagVal string) {
+	alias, category := categoryInPrompt(prompt)
+	if category == nil {
+		return "", "", ""
 	}
-	return "", "", ""
+	return alias, category.Key, category.Value
 }
 
 // classifyPromptIntent analyses a natural-language prompt and returns the
@@ -5442,8 +5347,7 @@ func (s *server) searchPOIsNear(lat, lon float64, tagKey, tagVal string, limit i
 
 	s.poiMu.RLock()
 	for _, w := range s.poiWays {
-		v, ok := w.Tags[tagKey]
-		if !ok || (tagVal != "" && !strings.EqualFold(v, tagVal)) {
+		if !matchesPOITag(w.Tags, tagKey, tagVal) {
 			continue
 		}
 		var cx, cy float64
@@ -5473,8 +5377,7 @@ func (s *server) searchPOIsNear(lat, lon float64, tagKey, tagVal string, limit i
 		})
 	}
 	for _, n := range s.poiTaggedNodes {
-		v, ok := n.Tags[tagKey]
-		if !ok || (tagVal != "" && !strings.EqualFold(v, tagVal)) {
+		if !matchesPOITag(n.Tags, tagKey, tagVal) {
 			continue
 		}
 		coord := osmmini.Coord{Lat: n.Lat, Lon: n.Lon}
@@ -5491,8 +5394,7 @@ func (s *server) searchPOIsNear(lat, lon float64, tagKey, tagVal string, limit i
 	s.poiMu.RUnlock()
 
 	for _, a := range s.addrs {
-		v, ok := a.Tags[tagKey]
-		if !ok || (tagVal != "" && !strings.EqualFold(v, tagVal)) {
+		if !matchesPOITag(a.Tags, tagKey, tagVal) {
 			continue
 		}
 		lbl := formatAddressLabel(a.Tags)
@@ -5668,8 +5570,7 @@ func (s *server) handleIntentLocally(ctx context.Context, w http.ResponseWriter,
 		var results []poiNearResult
 		s.poiMu.RLock()
 		for _, w := range s.poiWays {
-			v, ok := w.Tags[intent.POITagKey]
-			if !ok || (intent.POITagVal != "" && !strings.EqualFold(v, intent.POITagVal)) {
+			if !matchesPOITag(w.Tags, intent.POITagKey, intent.POITagVal) {
 				continue
 			}
 			var cx, cy float64

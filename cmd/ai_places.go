@@ -10,13 +10,13 @@ import (
 // A place suffix supplies context, not another part of the POI's name.
 // For example OSM calls the cinema in Dingolfing "cinema filmpalais".
 func (s *server) aiScopedPOITargets(query string) ([]apiSearchResult, bool) {
-	norm := normalizeForCompare(query)
+	norm := normalizeCategoryAlias(query)
 	var centers []osmmini.Coord
 	placeName := ""
 	s.poiMu.RLock()
 	defer s.poiMu.RUnlock()
 	for _, node := range s.poiTaggedNodes {
-		name := normalizeForCompare(node.Tags["name"])
+		name := normalizeCategoryAlias(node.Tags["name"])
 		if placeLabelRank(node.Tags["place"]) < 60 || name == "" || !strings.HasSuffix(norm, " "+name) {
 			continue
 		}
@@ -35,6 +35,13 @@ func (s *server) aiScopedPOITargets(query string) ([]apiSearchResult, bool) {
 	if len(terms) == 0 {
 		return nil, false
 	}
+	categoryTerms := make([]string, 0, len(terms))
+	for _, term := range terms {
+		if term != "in" && term != "bei" {
+			categoryTerms = append(categoryTerms, term)
+		}
+	}
+	category := lookupPOICategory(strings.Join(categoryTerms, " "))
 	var results []apiSearchResult
 	seen := map[string]bool{}
 	consider := func(id int64, coord osmmini.Coord, tags osmmini.Tags) {
@@ -51,16 +58,20 @@ func (s *server) aiScopedPOITargets(query string) ([]apiSearchResult, bool) {
 		if !nearby {
 			return
 		}
-		words := strings.Fields(normalizeForCompare(tags["name"] + " " + tags["brand"]))
+		words := strings.Fields(normalizeCategoryAlias(tags["name"] + " " + tags["brand"]))
 		hasPOITerm := false
 		for _, term := range terms {
+			if category != nil {
+				hasPOITerm = category.matches(tags)
+				break
+			}
 			if term == "in" || term == "bei" {
 				continue
 			}
 			hasPOITerm = true
 			matched := false
-			if term == "kino" || term == "cinema" || term == "cinemas" {
-				matched = tags["amenity"] == "cinema"
+			if category := lookupPOICategory(term); category != nil {
+				matched = category.matches(tags)
 			}
 			for _, word := range words {
 				if word == term || (len(term) >= 4 && strings.HasPrefix(word, term)) {
@@ -71,7 +82,7 @@ func (s *server) aiScopedPOITargets(query string) ([]apiSearchResult, bool) {
 				return
 			}
 		}
-		if !hasPOITerm || (tags["name"] == "" && tags["brand"] == "") {
+		if !hasPOITerm || (category == nil && tags["name"] == "" && tags["brand"] == "") {
 			return
 		}
 		result := buildSearchResult("poi", id, coord, tags, query)
@@ -86,7 +97,7 @@ func (s *server) aiScopedPOITargets(query string) ([]apiSearchResult, bool) {
 		consider(id, osmmini.Coord{Lat: node.Lat, Lon: node.Lon}, node.Tags)
 	}
 	for id, way := range s.poiWays {
-		if way.Tags["name"] == "" && way.Tags["brand"] == "" {
+		if category == nil && way.Tags["name"] == "" && way.Tags["brand"] == "" {
 			continue
 		}
 		var coord osmmini.Coord

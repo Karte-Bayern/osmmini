@@ -179,6 +179,7 @@ func (s *server) handleGeoPOIs(w http.ResponseWriter, r *http.Request) {
 	normalized := normalizeForCompare(query.Get("q"))
 	tokens := strings.Fields(normalized)
 	category := strings.TrimSpace(query.Get("category"))
+	knownCategory := lookupPOICategory(category)
 	s.poiMu.RLock()
 	index := s.poiGeo
 	s.poiMu.RUnlock()
@@ -201,18 +202,14 @@ func (s *server) handleGeoPOIs(w http.ResponseWriter, r *http.Request) {
 		if s.window != nil && !s.window.Contains(p.Coord) {
 			return
 		}
-		if category != "" {
-			found := false
-			for _, key := range []string{"amenity", "shop", "tourism", "leisure", "office", "place", "emergency"} {
-				if p.Tags[key] == category {
-					found = true
-					break
-				}
-			}
-			if !found {
+		if knownCategory != nil {
+			if !knownCategory.matches(p.Tags) {
 				return
 			}
+		} else if category != "" && !matchesPOICategory(p.Tags, category) {
+			return
 		}
+
 		d := 0.0
 		if center != nil {
 			d = haversineMeters(center.Lat, center.Lon, p.Coord.Lat, p.Coord.Lon)

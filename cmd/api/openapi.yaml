@@ -15,7 +15,7 @@ paths:
         - { name: lon, in: query, schema: { type: number, minimum: -180, maximum: 180 } }
         - { name: radius_m, in: query, schema: { type: number, exclusiveMinimum: 0, maximum: 100000 } }
         - { name: q, in: query, schema: { type: string } }
-        - { name: category, in: query, schema: { type: string }, description: 'Exact OSM value in amenity, shop, tourism, leisure, office, place or emergency' }
+        - { name: category, in: query, schema: { type: string }, description: 'Canonical category or German/English alias (e.g. hospital, Krankenhäuser), raw POI tag value, or exact key=value filter (e.g. amenity=hospital). Semantic categories include alternative tag combinations; qualified filters do not.' }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 1000, default: 100 } }
       responses:
         '200':
