@@ -2419,3 +2419,28 @@ body.map-welcome-open { overflow: hidden; }
 .osm-editor-list button { white-space: normal; text-align: left; }
 #osmEditorTools h3, #osmEditorTools h4 { font-size: 13px; margin: 12px 0 6px; }
 #osmEditorTools [hidden] { display: none; }
+
+/* Guided OSM editing follows the existing sidebar controls and theme. */
+#osmEditorTools .osm-step { border-top: 1px solid var(--border); padding: 14px 0; }
+#osmEditorTools .osm-step > h3 { font-size: 15px; margin: 0 0 10px; }
+#osmEditorTools fieldset { min-width: 0; border: 0; margin: 0; padding: 0; }
+#osmEditorTools .osm-advanced { margin-top: 14px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; }
+#osmEditorTools .osm-advanced summary { font-size: 12px; line-height: 1.5; }
+#osmEditorTools .osm-local-note { padding: 10px 12px; border-left: 3px solid var(--primary); background: var(--primary-dim); border-radius: 6px; }
+#osmEditorTools .osm-edit-state { font-weight: 600; }
+#osmEditorTools #osmEditorStatus { padding: 10px 0; line-height: 1.6; }
+#osmEditorTools #osmValidation:empty { display: none; }
+#osmEditorTools #osmValidation { border-left: 3px solid #d97706; padding: 8px 10px; background: #d9770612; }
+#osmEditorTools .osm-tag-head { display: grid; grid-template-columns: 1fr 1.4fr 36px; gap: 5px; font-size: 11px; margin: 12px 0 5px; color: var(--text-2); }
+#osmEditorTools .osm-tag-row { grid-template-columns: minmax(0,1fr) minmax(0,1.4fr) 36px; }
+#osmEditorTools button, #osmEditorTools .setting-input, #osmEditorTools .osm-tag-row input { min-height: 40px; }
+#osmEditorTools button:disabled { opacity: .5; cursor: default; }
+#osmEditorTools #osmCandidates button { width: 100%; }
+#osmEditorTools #osmDrafts li { display: flex; align-items: center; gap: 4px; }
+#osmEditorTools #osmDrafts li button:first-child { flex: 1; min-width: 0; }
+#osmEditorTools .osm-form-actions { margin-top: 14px; }
+#osmEditorTools #osmSelected { overflow-wrap: anywhere; }
+#osmEditorTools #osmExport { max-width: 100%; white-space: normal; }
+@media (max-width: 768px) {
+  #osmEditorTools button, #osmEditorTools .setting-input { min-height: 44px; }
+}

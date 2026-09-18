@@ -38,7 +38,61 @@ test('draft editor creates a point, saves, undoes and redoes without changing OS
  let stored=null,data=null;global.localStorage={getItem:()=>stored,setItem:(_,v)=>stored=v};
  const map={isStyleLoaded:()=>true,getSource:()=>data?{setData:d=>data=d}:null,addSource:(_,s)=>data=s.data,addLayer(){},getCanvas:()=>({style:{}})};
  const editor=E.create(map);es.osmNew.click();assert.equal(editor.active,true);editor.addPoint({lngLat:{lat:48,lng:12}});assert.equal(editor.active,false);
- es.osmTags.children[0].children[1].value='Testbank';es.osmSave.click();assert.equal(E.restore(stored).length,1);assert.equal(data.features.length,1);
+ es.osmName.value='Testbank';es.osmName.listeners.input();es.osmSave.click();assert.equal(E.restore(stored).length,1);assert.equal(data.features.length,1);
  es.osmUndo.click();assert.equal(E.restore(stored).length,0);assert.equal(data.features.length,0);
  es.osmRedo.click();assert.equal(E.restore(stored).length,1);assert.equal(data.features.length,1);
+});
+
+function editorHarness(initial=[]){
+ class Element{
+   constructor(){this.children=[];this.value='';this.listeners={};this.attrs={};}
+   append(...es){for(const e of es){e.parent=this;this.children.push(e);}}
+   replaceChildren(){this.children=[];}remove(){this.parent.children=this.parent.children.filter(e=>e!==this);}
+   addEventListener(e,f){this.listeners[e]=f;}setAttribute(k,v){this.attrs[k]=v;}focus(){this.focused=true;}
+   click(){if(!this.disabled)return this.listeners.click?.();}
+ }
+ const es={};global.document={getElementById:id=>es[id]??=new Element(),createElement:()=>new Element(),addEventListener(){}};
+ let stored=JSON.stringify({version:1,drafts:initial}),data=null;
+ global.localStorage={getItem:()=>stored,setItem:(_,v)=>stored=v};
+ const map={isStyleLoaded:()=>true,getSource:()=>data?{setData:d=>data=d}:null,addSource:(_,s)=>data=s.data,addLayer(){},getCanvas:()=>({style:{}}),flyTo(){}};
+ const editor=E.create(map);
+ return {es,editor,drafts:()=>E.restore(stored),data:()=>data,input(id,value){es[id].value=value;es[id].listeners.input();}};
+}
+test('guided new-place flow applies a type, preserves properties and explains unsaved state',()=>{
+ const h=editorHarness(),e=h.es;
+ assert.match(e.osmDraftSummary.textContent,/Noch keine/);assert.equal(e.osmCheck.disabled,true);
+ e.osmNew.click();assert.equal(e.osmPlacement.hidden,false);assert.match(e.osmNew.textContent,/abbrechen/);
+ h.editor.addPoint({lngLat:{lat:48,lng:12}});assert.equal(h.data().features.length,1);assert.equal(h.data().features[0].properties.selected,true);
+ assert.equal(e.osmSave.disabled,true);assert.match(e.osmValidation.textContent,/Art/);
+ h.input('osmName','Am Brunnen');h.input('osmWebsite','https://example.org');
+ e.osmPreset.value='bench';e.osmPreset.listeners.change();
+ assert.equal(e.osmName.value,'Am Brunnen');assert.match(e.osmEditState.textContent,/Noch nicht gespeichert/);
+ assert.equal(e.osmExport.disabled,true);assert.equal(e.osmSave.disabled,false);
+ e.osmSave.click();assert.equal(h.drafts()[0].value.tags.amenity,'bench');assert.equal(h.drafts()[0].value.tags.website,'https://example.org');
+ assert.equal(e.osmExport.disabled,false);assert.match(e.osmDraftSummary.textContent,/1 Entwurf/);
+});
+test('friendly fields and raw tags stay in sync, including deletions and validation errors',()=>{
+ const h=editorHarness([{base,value:{...base,tags:{...base.tags,name:'Neu',operator:'Betreiber'}}}]),e=h.es;
+ e.osmDrafts.children[0].children[0].click();assert.equal(e.osmName.value,'Neu');assert.equal(e.osmPresetWrap.hidden,true);
+ h.input('osmName','');assert.ok(!e.osmTags.children.some(row=>row.children[0].value==='name'));
+ assert.ok(e.osmDiff.children.some(li=>li.textContent.includes('wird entfernt')));
+ const operator=e.osmTags.children.find(row=>row.children[0].value==='operator');assert.equal(operator.children[1].value,'Betreiber');
+ e.osmAddTag.click();const last=e.osmTags.children.at(-1);last.children[0].value='amenity';last.children[1].value='cafe';e.osmTags.listeners.input();
+ assert.match(e.osmValidation.textContent,/Doppelter/);assert.equal(e.osmSave.disabled,true);
+ last.children[2].click();assert.equal(e.osmSave.disabled,false);e.osmSave.click();
+ assert.equal(h.drafts()[0].value.tags.name,undefined);assert.equal(h.drafts()[0].value.tags.operator,'Betreiber');
+});
+test('network loading disables conflicting controls and restores them after failure',async()=>{
+ const h=editorHarness(),e=h.es;let reject;
+ const originalFetch=global.fetch;global.fetch=()=>new Promise((_,r)=>reject=r);
+ try{
+   document.getElementById('osmType').value='node';document.getElementById('osmID').value='42';const request=e.osmLoad.click();
+   assert.equal(e.osmNew.disabled,true);assert.equal(e.osmFormFields.disabled,true);assert.equal(e.osmEditorTools.attrs['aria-busy'],'true');
+   reject(Error('Offline'));await request;
+   assert.equal(e.osmNew.disabled,false);assert.equal(e.osmFormFields.disabled,false);assert.equal(e.osmEditorTools.attrs['aria-busy'],'false');
+ }finally{global.fetch=originalFetch;}
+});
+test('discarding an unsaved point clears its preview and returns focus to selection',()=>{
+ const h=editorHarness(),e=h.es;e.osmNew.click();h.editor.addPoint({lngLat:{lat:48,lng:12}});
+ assert.equal(h.data().features.length,1);e.osmDiscard.click();assert.equal(h.data().features.length,0);assert.equal(e.osmForm.hidden,true);assert.equal(e.osmNearby.focused,true);
 });
