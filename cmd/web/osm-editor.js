@@ -78,7 +78,8 @@
     function syncCommon(){for(const [id,key] of Object.entries(common)){const row=[...el('osmTags').children].find(r=>r.children[0].value===key);el(id).value=row?.children[1].value||'';}}
     function syncUI(){
       el('osmFormFields').disabled=busy;
-      el('osmEditorTools').setAttribute('aria-busy',String(busy));
+      el('osmFormFields').setAttribute('aria-busy',String(busy));
+      el('osmCandidates').setAttribute('aria-busy',String(busy));
       for(const id of ['osmNearby','osmNew','osmLoad','osmImport'])el(id).disabled=busy;
       el('osmNearby').textContent=busy?'Bitte warten …':'Orte in der Nähe finden';
       el('osmNew').textContent=active?'Punktsetzen abbrechen':'Neuen Ort eintragen';
@@ -101,21 +102,30 @@
     function readTags(){return tags([...el('osmTags').children].map(row=>[row.children[0].value,row.children[1].value]));}
     function diff(){
       const list=el('osmDiff');list.replaceChildren();validForm=false;
-      el('osmValidation').textContent='';
+      let validationMessage='';
+      const rows=[...el('osmTags').children];
+      for(const row of rows){const [key,value,remove]=row.children,k=key.value,v=value.value;let invalid=false;try{tags([[k,v]]);}catch{invalid=true;}
+        if(k&&rows.filter(r=>r.children[0].value===k).length>1)invalid=true;
+        key.setAttribute('aria-invalid',String(invalid));value.setAttribute('aria-invalid',String(invalid));
+        value.setAttribute('aria-label',(fieldNames[k]||k||'Eigenschaft')+' – Wert');remove.setAttribute('aria-label',(fieldNames[k]||k||'Eigenschaft')+' entfernen');
+      }
+      for(const [id,key] of Object.entries(common)){let invalid=false;const row=rows.find(r=>r.children[0].value===key);if(row){try{tags([[key,row.children[1].value]]);}catch{invalid=true;}if(rows.filter(r=>r.children[0].value===key).length>1)invalid=true;}el(id).setAttribute('aria-invalid',String(invalid));el(id).setAttribute('aria-describedby',id==='osmHours'?'osmHoursHint osmValidation':'osmValidation');}
       if(current){try{
         const next=readTags(),delta=changes(current.base?.tags||{},next);
         el('osmSelected').textContent=label({...current.value,tags:next});
         for(const d of delta){const li=document.createElement('li');li.textContent=`${fieldNames[d.key]||d.key}: ${d.before===undefined?'neu':JSON.stringify(d.before)} → ${d.after===undefined?'wird entfernt':JSON.stringify(d.after)}`;list.append(li);}
         if(!delta.length){const li=document.createElement('li');li.textContent='Noch keine Angaben geändert.';list.append(li);}
-        if(!current.base&&!Object.values(next).some(v=>v.trim()))el('osmValidation').textContent='Wähle eine Art aus oder ergänze eine Eigenschaft für den neuen Ort.';
+        if(!current.base&&!Object.values(next).some(v=>v.trim()))validationMessage='Wähle eine Art aus oder ergänze eine Eigenschaft für den neuen Ort.';
         else validForm=!!delta.length||drafts.some(d=>d.value.id===current.value.id&&d.value.type===current.value.type);
-      }catch(e){el('osmValidation').textContent=e.message;}}
+      }catch(e){validationMessage=e.message;}}
+      if(el('osmValidation').textContent!==validationMessage)el('osmValidation').textContent=validationMessage;
       syncUI();
     }
     function row(k='',v=''){
       const div=document.createElement('div'),input=document.createElement('input'),value=document.createElement('textarea'),remove=document.createElement('button');
       div.className='osm-tag-row';input.value=k;input.placeholder='Schlüssel';input.setAttribute('aria-label','OSM-Schlüssel');value.value=v;value.rows=1;value.placeholder='Wert';value.setAttribute('aria-label',(fieldNames[k]||k||'Eigenschaft')+' – Wert');
-      remove.type='button';remove.textContent='×';remove.setAttribute('aria-label',(fieldNames[k]||k||'Eigenschaft')+' entfernen');remove.addEventListener('click',()=>{div.remove();dirty=true;syncCommon();diff();});
+      input.setAttribute('aria-describedby','osmValidation');value.setAttribute('aria-describedby','osmValidation');
+      remove.type='button';remove.innerHTML='<svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-close"/></svg>';remove.setAttribute('aria-label',(fieldNames[k]||k||'Eigenschaft')+' entfernen');remove.addEventListener('click',()=>{const index=[...el('osmTags').children].indexOf(div);div.remove();dirty=true;syncCommon();diff();const next=el('osmTags').children[index]||el('osmTags').children[index-1];(next?.children[0]||el('osmAddTag')).focus?.();});
       div.append(input,value,remove);el('osmTags').append(div);
     }
     function open(d){current=structuredClone(d);dirty=false;el('osmForm').hidden=false;el('osmSelected').textContent=label(d.value);el('osmObjectMeta').textContent=d.base?`${d.value.type==='node'?'Punkt':'Weg / Fläche'} · OSM-ID ${d.value.id} · Version ${d.value.version}`:`Neuer Ort · ${d.value.lat.toFixed(5)}, ${d.value.lon.toFixed(5)}`;el('osmPresetWrap').hidden=!!d.base;el('osmPreset').value=Object.hasOwn(kinds,d.value.tags.amenity)?d.value.tags.amenity:'';el('osmTags').replaceChildren();Object.entries(d.value.tags).forEach(([k,v])=>row(k,v));syncCommon();diff();render();el('osmSelected').focus?.();}
@@ -131,7 +141,7 @@
     function refresh(){
       syncUI();
       el('osmDrafts').replaceChildren();
-      drafts.forEach((d,i)=>{const li=document.createElement('li'),edit=document.createElement('button'),remove=document.createElement('button');edit.type=remove.type='button';edit.className=remove.className='btn btn-ghost';edit.textContent=label(d.value)+(d.base?' · bearbeitet':' · neu');edit.setAttribute('aria-label',label(d.value)+' bearbeiten');edit.addEventListener('click',()=>{if(canSwitch()){cancel();open(d);if(d.value.type==='node')map.flyTo({center:[d.value.lon,d.value.lat],zoom:18});}});remove.textContent='Entfernen';remove.setAttribute('aria-label',label(d.value)+' aus dem Arbeitsstand entfernen');remove.addEventListener('click',()=>{if(!canSwitch())return;drafts.splice(i,1);if(current?.value.id===d.value.id&&current?.value.type===d.value.type){current=null;el('osmForm').hidden=true;}status.textContent='Entwurf entfernt. Mit „Rückgängig“ wiederherstellen.'+persist();refresh();});li.append(edit,remove);el('osmDrafts').append(li);});render();
+      drafts.forEach((d,i)=>{const li=document.createElement('li'),edit=document.createElement('button'),remove=document.createElement('button');edit.type=remove.type='button';edit.className=remove.className='btn btn-ghost';edit.textContent=label(d.value)+(d.base?' · bearbeitet':' · neu');edit.setAttribute('aria-label',label(d.value)+' bearbeiten');edit.addEventListener('click',()=>{if(canSwitch()){cancel();open(d);if(d.value.type==='node')map.flyTo({center:[d.value.lon,d.value.lat],zoom:18});}});remove.textContent='Entfernen';remove.setAttribute('aria-label',label(d.value)+' aus dem Arbeitsstand entfernen');remove.addEventListener('click',()=>{if(!canSwitch())return;drafts.splice(i,1);if(current?.value.id===d.value.id&&current?.value.type===d.value.type){current=null;el('osmForm').hidden=true;}status.textContent='Entwurf entfernt. Mit „Rückgängig“ wiederherstellen.'+persist();refresh();el('osmDraftSummary').focus?.();});li.append(edit,remove);el('osmDrafts').append(li);});render();
     }
     function cancel(){active=false;map.getCanvas().style.cursor='';el('osmNew').setAttribute('aria-pressed','false');syncUI();}
     async function load(type,id){
@@ -173,7 +183,7 @@
         if(!d.base&&!Object.keys(d.value.tags).length)throw Error('Ein neuer Punkt benötigt mindestens einen Tag.');
         if(d.base&&!changes(d.base.tags,d.value.tags).length){if(index>=0)drafts.splice(index,1);status.textContent='Keine Tag-Änderungen; Objekt nicht im Export.';}
         else{if(index<0){if(drafts.length>=100)throw Error('Maximal 100 Entwürfe.');drafts.push(d);}else drafts[index]=d;status.textContent='Änderungen lokal gespeichert. In Schritt 3 kannst du sie prüfen und herunterladen.';}
-        dirty=false;current=null;el('osmForm').hidden=true;status.textContent+=persist();refresh();
+        dirty=false;current=null;el('osmForm').hidden=true;status.textContent+=persist();refresh();el('osmDraftSummary').focus?.();
       }catch(e){status.textContent=userError(e);}finally{syncUI();}
     });
     function download(content,name,type){const url=URL.createObjectURL(new Blob([content],{type})),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}

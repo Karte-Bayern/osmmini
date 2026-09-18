@@ -1132,7 +1132,7 @@ input:-webkit-autofill:focus {
 }
 .section-header.clickable:hover { background: var(--primary-dim); }
 .section-icon { font-size: 16px; width: 20px; text-align: center; flex-shrink: 0; }
-.section-header h3 {
+.section-header h3, .section-header-title {
   font-size: 11.5px;
   font-weight: 700;
   text-transform: uppercase;
@@ -2444,3 +2444,17 @@ body.map-welcome-open { overflow: hidden; }
 @media (max-width: 768px) {
   #osmEditorTools button, #osmEditorTools .setting-input { min-height: 44px; }
 }
+
+/* Decorative SVGs inherit theme colors; controls retain their accessible names. */
+.icon-definitions { position: absolute; width: 0; height: 0; overflow: hidden; pointer-events: none; }
+.ui-icon { display: inline-block; width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vertical-align: middle; flex-shrink: 0; }
+.maps-search > span .ui-icon, .maps-route-cta > span:first-child .ui-icon { width: 24px; height: 24px; }
+.maps-layers .ui-icon { width: 30px; height: 30px; }
+.btn-collapse .ui-icon { width: 16px; height: 16px; transition: transform var(--dur) var(--ease); }
+.btn-collapse[aria-expanded="true"] .ui-icon { transform: rotate(90deg); }
+button.section-header { width: 100%; border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; min-height: 40px; }
+button.section-header .section-header-title { text-align: left; }
+.maps-shell :is(button, a, input, select, textarea, summary, [tabindex]):focus-visible { outline: 3px solid var(--primary); outline-offset: 3px; }
+#osmEditorTools [aria-invalid="true"] { border-color: #dc2626; box-shadow: inset 0 0 0 1px #dc2626; }
+@media (forced-colors: active) { .ui-icon { stroke: ButtonText; } #osmEditorTools [aria-invalid="true"] { outline: 2px dashed Mark; } }
+@media (prefers-reduced-motion: reduce) { .btn-collapse .ui-icon { transition: none; } }

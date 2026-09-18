@@ -1370,6 +1370,7 @@ function initTheme() {
 
 function updateThemeButton() {
   const isDark = !document.documentElement.classList.contains('light-mode');
+  document.getElementById('themeToggle').setAttribute('aria-pressed', String(isDark));
   const moon = document.getElementById('themeIconMoon');
   const sun  = document.getElementById('themeIconSun');
   if (moon) moon.style.display = isDark ? 'block' : 'none';
@@ -3017,6 +3018,7 @@ function syncRouteObjectiveToggle() {
   const current = document.getElementById('objective')?.value || 'distance';
   document.querySelectorAll('.route-objective-btn').forEach((btn) => {
     btn.classList.toggle('is-active', btn.dataset.objective === current);
+    btn.setAttribute('aria-pressed', String(btn.dataset.objective === current));
   });
 }
 document.getElementById('routeObjectiveToggle')?.addEventListener('click', (ev) => {
@@ -3613,7 +3615,6 @@ function openSettingsSection(headerID, contentID, storageKey) {
   settingsCardEl?.classList.remove('collapsed');
   if (settingsToggleEl) {
     settingsToggleEl.setAttribute('aria-expanded', 'true');
-    settingsToggleEl.textContent = '‹';
   }
   try { localStorage.setItem('settingsOpen', '1'); } catch (_) {}
 
@@ -3621,6 +3622,7 @@ function openSettingsSection(headerID, contentID, storageKey) {
   const content = document.getElementById(contentID);
   if (content) content.style.display = 'grid';
   header?.closest('.settings-section')?.classList.add('expanded');
+  header?.setAttribute('aria-expanded', 'true');
   try { localStorage.setItem(storageKey, '1'); } catch (_) {}
 }
 
@@ -4565,8 +4567,8 @@ async function loadTerritoryLayers() {
   if (document.getElementById('territoryShowOnMap')?.checked) void setTerritoryOverlayVisible(true);
 }
 
-// Makes an entire card header act as the collapse/expand toggle (click or
-// Enter/Space), while leaving the dedicated chevron button's own click
+// Pointer clicks on the card header toggle it; keyboard activation belongs
+// to its single native button, leaving that button's own click
 // handling untouched. Shared so every sidebar card (AI, Territories,
 // Settings, Shortcuts) behaves the same way instead of only the AI card's
 // header being fully clickable.
@@ -4576,11 +4578,19 @@ function wireCollapsibleHeader(headerEl, toggleBtnEl, toggleFn) {
     if (toggleBtnEl && (e.target === toggleBtnEl || toggleBtnEl.contains(e.target))) return;
     toggleFn();
   });
-  headerEl.addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter' && e.key !== ' ') return;
-    e.preventDefault();
-    toggleFn();
-  });
+}
+
+const operationsToggle = document.getElementById('operationsToggle');
+const operationsBody = document.getElementById('operationsBody');
+if (operationsToggle && operationsBody) {
+  const toggleOperations = () => {
+    const open = operationsBody.style.display === 'none';
+    operationsBody.style.display = open ? 'block' : 'none';
+    operationsToggle.setAttribute('aria-expanded', String(open));
+    document.getElementById('operationsCard')?.classList.toggle('collapsed', !open);
+  };
+  operationsToggle.addEventListener('click', toggleOperations);
+  wireCollapsibleHeader(document.getElementById('operationsCardHeader'), operationsToggle, toggleOperations);
 }
 
 // Territories card collapse/expand (same pattern as the settings/AI cards)
@@ -4593,8 +4603,6 @@ if (territoryToggleEl && territoryBodyEl && territoryCardEl) {
     territoryBodyEl.style.display = open ? 'block' : 'none';
     territoryCardEl.classList.toggle('collapsed', !open);
     territoryToggleEl.setAttribute('aria-expanded', open ? 'true' : 'false');
-    territoryCardHeaderEl?.setAttribute('aria-expanded', open ? 'true' : 'false');
-    territoryToggleEl.textContent = open ? '‹' : '›';
     localStorage.setItem('territoryOpen', open ? '1' : '0');
   };
   territoryToggleEl.addEventListener('click', () => setTerritoryOpen(territoryBodyEl.style.display === 'none'));
@@ -5061,6 +5069,7 @@ document.getElementById('toggleApiKeyVis')?.addEventListener('click', () => {
   if (!inp) return;
   const show = inp.type === 'password';
   inp.type = show ? 'text' : 'password';
+  document.getElementById('toggleApiKeyVis').setAttribute('aria-pressed', String(show));
   if (eyeOpen)   eyeOpen.style.display   = show ? 'none' : 'block';
   if (eyeClosed) eyeClosed.style.display = show ? 'block' : 'none';
 });
@@ -5074,8 +5083,6 @@ function setSettingsOpen(open){
   settingsBody.style.display = open ? 'block' : 'none';
   settingsCard.classList.toggle('collapsed', !open);
   settingsToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-  settingsCardHeaderEl?.setAttribute('aria-expanded', open ? 'true' : 'false');
-  settingsToggle.textContent = open ? '‹' : '›';
   localStorage.setItem('settingsOpen', open ? '1' : '0');
 }
 settingsToggle.addEventListener('click', ()=>{ setSettingsOpen(settingsBody.style.display==='none'); });
@@ -5093,8 +5100,6 @@ if (helpToggle) {
     helpBody.style.display = open ? 'block' : 'none';
     helpCard.classList.toggle('collapsed', !open);
     helpToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-    helpCardHeaderEl?.setAttribute('aria-expanded', open ? 'true' : 'false');
-    helpToggle.textContent = open ? '‹' : '›';
     localStorage.setItem('helpOpen', open ? '1' : '0');
   }
   helpToggle.addEventListener('click', ()=>{ setHelpOpen(helpBody.style.display==='none'); });
@@ -5112,6 +5117,7 @@ function setupCollapsibleSection(headerId, contentId, storageKey) {
   function setOpen(open) {
     content.style.display = open ? 'grid' : 'none';
     section?.classList.toggle('expanded', open);
+    header.setAttribute('aria-expanded', String(open));
     localStorage.setItem(storageKey, open ? '1' : '0');
   }
   
@@ -5253,8 +5259,6 @@ if (aiToggle) {
     aiBody.style.display = open ? 'block' : 'none';
     aiCard.classList.toggle('collapsed', !open);
     aiToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-    if (aiCardHeader) aiCardHeader.setAttribute('aria-expanded', open ? 'true' : 'false');
-    aiToggle.textContent = open ? '‹' : '›';
     localStorage.setItem('aiOpen', open ? '1' : '0');
     if (open && !aiCard.dataset.checked) {
       aiCard.dataset.checked = '1';

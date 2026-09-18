@@ -87,12 +87,21 @@ test('network loading disables conflicting controls and restores them after fail
  const originalFetch=global.fetch;global.fetch=()=>new Promise((_,r)=>reject=r);
  try{
    document.getElementById('osmType').value='node';document.getElementById('osmID').value='42';const request=e.osmLoad.click();
-   assert.equal(e.osmNew.disabled,true);assert.equal(e.osmFormFields.disabled,true);assert.equal(e.osmEditorTools.attrs['aria-busy'],'true');
+   assert.equal(e.osmNew.disabled,true);assert.equal(e.osmFormFields.disabled,true);assert.equal(e.osmFormFields.attrs['aria-busy'],'true');
    reject(Error('Offline'));await request;
-   assert.equal(e.osmNew.disabled,false);assert.equal(e.osmFormFields.disabled,false);assert.equal(e.osmEditorTools.attrs['aria-busy'],'false');
+   assert.equal(e.osmNew.disabled,false);assert.equal(e.osmFormFields.disabled,false);assert.equal(e.osmFormFields.attrs['aria-busy'],'false');
  }finally{global.fetch=originalFetch;}
 });
 test('discarding an unsaved point clears its preview and returns focus to selection',()=>{
  const h=editorHarness(),e=h.es;e.osmNew.click();h.editor.addPoint({lngLat:{lat:48,lng:12}});
  assert.equal(h.data().features.length,1);e.osmDiscard.click();assert.equal(h.data().features.length,0);assert.equal(e.osmForm.hidden,true);assert.equal(e.osmNearby.focused,true);
+});
+test('validation names invalid fields, updates renamed tag labels and restores focus after removal',()=>{
+ const h=editorHarness(),e=h.es;e.osmNew.click();h.editor.addPoint({lngLat:{lat:48,lng:12}});
+ h.input('osmName','x'.repeat(256));assert.equal(e.osmName.attrs['aria-invalid'],'true');
+ const row=e.osmTags.children[0];assert.equal(row.children[1].attrs['aria-invalid'],'true');assert.equal(row.children[1].attrs['aria-describedby'],'osmValidation');
+ h.input('osmName','Bank');assert.equal(e.osmName.attrs['aria-invalid'],'false');
+ row.children[0].value='operator';e.osmTags.listeners.input();assert.equal(row.children[2].attrs['aria-label'],'operator entfernen');
+ row.children[2].click();assert.equal(e.osmAddTag.focused,true);
+ h.input('osmName','Bank');e.osmSave.click();assert.equal(e.osmDraftSummary.focused,true);
 });

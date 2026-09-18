@@ -24,15 +24,16 @@
     </style>
   </head>
   <body>
+    <svg class="icon-definitions" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg"><defs><symbol id="icon-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></symbol><symbol id="icon-arrow" viewBox="0 0 24 24"><path d="M4 12h16m-6-6 6 6-6 6"/></symbol><symbol id="icon-route" viewBox="0 0 24 24"><path d="M7 20V9a3 3 0 0 1 3-3h10m-5-5 5 5-5 5"/></symbol><symbol id="icon-location" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8"/><path d="M12 1v3m0 16v3M1 12h3m16 0h3"/></symbol><symbol id="icon-layers" viewBox="0 0 24 24"><path d="m12 3 10 6-10 6L2 9ZM2 13l10 6 10-6M2 17l10 6 10-6"/></symbol><symbol id="icon-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol><symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol><symbol id="icon-map" viewBox="0 0 24 24"><path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3Zm6-3v15m6-12v15"/></symbol><symbol id="icon-box" viewBox="0 0 24 24"><path d="m3 7 9-4 9 4-9 4ZM3 7v10l9 4 9-4V7m-9 4v10"/></symbol></defs></svg>
     <div id="pageSpinner" class="spinner-page"></div>
     <div class="app maps-shell" data-view="explore" style="opacity:0;transition:opacity 0.25s ease;">
 
       <nav class="maps-rail" aria-label="Hauptnavigation">
         <a class="maps-brand" href="/" aria-label="OSMmini Startseite">m<span>•</span></a>
-        <button type="button" data-map-view="explore" aria-pressed="true"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m16 8-2.5 5.5L8 16l2.5-5.5Z"/></svg></span>Entdecken</button>
-        <button type="button" data-map-view="route" aria-pressed="false"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 20V9a3 3 0 0 1 3-3h10m-5-5 5 5-5 5"/></svg></span>Route</button>
-        <button type="button" data-map-view="assistant" aria-pressed="false"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 2.8 6.2L21 12l-6.2 2.8L12 21l-2.8-6.2L3 12l6.2-2.8Z"/></svg></span>Assistent</button>
-        <button type="button" data-map-view="tools" aria-pressed="false"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="9" cy="18" r="2"/></svg></span>Werkzeuge</button>
+        <button type="button" data-map-view="explore" aria-pressed="true"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="m16 8-2.5 5.5L8 16l2.5-5.5Z"/></svg></span>Entdecken</button>
+        <button type="button" data-map-view="route" aria-pressed="false"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M7 20V9a3 3 0 0 1 3-3h10m-5-5 5 5-5 5"/></svg></span>Route</button>
+        <button type="button" data-map-view="assistant" aria-pressed="false"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m12 3 2.8 6.2L21 12l-6.2 2.8L12 21l-2.8-6.2L3 12l6.2-2.8Z"/></svg></span>Assistent</button>
+        <button type="button" data-map-view="tools" aria-pressed="false"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="9" cy="18" r="2"/></svg></span>Werkzeuge</button>
         <div class="maps-rail-footer">OSM<br>mini</div>
       </nav>
       <aside class="sidebar" aria-label="Routenplanung und Werkzeuge">
@@ -45,10 +46,10 @@
             </div>
           </div>
         <form id="placeSearchForm" class="maps-search" role="search">
-          <span aria-hidden="true">⌕</span>
+          <span aria-hidden="true"><svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-search"/></svg></span>
           <input id="placeSearch" type="search" autocomplete="off" placeholder="Ort oder Adresse suchen" aria-label="Ort oder Adresse suchen" />
-          <button type="submit" aria-label="Suchen" title="Suchen">→</button>
-          <button type="button" data-map-view="route" aria-label="Routenplaner öffnen" title="Routenplaner öffnen">↱</button>
+          <button type="submit" aria-label="Suchen" title="Suchen"><svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-arrow"/></svg></button>
+          <button type="button" data-map-view="route" aria-label="Routenplaner öffnen" title="Routenplaner öffnen"><svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-route"/></svg></button>
         </form>
         </div>
         <div id="mapsPanelContent" class="maps-panel-content">
@@ -56,16 +57,16 @@
 
         <section class="maps-explore" aria-label="Orte entdecken">
           <div class="maps-intro"><span class="maps-eyebrow">DEINE KARTE. DEIN WEG.</span><h2>Was liegt vor dir?</h2><p>Finde einen Ort. Entdecke die Umgebung.<br>Und mach dich auf den Weg.</p></div>
-          <div class="maps-local-note"><span aria-hidden="true">⌖</span><div><strong>In deiner Region unterwegs</strong><p>Adressen und Orte aus deiner geladenen OSM-Region.</p></div></div>
+          <div class="maps-local-note"><span aria-hidden="true"><svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-location"/></svg></span><div><strong>In deiner Region unterwegs</strong><p>Adressen und Orte aus deiner geladenen OSM-Region.</p></div></div>
           <div class="maps-results-heading"><h3 id="placeResultsTitle">Orte entdecken</h3><button id="clearPlaces" type="button" hidden>Zurücksetzen</button></div>
           <p id="placeSearchStatus" role="status" aria-live="polite">Suche nach einem Ort oder wähle eine Kategorie auf der Karte.</p>
           <div id="placeResults" class="maps-results"></div>
-          <button class="maps-route-cta" type="button" data-map-view="route"><span aria-hidden="true">↱</span><span><strong>Deine nächste Route</strong><small>Start, Ziel und Zwischenstopps planen</small></span><span aria-hidden="true">→</span></button>
+          <button class="maps-route-cta" type="button" data-map-view="route"><span aria-hidden="true"><svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-route"/></svg></span><span><strong>Deine nächste Route</strong><small>Start, Ziel und Zwischenstopps planen</small></span><span aria-hidden="true"><svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-arrow"/></svg></span></button>
         </section>
         <!-- ── Header ── -->
         <div class="header">
           <div class="logo">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
               <circle cx="12" cy="12" r="10"/>
               <polyline points="12 8 8 12 12 16"/>
               <line x1="16" y1="12" x2="8" y2="12"/>
@@ -74,11 +75,11 @@
           </div>
           <div class="header-actions">
             <button id="useLocationBtn" class="btn-icon" title="Meinen Standort verwenden" aria-label="Standort verwenden">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="9" opacity=".25"/></svg>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="9" opacity=".25"/></svg>
             </button>
-            <button id="themeToggle" class="btn-icon" title="Design wechseln" aria-label="Theme wechseln">
-              <svg id="themeIconMoon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
-              <svg id="themeIconSun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="display:none"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+            <button id="themeToggle" class="btn-icon" title="Design wechseln" aria-label="Dunkles Design" aria-pressed="false">
+              <svg id="themeIconMoon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
+              <svg id="themeIconSun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="display:none" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
             </button>
           </div>
         </div>
@@ -108,8 +109,8 @@
             <!-- Connector + swap -->
             <div class="route-connector-row">
               <div class="route-connector-line"></div>
-              <button id="swapFromTo" class="btn-swap" title="Start und Ziel tauschen" aria-label="Tauschen">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/><polyline points="5 12 12 5 19 12" style="transform:rotate(180deg);transform-origin:50% 50%"/></svg>
+              <button id="swapFromTo" class="btn-swap" title="Start und Ziel tauschen" aria-label="Start und Ziel tauschen">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/><polyline points="5 12 12 5 19 12" style="transform:rotate(180deg);transform-origin:50% 50%"/></svg>
               </button>
             </div>
 
@@ -128,7 +129,7 @@
 
           <!-- Add waypoint -->
           <button id="addWaypoint" class="btn-add-wp">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             Zwischenstopp
           </button>
 
@@ -142,11 +143,11 @@
           <!-- Compute row -->
           <div class="compute-row">
             <button id="go" class="btn btn-primary">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polygon points="5 3 19 12 5 21 5 3"/></svg>
               Route berechnen
             </button>
-            <button id="clear" class="btn btn-ghost" title="Zurücksetzen" aria-label="Reset">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.5"/></svg>
+            <button id="clear" class="btn btn-ghost" title="Zurücksetzen" aria-label="Route zurücksetzen">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.5"/></svg>
             </button>
           </div>
 
@@ -160,15 +161,15 @@
           <div id="routeDetails" class="route-details" style="display:none">
             <div class="route-stats">
               <div class="stat-pill">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
                 <span id="detailDistance">—</span>
               </div>
               <div class="stat-pill">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                 <span id="detailDuration">—</span>
               </div>
               <div class="stat-pill">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
                 <span id="detailETA">—</span>
               </div>
               <div class="stat-pill stat-pill-engine">
@@ -184,15 +185,15 @@
           <!-- Route action buttons -->
           <div class="route-actions" id="routeActions" style="display:none">
             <button id="zoomToRoute" class="btn btn-action" title="Route einpassen">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
               Einpassen
             </button>
             <button id="clearRoute" class="btn btn-action" title="Route löschen">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
               Löschen
             </button>
             <button id="exportRoute" class="btn btn-action" title="Route exportieren">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
               Export
             </button>
           </div>
@@ -200,11 +201,11 @@
           <!-- External links -->
           <div class="external-links">
             <a id="gmaps" class="link-ext" href="#" target="_blank" rel="noopener" style="display:none">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
               Google Maps
             </a>
             <a id="amaps" class="link-ext" href="#" target="_blank" rel="noopener" style="display:none">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
               Apple Maps
             </a>
           </div>
@@ -222,13 +223,13 @@
 
         <nav class="sidebar-quick-actions" aria-label="Schnellzugriff">
           <button type="button" class="sidebar-quick-action" data-sidebar-open="map">
-            <span aria-hidden="true">🗺️</span><span>Karte</span>
+            <span aria-hidden="true"><svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-map"/></svg></span><span>Karte</span>
           </button>
           <button type="button" class="sidebar-quick-action" data-sidebar-open="offline">
-            <span aria-hidden="true">📦</span><span>Offline</span>
+            <span aria-hidden="true"><svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-box"/></svg></span><span>Offline</span>
           </button>
           <button type="button" class="sidebar-quick-action" data-sidebar-open="territories">
-            <span aria-hidden="true">⌑</span><span>Gebiete</span>
+            <span aria-hidden="true"><svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-map"/></svg></span><span>Gebiete</span>
           </button>
         </nav>
 
@@ -254,20 +255,20 @@
           <p id="osmEditorStatus" role="status" aria-live="polite">Beginne mit „Orte in der Nähe finden“ oder „Neuen Ort eintragen“.</p>
           <section id="osmForm" class="osm-step" hidden aria-labelledby="osmSelected">
             <h3>2. Angaben bearbeiten</h3><h4 id="osmSelected" tabindex="-1"></h4><p id="osmObjectMeta" class="settings-hint"></p>
-            <p id="osmEditState" class="osm-edit-state" role="status"></p>
-            <fieldset id="osmFormFields">
+            <p id="osmEditState" class="osm-edit-state"></p>
+            <fieldset id="osmFormFields" aria-label="Angaben zum ausgewählten Ort">
               <div id="osmPresetWrap"><label for="osmPreset">Was möchtest du eintragen?</label><div class="gis-actions"><select id="osmPreset" class="setting-input"><option value="" disabled>Art auswählen …</option><option value="bench">Sitzbank</option><option value="drinking_water">Trinkwasserstelle</option><option value="bicycle_parking">Fahrradparkplatz</option><option value="cafe">Café</option></select></div><p class="settings-hint">Weitere Arten kannst du unter „Alle Eigenschaften“ eintragen.</p></div>
               <label for="osmName">Name</label><input id="osmName" class="setting-input" placeholder="Nur falls der Ort einen eigenen Namen hat"/>
               <label for="osmWebsite">Website</label><input id="osmWebsite" class="setting-input" type="url" placeholder="https://…"/>
               <label for="osmHours">Öffnungszeiten</label><input id="osmHours" class="setting-input" placeholder="z. B. Mo-Fr 09:00-18:00" aria-describedby="osmHoursHint"/><p id="osmHoursHint" class="settings-hint">OSM-Schreibweise verwenden. Unbekannte Angaben frei lassen.</p>
               <details id="osmAdvancedTags" class="osm-advanced"><summary>Alle Eigenschaften (OSM-Tags)</summary><p class="settings-hint">Tags sind Schlüssel und Werte, etwa amenity = bench für eine Sitzbank. Entfernen löscht die Eigenschaft aus dem Entwurf.</p><div class="osm-tag-head" aria-hidden="true"><span>Schlüssel</span><span>Wert</span></div><div id="osmTags"></div><button id="osmAddTag" class="btn btn-ghost" type="button">Eigenschaft hinzufügen</button></details>
               <h4>Diese Angaben ändern sich</h4><ul id="osmDiff" class="osm-editor-list"></ul>
-              <p id="osmValidation" role="alert"></p>
+              <p id="osmValidation" role="alert" aria-atomic="true"></p>
               <div class="gis-actions osm-form-actions"><button id="osmSave" class="btn btn-primary" type="button">Änderungen lokal speichern</button><button id="osmDiscard" class="btn btn-ghost" type="button">Bearbeitung schließen</button></div>
             </fieldset>
           </section>
           <section class="osm-step" aria-labelledby="osmStepExport">
-            <h3 id="osmStepExport">3. Arbeitsstand prüfen &amp; exportieren</h3><p id="osmDraftSummary" class="settings-hint"></p>
+            <h3 id="osmStepExport">3. Arbeitsstand prüfen &amp; exportieren</h3><p id="osmDraftSummary" tabindex="-1" class="settings-hint"></p>
             <div class="gis-actions"><button id="osmUndo" class="btn btn-ghost" type="button" disabled>Rückgängig</button><button id="osmRedo" class="btn btn-ghost" type="button" disabled>Wiederholen</button></div><p class="settings-hint">Rückgängig bezieht sich auf gespeicherte Entwurfsänderungen in dieser Sitzung.</p><ul id="osmDrafts" class="osm-editor-list"></ul>
             <button id="osmCheck" class="btn btn-ghost" type="button" disabled>Mit aktuellem OSM-Stand vergleichen</button><p id="osmCheckState" class="settings-hint"></p>
             <button id="osmExport" class="btn btn-primary" type="button" disabled>Änderungsdatei herunterladen (.osc)</button><p class="settings-hint">Zum Prüfen und späteren Veröffentlichen in einem OSM-Editor. Der Download veröffentlicht noch nichts.</p>
@@ -293,12 +294,12 @@
         <details class="card gis-tools" id="mapPostTools">
           <summary>Kartenbeitrag</summary>
           <p class="settings-hint">Eine Ankündigung mit Kartenausschnitt gestalten. Vorschau, PNG und Begleittext bleiben lokal bis du sie selbst teilst.</p>
-          <label for="postTitle">Überschrift</label><input id="postTitle" class="setting-input" maxlength="80" placeholder="z. B. Neue Radverbindung"/>
+          <label for="postTitle">Überschrift</label><input id="postTitle" aria-required="true" class="setting-input" maxlength="80" placeholder="z. B. Neue Radverbindung"/>
           <label for="postDescription">Kurztext</label><textarea id="postDescription" class="setting-input" maxlength="180" rows="3" placeholder="Was ändert sich? Was ist zu beachten?"></textarea>
           <label for="postLocation">Ortsangabe</label><input id="postLocation" class="setting-input" maxlength="70" placeholder="Straße, Platz oder Treffpunkt"/>
           <label for="postDate">Termin / Zeitraum</label><input id="postDate" class="setting-input" maxlength="60" placeholder="z. B. 12. Oktober, 10–16 Uhr"/>
           <label for="postLink">Informationslink im Begleittext</label><input id="postLink" class="setting-input" type="url" maxlength="500" placeholder="https://…"/>
-          <label for="postAlt">Bildbeschreibung</label><textarea id="postAlt" class="setting-input" maxlength="600" rows="3" placeholder="Beschreibe Ort, Markierung und relevante Karteninhalte für Menschen, die das Bild nicht sehen."></textarea>
+          <label for="postAlt">Bildbeschreibung</label><textarea id="postAlt" aria-required="true" class="setting-input" maxlength="600" rows="3" placeholder="Beschreibe Ort, Markierung und relevante Karteninhalte für Menschen, die das Bild nicht sehen."></textarea>
           <label for="postFormat">Bildformat</label><select id="postFormat" class="setting-input"><option value="square">Quadrat · 1080 × 1080</option><option value="landscape">Querformat · 1200 × 630</option><option value="portrait">Hochformat · 1080 × 1350</option></select>
           <div class="gis-actions"><button id="postPin" type="button" class="btn btn-ghost">Kartenmitte markieren</button><button id="postUnpin" type="button" class="btn btn-ghost">Markierung entfernen</button><button id="postGenerate" type="button" class="btn btn-primary">Vorschau erstellen</button></div>
           <p id="postStatus" role="status" aria-live="polite">Ausschnitt und Texte einstellen, dann Vorschau erstellen.</p>
@@ -334,14 +335,14 @@
         </details>
         <!-- ── AI Assistant card ── -->
         <section class="card ai-card collapsed" id="aiCard">
-          <div class="card-header" id="aiCardHeader" tabindex="0" title="KI-Assistent ein-/ausklappen">
+          <div class="card-header" id="aiCardHeader" title="KI-Assistent ein-/ausklappen">
             <div class="card-header-left">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9h6M9 12h6M9 15h4"/></svg>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9h6M9 12h6M9 15h4"/></svg>
               <h2>KI-Assistent</h2>
             </div>
             <div style="display:flex;align-items:center;gap:6px">
               <span id="aiStatusBadge" class="status-badge" style="display:none"></span>
-              <button id="aiToggle" class="btn-collapse" aria-expanded="false" title="Ein-/ausklappen" aria-label="KI-Assistent ein-/ausklappen">›</button>
+              <button id="aiToggle" type="button" class="btn-collapse" aria-expanded="false" aria-controls="aiBody" aria-label="KI-Assistent ein- oder ausklappen"><svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-chevron"/></svg></button>
             </div>
           </div>
           <div class="card-body" id="aiBody" style="display:none">
@@ -359,7 +360,7 @@
             <div class="ai-toolbar">
               <button id="aiStop" type="button" class="btn-ai-clear" hidden>Abbrechen</button>
               <button id="aiClearChat" class="btn-ai-clear" title="Chatverlauf löschen" aria-label="Chatverlauf löschen">
-                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
                 Chat löschen
               </button>
             </div>
@@ -367,7 +368,7 @@
             <div class="ai-input-row">
               <textarea id="aiPrompt" rows="3" placeholder="Frag nach Orten, Routen oder Zeichnungen …" autocomplete="off" spellcheck="true" aria-label="KI-Frage eingeben" aria-describedby="aiInputHint"></textarea>
               <button id="aiSend" class="btn-send" disabled title="Senden" aria-label="Nachricht senden">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
               </button>
             </div>
             <p id="aiInputHint" class="ai-input-hint">Enter zum Senden · Shift + Enter für eine neue Zeile</p>
@@ -376,14 +377,14 @@
 
         <!-- ── Territories card ── -->
         <section class="card territory-card collapsed" id="territoryCard">
-          <div class="card-header" id="territoryCardHeader" tabindex="0" title="Gebiete ein-/ausklappen">
+          <div class="card-header" id="territoryCardHeader" title="Gebiete ein-/ausklappen">
             <div class="card-header-left">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"/><line x1="9" y1="3" x2="9" y2="18"/><line x1="15" y1="6" x2="15" y2="21"/></svg>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"/><line x1="9" y1="3" x2="9" y2="18"/><line x1="15" y1="6" x2="15" y2="21"/></svg>
               <h2>Gebiete</h2>
             </div>
             <div style="display:flex;align-items:center;gap:6px">
               <span id="territoryStatusBadge" class="status-badge" style="display:none"></span>
-              <button id="territoryToggle" class="btn-collapse" aria-expanded="false" title="Ein-/ausklappen" aria-label="Gebiete ein-/ausklappen">›</button>
+              <button id="territoryToggle" type="button" class="btn-collapse" aria-expanded="false" aria-controls="territoryBody" aria-label="Gebiete ein- oder ausklappen"><svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-chevron"/></svg></button>
             </div>
           </div>
           <div class="card-body" id="territoryBody" style="display:none">
@@ -427,12 +428,12 @@
 
         <!-- ── Operations log card ── -->
         <section class="card operations-card collapsed" id="operationsCard">
-          <div class="card-header" id="operationsCardHeader" tabindex="0" title="Zustellung und Wartung ein-/ausklappen">
+          <div class="card-header" id="operationsCardHeader" title="Zustellung und Wartung ein-/ausklappen">
             <div class="card-header-left">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
               <h2>Zustellung &amp; Wartung</h2>
             </div>
-            <button id="operationsToggle" class="btn-collapse" aria-expanded="false">›</button>
+            <button id="operationsToggle" type="button" class="btn-collapse" aria-expanded="false" aria-controls="operationsBody" aria-label="Zustellung und Wartung ein- oder ausklappen"><svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-chevron"/></svg></button>
           </div>
           <div class="card-body" id="operationsBody" style="display:none">
             <p id="operationsDeployment" class="operations-status">Betriebsmodus wird geprüft …</p>
@@ -502,18 +503,18 @@
 
         <!-- ── Settings card ── -->
         <section class="card settings-card collapsed" id="settingsCard">
-          <div class="card-header" id="settingsCardHeader" tabindex="0" title="Einstellungen ein-/ausklappen">
+          <div class="card-header" id="settingsCardHeader" title="Einstellungen ein-/ausklappen">
             <div class="card-header-left">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93l-1.41 1.41M4.93 19.07l-1.41 1.41M20 12h-2M6 12H4M19.07 19.07l-1.41-1.41M4.93 4.93l1.41 1.41M12 20v-2M12 6V4"/></svg>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93l-1.41 1.41M4.93 19.07l-1.41 1.41M20 12h-2M6 12H4M19.07 19.07l-1.41-1.41M4.93 4.93l1.41 1.41M12 20v-2M12 6V4"/></svg>
               <h2>Einstellungen</h2>
             </div>
-            <button id="settingsToggle" class="btn-collapse" aria-expanded="false">›</button>
+            <button id="settingsToggle" type="button" class="btn-collapse" aria-expanded="false" aria-controls="settingsBody" aria-label="Einstellungen ein- oder ausklappen"><svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-chevron"/></svg></button>
           </div>
           <div class="card-body" id="settingsBody" style="display:none">
 
             <div class="settings-section use-case-section" hidden>
               <div class="section-header">
-                <span class="section-icon">🎯</span>
+                <span class="section-icon" aria-hidden="true">🎯</span>
                 <h3>Einsatzbereich</h3>
               </div>
               <p class="settings-hint">Wählt passende Startwerte. Alle darunterliegenden Optionen können danach weiter angepasst werden.</p>
@@ -527,7 +528,7 @@
 
             <div class="settings-section">
               <div class="section-header">
-                <span class="section-icon">🚗</span>
+                <span class="section-icon" aria-hidden="true">🚗</span>
                 <h3>Routing</h3>
               </div>
               <div class="settings-grid">
@@ -555,7 +556,7 @@
             </div>
 
             <div class="settings-section">
-              <div class="section-header"><span class="section-icon">🗺️</span><h3>Trip-Optionen</h3></div>
+              <div class="section-header"><span class="section-icon" aria-hidden="true">🗺️</span><h3>Trip-Optionen</h3></div>
               <label class="checkbox switch" title="Stopps automatisch optimieren">
                 <input id="optimize" type="checkbox" checked role="switch" aria-checked="true"/>
                 <span>Reihenfolge optimieren</span>
@@ -571,7 +572,7 @@
             </div>
 
             <div id="weights" class="settings-section weights hidden">
-              <div class="section-header"><span class="section-icon">⚖️</span><h3>Abbiegegewichte</h3></div>
+              <div class="section-header"><span class="section-icon" aria-hidden="true">⚖️</span><h3>Abbiegegewichte</h3></div>
               <div class="settings-grid">
                 <div class="setting-item">
                   <label class="setting-label">Linksabbiegen (s)</label>
@@ -593,7 +594,7 @@
             </div>
 
             <div class="settings-section">
-              <div class="section-header"><span class="section-icon">🚒</span><h3>BOS / Einsatzmodus</h3></div>
+              <div class="section-header"><span class="section-icon" aria-hidden="true">🚒</span><h3>BOS / Einsatzmodus</h3></div>
               <label class="checkbox switch">
                 <input id="emergencyMode" type="checkbox" role="switch" aria-checked="false"/>
                 <span>Einsatzmodus (Feuerwehr, Rettung)</span>
@@ -620,10 +621,10 @@
             </div>
 
             <div class="settings-section collapsible" id="mapSection">
-              <div class="section-header clickable" id="mapHeader">
-                <span class="section-icon">🗺️</span><h3>Kartenquelle</h3>
-                <span class="collapse-indicator">›</span>
-              </div>
+              <button type="button" class="section-header clickable" id="mapHeader" aria-expanded="false" aria-controls="mapSettings">
+                <span class="section-icon" aria-hidden="true">🗺️</span><span class="section-header-title">Kartenquelle</span>
+                <span class="collapse-indicator" aria-hidden="true"><svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-chevron"/></svg></span>
+              </button>
               <div id="mapSettings" style="display:none">
                 <div class="tile-source-picker" aria-label="Kartenquelle auswählen">
                   <div class="tile-source-picker-heading">
@@ -684,10 +685,10 @@
             </div>
 
             <div class="settings-section collapsible" id="tinyTilesSection">
-              <div class="section-header clickable" id="tinyTilesHeader">
-                <span class="section-icon">📦</span><h3>Offline-Karte (tinyTiles)</h3>
-                <span class="collapse-indicator">›</span>
-              </div>
+              <button type="button" class="section-header clickable" id="tinyTilesHeader" aria-expanded="false" aria-controls="tinyTilesSettings">
+                <span class="section-icon" aria-hidden="true">📦</span><span class="section-header-title">Offline-Karte (tinyTiles)</span>
+                <span class="collapse-indicator" aria-hidden="true"><svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-chevron"/></svg></span>
+              </button>
               <div id="tinyTilesSettings" style="display:none">
                 <p class="settings-hint">Erzeugt aus der beim Server geladenen OSM-PBF eine lokale Straßen-, Gebäude-, Gewässer- und Landbedeckungskarte. Flüsse, Bäche und Kanäle werden als lokale Vektorebene ergänzt. Während des Builds bleibt Routing verfügbar; der Build benötigt freien lokalen Speicher.</p>
                 <details id="offlineStyleEditor" class="offline-style-editor">
@@ -760,25 +761,25 @@
             </div>
 
             <div class="settings-section collapsible" id="highwaySection">
-              <div class="section-header clickable" id="highwayHeader">
-                <span class="section-icon">🛣️</span><h3>Erlaubte Straßentypen</h3>
-                <span class="collapse-indicator">›</span>
-              </div>
+              <button type="button" class="section-header clickable" id="highwayHeader" aria-expanded="false" aria-controls="allowedHighways">
+                <span class="section-icon" aria-hidden="true">🛣️</span><span class="section-header-title">Erlaubte Straßentypen</span>
+                <span class="collapse-indicator" aria-hidden="true"><svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-chevron"/></svg></span>
+              </button>
               <div id="allowedHighways" class="allowed-highways" style="display:none"></div>
             </div>
 
             <div class="settings-section collapsible" id="speedSection">
-              <div class="section-header clickable" id="speedHeader">
-                <span class="section-icon">🚦</span><h3>Standardgeschwindigkeiten</h3>
-                <span class="collapse-indicator">›</span>
-              </div>
+              <button type="button" class="section-header clickable" id="speedHeader" aria-expanded="false" aria-controls="speedDefaults">
+                <span class="section-icon" aria-hidden="true">🚦</span><span class="section-header-title">Standardgeschwindigkeiten</span>
+                <span class="collapse-indicator" aria-hidden="true"><svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-chevron"/></svg></span>
+              </button>
               <div id="speedDefaults" class="speed-defaults" style="display:none"></div>
             </div>
 
             <!-- Remote API -->
             <div class="settings-section">
               <div class="section-header">
-                <span class="section-icon">🔑</span>
+                <span class="section-icon" aria-hidden="true">🔑</span>
                 <h3>KI-Remote-API</h3>
               </div>
               <p class="settings-hint">Optional. Leer lassen, um nur lokale Modelle zu nutzen.</p>
@@ -787,9 +788,9 @@
                   <label class="setting-label" for="openaiApiKey">API-Key <span class="info-icon" title="Schlüssel eines kompatiblen API-Anbieters">ⓘ</span></label>
                   <div class="api-key-wrap">
                     <input id="openaiApiKey" type="password" class="setting-input" placeholder="sk-…" autocomplete="off" spellcheck="false"/>
-                    <button id="toggleApiKeyVis" class="btn-icon-xs" type="button" title="Anzeigen/Verbergen" aria-label="API-Key anzeigen">
-                      <svg id="eyeOpen" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                      <svg id="eyeClosed" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                    <button id="toggleApiKeyVis" class="btn-icon-xs" type="button" title="Anzeigen/Verbergen" aria-label="API-Key anzeigen" aria-pressed="false" aria-controls="openaiApiKey">
+                      <svg id="eyeOpen" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                      <svg id="eyeClosed" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="display:none" aria-hidden="true" focusable="false"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
                     </button>
                   </div>
                 </div>
@@ -802,7 +803,7 @@
 
             <div class="settings-section">
               <div class="section-header">
-                <span class="section-icon">🔒</span>
+                <span class="section-icon" aria-hidden="true">🔒</span>
                 <h3>Administrationsschutz</h3>
               </div>
               <p class="settings-hint">Speichern ist standardmäßig ohne Token möglich. Nur wenn der Server mit <code>-admin-token</code> gestartet wurde, ist hier der passende Token nötig. Er bleibt nur für diese Browser-Sitzung gespeichert.</p>
@@ -821,12 +822,12 @@
 
         <!-- ── Help card ── -->
         <section class="card help-card collapsed" id="helpCard">
-          <div class="card-header" id="helpCardHeader" tabindex="0" title="Shortcuts ein-/ausklappen">
+          <div class="card-header" id="helpCardHeader" title="Shortcuts ein-/ausklappen">
             <div class="card-header-left">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
               <h2>Shortcuts</h2>
             </div>
-            <button id="helpToggle" class="btn-collapse" aria-expanded="false">›</button>
+            <button id="helpToggle" type="button" class="btn-collapse" aria-expanded="false" aria-controls="helpBody" aria-label="Tastenkürzel ein- oder ausklappen"><svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-chevron"/></svg></button>
           </div>
           <div class="card-body" id="helpBody" style="display:none">
             <div class="shortcut-list">
@@ -851,8 +852,8 @@
           <button type="button" data-place-category="pharmacy"><span aria-hidden="true">✚</span> Apotheken</button>
           <button type="button" data-place-category="hospital"><span aria-hidden="true">♡</span> Krankenhäuser</button>
         </div>
-        <button id="mapsLayers" class="maps-layers" type="button"><span aria-hidden="true">▱</span>Kartenebenen</button>
-        <button id="mapsLocation" class="maps-location" type="button" title="Meinen Standort anzeigen" aria-label="Meinen Standort anzeigen">⌖</button>
+        <button id="mapsLayers" class="maps-layers" type="button"><span aria-hidden="true"><svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-layers"/></svg></span>Kartenebenen</button>
+        <button id="mapsLocation" class="maps-location" type="button" title="Meinen Standort anzeigen" aria-label="Meinen Standort anzeigen"><svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-location"/></svg></button>
         <div id="tileLoadOverlay" class="tile-load-overlay" role="status" aria-live="polite" aria-atomic="true" hidden>
           <div class="tile-load-card">
             <span id="tileLoadIcon" class="tile-load-icon" aria-hidden="true">◌</span>
