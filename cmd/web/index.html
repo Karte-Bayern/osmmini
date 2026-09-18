@@ -41,6 +41,7 @@
           <div class="maps-panel-toolbar">
             <strong id="mapsPanelTitle">Entdecken</strong>
             <div class="maps-panel-controls">
+              <button id="themeToggle" class="btn-icon maps-theme-toggle" title="Design wechseln" aria-label="Dunkles Design" aria-pressed="false"> <svg id="themeIconMoon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg> <svg id="themeIconSun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="display:none" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg> </button>
               <button id="mapsPanelExpand" type="button" aria-pressed="false" aria-controls="mapsPanelContent">Mehr Platz</button>
               <button id="mapsPanelToggle" type="button" aria-expanded="true" aria-controls="mapsPanelContent">Nur Karte</button>
             </div>
@@ -76,10 +77,6 @@
           <div class="header-actions">
             <button id="useLocationBtn" class="btn-icon" title="Meinen Standort verwenden" aria-label="Standort verwenden">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="9" opacity=".25"/></svg>
-            </button>
-            <button id="themeToggle" class="btn-icon" title="Design wechseln" aria-label="Dunkles Design" aria-pressed="false">
-              <svg id="themeIconMoon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
-              <svg id="themeIconSun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="display:none" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
             </button>
           </div>
         </div>
@@ -252,7 +249,7 @@
             </details>
             <p class="settings-hint">Bei der Auswahl eines bestehenden Ortes wird dessen aktueller Stand von OpenStreetMap geladen. Dafür wird die Objekt-ID an OSM gesendet.</p>
           </section>
-          <p id="osmEditorStatus" role="status" aria-live="polite">Beginne mit „Orte in der Nähe finden“ oder „Neuen Ort eintragen“.</p>
+          <p id="osmEditorStatus" tabindex="-1" role="status" aria-live="polite">Beginne mit „Orte in der Nähe finden“ oder „Neuen Ort eintragen“.</p>
           <section id="osmForm" class="osm-step" hidden aria-labelledby="osmSelected">
             <h3>2. Angaben bearbeiten</h3><h4 id="osmSelected" tabindex="-1"></h4><p id="osmObjectMeta" class="settings-hint"></p>
             <p id="osmEditState" class="osm-edit-state"></p>
@@ -832,9 +829,11 @@
           <div class="card-body" id="helpBody" style="display:none">
             <div class="shortcut-list">
               <div class="shortcut-item"><kbd>Cmd/Ctrl+Enter</kbd><span>Route berechnen</span></div>
-              <div class="shortcut-item"><kbd>Esc</kbd><span>Suche schließen</span></div>
-              <div class="shortcut-item"><kbd>↑ ↓</kbd><span>Suche navigieren</span></div>
-              <div class="shortcut-item"><kbd>Rechtsklick</kbd><span>Marker löschen</span></div>
+              <div class="shortcut-item"><kbd>Esc</kbd><span>Suche oder Kontextmenü schließen</span></div>
+              <div class="shortcut-item"><kbd>↑ ↓</kbd><span>Suche oder Kontextmenü navigieren</span></div>
+              <div class="shortcut-item"><kbd>Long-Tap</kbd><span>Kartenaktionen öffnen</span></div>
+              <div class="shortcut-item"><kbd>Shift+F10</kbd><span>Kartenaktionen an der Kartenmitte</span></div>
+              <div class="shortcut-item"><kbd>Rechtsklick</kbd><span>Kartenaktionen öffnen</span></div>
             </div>
           </div>
         </section>
@@ -845,7 +844,7 @@
       </aside>
 
       <div class="map-pane">
-        <main id="map" class="map" aria-label="Interaktive Karte"></main>
+        <main id="map" aria-describedby="mapContextHint" class="map" aria-label="Interaktive Karte"></main>
         <div class="maps-categories" role="group" aria-label="Orte in der Nähe">
           <button type="button" data-place-category="cafe"><span aria-hidden="true">☕</span> Cafés</button>
           <button type="button" data-place-category="supermarket"><span aria-hidden="true">▤</span> Einkaufen</button>
@@ -899,6 +898,8 @@
       </section>
     </div>
 
+    <p id="mapContextHint" class="sr-only">Kartenaktionen mit Rechtsklick oder langem Drücken öffnen. Auf der fokussierten Karte öffnet Umschalt+F10 das Menü an der Kartenmitte.</p>
+    <script src="/static/map-context.js?v={{.Version}}"></script>
     <script src="/static/osm-editor.js?v={{.Version}}"></script>
     <script src="/static/map-post.js?v={{.Version}}"></script>
     <script src="/static/planning.js?v={{.Version}}"></script>

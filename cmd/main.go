@@ -32,7 +32,7 @@ import (
 	osmmini "simonwaldherr.de/go/osmmini"
 )
 
-//go:embed web/index.html web/style.css web/app.js web/ai-ui.js web/offline-style.js web/planning.js web/map-post.js web/osm-editor.js web/static api/openapi.yaml
+//go:embed web/index.html web/style.css web/app.js web/ai-ui.js web/offline-style.js web/planning.js web/map-post.js web/osm-editor.js web/map-context.js web/static api/openapi.yaml
 var embedded embed.FS
 
 const buildVersion = "dev"
@@ -2266,7 +2266,7 @@ func readJSON(w http.ResponseWriter, r *http.Request, dst any, maxBytes int64) e
 // A stable "dev" version otherwise lets browsers reuse CSS/JS from older UIs.
 func webAssetVersion() string {
 	h := sha256.New()
-	for _, name := range []string{"style.css", "app.js", "ai-ui.js", "offline-style.js", "planning.js", "map-post.js", "osm-editor.js"} {
+	for _, name := range []string{"style.css", "app.js", "ai-ui.js", "offline-style.js", "planning.js", "map-post.js", "osm-editor.js", "map-context.js"} {
 		data, err := os.ReadFile(filepath.Join("cmd", "web", name))
 		if err != nil {
 			data, _ = embedded.ReadFile("web/" + name)

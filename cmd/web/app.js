@@ -1517,13 +1517,6 @@ function createStopMarker(id, lat, lon, label, icon) {
     saveCustomMarkers();
     showToast(`Marker ${s.label} verschoben`, 'info', 1500);
   });
-  // MapLibre markers have no built-in contextmenu event (unlike Leaflet's
-  // marker.on('contextmenu', ...)); listen on the underlying DOM element.
-  // Kept as a power-user shortcut alongside the popup's "Löschen" button.
-  marker.getElement().addEventListener('contextmenu', (domEv) => {
-    domEv.preventDefault();
-    deleteStopMarker(id);
-  });
   return s;
 }
 
@@ -2335,18 +2328,7 @@ map.on('click', ev=>{
   if (window.osmEditor?.active) { window.osmEditor.addPoint(ev); return; }
   if (window.planningTools?.active) { window.planningTools.addPoint(ev); return; }
   if (gisMeasureActive) { addGISMeasurePoint(ev); return; }
-  // Marker/popup DOM elements don't stop click propagation to the map by
-  // default, so without this guard every click on an existing marker (a
-  // fire station, hydrant, search result, or another stop) or its popup
-  // buttons would also drop a brand-new stop marker at that spot.
-  const target = ev.originalEvent && ev.originalEvent.target;
-  if (target && target.closest && target.closest('.maplibregl-marker, .maplibregl-popup')) return;
-  const id = 'M'+(stopSeq++);
-  const s = createStopMarker(id, ev.lngLat.lat, ev.lngLat.lng);
-  stops.push(s);
-  renderStopList();
-  saveCustomMarkers();
-  showToast(`Marker ${id} hinzugefügt`, 'success', 1500);
+
 });
 
 restoreCustomMarkers();
@@ -5901,7 +5883,9 @@ window.addEventListener('resize', () => map.setPadding(mapsCameraPadding()));
 document.querySelectorAll('[data-map-view]').forEach(button => {
   button.addEventListener('click', () => {
     setMapsView(button.dataset.mapView);
-    document.getElementById(button.dataset.mapView === 'route' ? 'from' : button.dataset.mapView === 'assistant' ? 'aiPrompt' : 'placeSearch')?.focus();
+    // The Werkzeuge view has its own first action; focusing search there just adds a stray focus ring.
+    const focusTarget = {route: 'from', assistant: 'aiPrompt', explore: 'placeSearch'}[button.dataset.mapView];
+    if (focusTarget) document.getElementById(focusTarget)?.focus();
   });
 });
 document.getElementById('mapsLayers')?.addEventListener('click', () => revealSidebarTool('map'));
@@ -6122,3 +6106,35 @@ window.osmEditor = OSMEditor.create(map, {
   }
 });
 registerMapLayerRehydrate(() => window.osmEditor.render());
+
+// Ordinary clicks pan/select; location actions live in the context menu.
+window.mapContext = MapContext.create(map, [
+  { label: 'Marker hier setzen', run(point) {
+    const id = 'M' + (stopSeq++);
+    stops.push(createStopMarker(id, point.lat, point.lng));
+    renderStopList(); saveCustomMarkers();
+    showToast(`Marker ${id} hinzugefügt`, 'success', 1500);
+  } },
+  ...[['from', 'Route von hier'], ['to', 'Route hierher']].map(([id, label]) => ({label, run(point) {
+    setMapsView('route');
+    const input = document.getElementById(id);
+    setResolvedRoutePoint(input, {lat: point.lat, lon: point.lng});
+    input.dispatchEvent(new Event('routepointchange'));
+    input.focus();
+    const other = document.getElementById(id === 'from' ? 'to' : 'from');
+    if (other.value.trim()) compute();
+  }})),
+  { label: 'Neuen OSM-Ort hier eintragen', run(point) {
+    setMapsView('tools'); document.getElementById('osmEditorTools').open = true;
+    window.osmEditor.startAt(point);
+  } },
+  { label: 'OSM-Orte in der Nähe bearbeiten', run(point) {
+    setMapsView('tools'); document.getElementById('osmEditorTools').open = true;
+    window.osmEditor.findNearby(point);
+  } },
+  { label: 'Hier messen oder planen', run(point) {
+    setMapsView('tools'); map.jumpTo({center: [point.lng, point.lat]});
+    document.querySelector('.planning-tools').open = true;
+    document.getElementById('planKind').focus();
+  } }
+]);

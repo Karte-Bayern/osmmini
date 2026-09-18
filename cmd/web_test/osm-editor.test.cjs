@@ -105,3 +105,7 @@ test('validation names invalid fields, updates renamed tag labels and restores f
  row.children[2].click();assert.equal(e.osmAddTag.focused,true);
  h.input('osmName','Bank');e.osmSave.click();assert.equal(e.osmDraftSummary.focused,true);
 });
+test('context action starts an OSM draft at the selected point without replacing unsaved edits',()=>{
+ const h=editorHarness();h.editor.startAt({lat:48.12,lng:12.34});assert.equal(h.data().features[0].geometry.coordinates[1],48.12);
+ h.input('osmName','Mein Ort');h.editor.startAt({lat:49,lng:13});assert.equal(h.es.osmName.value,'Mein Ort');assert.equal(h.data().features[0].geometry.coordinates[1],48.12);
+});
