@@ -2393,3 +2393,19 @@ body.map-welcome-open { overflow: hidden; }
 
 .maps-shell[data-view="assistant"] .ai-messages:empty { display: none; }
 .maps-shell .maps-explore.has-results .maps-results-heading { margin-top: 8px; }
+
+/* Measurement and sketch planning */
+.planning-tools h3 { font-size: 13px; margin: 18px 0 4px; }
+.planning-items { list-style: none; padding: 0; margin: 12px 0; }
+.planning-items li { padding: 10px 0; border-top: 1px solid var(--border, #64748b44); overflow-wrap: anywhere; }
+.planning-items strong, .planning-items span { display: block; margin-bottom: 5px; }
+.planning-items span { font-size: 12px; line-height: 1.5; }
+.planning-items button { margin-right: 6px; }
+#planBalance { background: #14b8a612; border-left: 3px solid #14b8a6; padding: 10px; border-radius: 4px; }
+#planStatus { min-height: 36px; }
+.planning-tools button:disabled { opacity: .45; cursor: default; }
+
+.post-preview { display: block; width: 100%; height: auto; margin: 12px 0; border: 1px solid #64748b44; border-radius: 8px; }
+.post-preview[hidden], #mapPostTools [hidden] { display: none; }
+#mapPostTools textarea { resize: vertical; }
+#mapPostTools a.btn { text-decoration: none; }

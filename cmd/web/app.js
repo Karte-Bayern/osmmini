@@ -782,7 +782,7 @@ document.getElementById('addFireStationBtn')?.addEventListener('click', () => {
 });
 
 map.on('click', async (ev) => {
-  if (gisMeasureActive) return;
+  if (gisMeasureActive || window.planningTools?.active) return;
   if (!fireStationAddMode) return;
   fireStationAddMode = false;
   const btn = document.getElementById('addFireStationBtn');
@@ -2331,6 +2331,7 @@ async function executeAgentActions(actions, session_id) {
 window.executeAgentActions = executeAgentActions;
 
 map.on('click', ev=>{
+  if (window.planningTools?.active) { window.planningTools.addPoint(ev); return; }
   if (gisMeasureActive) { addGISMeasurePoint(ev); return; }
   // Marker/popup DOM elements don't stop click propagation to the map by
   // default, so without this guard every click on an existing marker (a
@@ -5812,6 +5813,7 @@ function addGISMeasurePoint(event) {
 document.getElementById('gisViewport')?.addEventListener('click', () => queryGISPOIs(false));
 document.getElementById('gisNearby')?.addEventListener('click', () => queryGISPOIs(true));
 document.getElementById('gisMeasure')?.addEventListener('click', event => {
+  window.planningTools?.cancel();
   gisMeasureActive = !gisMeasureActive;
   event.currentTarget.setAttribute('aria-pressed', String(gisMeasureActive));
   event.currentTarget.textContent = gisMeasureActive ? 'Messmodus beenden' : 'Strecke messen';
@@ -5867,6 +5869,7 @@ function mapsCameraPadding() {
 // Map-first navigation keeps the existing route and specialist tools intact.
 function setMapsView(view) {
   if (!['explore', 'route', 'tools', 'assistant'].includes(view)) return;
+  if (view !== 'tools') window.planningTools?.cancel();
   document.querySelector('.maps-shell')?.setAttribute('data-view', view);
   document.getElementById('mapsPanelTitle').textContent = {explore:'Entdecken',route:'Route planen',assistant:'Kartenassistent',tools:'Werkzeuge'}[view];
   setMapsPanelCollapsed(false);
@@ -6085,3 +6088,19 @@ document.addEventListener('keydown', event => {
     document.getElementById('placeSearch').focus();
   }
 });
+
+// Drawing shares the map click handler with routing and GIS measurement.
+window.planningTools = PlanningTools.create(map, {
+  onChange() { window.mapPost?.invalidate(); },
+  padding: mapsCameraPadding,
+  onStart() {
+    if (gisMeasureActive) document.getElementById('gisMeasure').click();
+    fireStationAddMode = false;
+    const button = document.getElementById('addFireStationBtn');
+    if (button) button.textContent = '📍 Feuerwehrhaus manuell hinzufügen (auf Karte klicken)';
+  }
+});
+registerMapLayerRehydrate(() => window.planningTools.render());
+
+window.mapPost = MapPost.create(map);
+registerMapLayerRehydrate(() => window.mapPost.render());

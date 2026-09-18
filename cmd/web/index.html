@@ -235,6 +235,37 @@
         </div>
 
         <div class="sidebar-secondary" aria-label="Weitere Werkzeuge">
+        <details class="card gis-tools planning-tools" open>
+          <summary>Messen &amp; Planen</summary>
+          <p class="settings-hint">Strecken, Bezugsflächen und Gebäudegrundrisse direkt auf der Karte zeichnen.</p>
+          <label for="planKind">Geometrietyp</label>
+          <select id="planKind" class="setting-input"><option value="line">Strecke</option><option value="site">Bezugsfläche</option><option value="building">Gebäudegrundriss</option></select>
+          <label for="planName">Bezeichnung</label>
+          <input id="planName" class="setting-input" maxlength="80" placeholder="z. B. Entwurf A"/>
+          <div id="planFloorsWrap" hidden><label for="planFloors">Geschosse</label><input id="planFloors" class="setting-input" type="number" min="1" max="100" step="1" value="1"/></div>
+          <div class="gis-actions"><button id="planStart" type="button" class="btn btn-primary">Zeichnen</button><button id="planFinish" type="button" class="btn btn-ghost" disabled>Übernehmen</button><button id="planUndo" type="button" class="btn btn-ghost" disabled>Punkt zurück</button><button id="planCancel" type="button" class="btn btn-ghost" disabled>Verwerfen</button></div>
+          <p id="planStatus" role="status" aria-live="polite"></p>
+          <h3>Flächenbilanz</h3><p id="planBalance"></p>
+          <ul id="planItems" class="planning-items" aria-label="Erfasste Geometrien"></ul>
+          <button id="planExport" type="button" class="btn btn-ghost" disabled>Entwurf als GeoJSON</button>
+          <p class="settings-hint">Unverbindliche Entwurfswerte auf einer Erdkugel, keine amtliche Vermessung oder Prüfung von Bauvorgaben. Geschossfläche = Grundriss × Geschosse. Unbebaut bedeutet nicht unversiegelt. Automatische Speicherung nur in diesem Browser; Export enthält übernommene Geometrien.</p>
+        </details>
+        <details class="card gis-tools" id="mapPostTools">
+          <summary>Kartenbeitrag</summary>
+          <p class="settings-hint">Eine Ankündigung mit Kartenausschnitt gestalten. Vorschau, PNG und Begleittext bleiben lokal bis du sie selbst teilst.</p>
+          <label for="postTitle">Überschrift</label><input id="postTitle" class="setting-input" maxlength="80" placeholder="z. B. Neue Radverbindung"/>
+          <label for="postDescription">Kurztext</label><textarea id="postDescription" class="setting-input" maxlength="180" rows="3" placeholder="Was ändert sich? Was ist zu beachten?"></textarea>
+          <label for="postLocation">Ortsangabe</label><input id="postLocation" class="setting-input" maxlength="70" placeholder="Straße, Platz oder Treffpunkt"/>
+          <label for="postDate">Termin / Zeitraum</label><input id="postDate" class="setting-input" maxlength="60" placeholder="z. B. 12. Oktober, 10–16 Uhr"/>
+          <label for="postLink">Informationslink im Begleittext</label><input id="postLink" class="setting-input" type="url" maxlength="500" placeholder="https://…"/>
+          <label for="postAlt">Bildbeschreibung</label><textarea id="postAlt" class="setting-input" maxlength="600" rows="3" placeholder="Beschreibe Ort, Markierung und relevante Karteninhalte für Menschen, die das Bild nicht sehen."></textarea>
+          <label for="postFormat">Bildformat</label><select id="postFormat" class="setting-input"><option value="square">Quadrat · 1080 × 1080</option><option value="landscape">Querformat · 1200 × 630</option><option value="portrait">Hochformat · 1080 × 1350</option></select>
+          <div class="gis-actions"><button id="postPin" type="button" class="btn btn-ghost">Kartenmitte markieren</button><button id="postUnpin" type="button" class="btn btn-ghost">Markierung entfernen</button><button id="postGenerate" type="button" class="btn btn-primary">Vorschau erstellen</button></div>
+          <p id="postStatus" role="status" aria-live="polite">Ausschnitt und Texte einstellen, dann Vorschau erstellen.</p>
+          <img id="postPreview" class="post-preview" alt="" hidden/>
+          <div class="gis-actions"><a id="postPNG" class="btn btn-ghost" download="kartenbeitrag.png" hidden>PNG herunterladen</a><a id="postTXT" class="btn btn-ghost" download="kartenbeitrag.txt" hidden>Begleittext herunterladen</a></div>
+          <p class="settings-hint">Der Export enthält Kartenebenen, Zeichnungen und die rote Ortsmarkierung. Andere interaktive Marker und Popups werden nicht übernommen. Quellenangaben stehen im Bild; Bildbeschreibung und Informationslink im Begleittext. Vor dem Teilen die Vorschau prüfen.</p>
+        </details>
         <details class="card gis-tools">
           <summary>GIS &amp; Geo-Werkzeuge</summary>
           <p class="settings-hint">POIs im Ausschnitt oder um die Kartenmitte suchen. Entfernungen sind Luftlinien.</p>
@@ -827,6 +858,8 @@
       </section>
     </div>
 
+    <script src="/static/map-post.js?v={{.Version}}"></script>
+    <script src="/static/planning.js?v={{.Version}}"></script>
     <script src="/static/ai-ui.js?v={{.Version}}&protocol=2"></script>
     <script src="/static/offline-style.js?v={{.Version}}"></script>
     <script>
