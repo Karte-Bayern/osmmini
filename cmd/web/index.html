@@ -235,7 +235,22 @@
         </div>
 
         <div class="sidebar-secondary" aria-label="Weitere Werkzeuge">
-        <details class="card gis-tools planning-tools" open>
+        <details class="card gis-tools" id="osmEditorTools" open>
+          <summary>OSM-Editor · Entwürfe</summary>
+          <p class="settings-hint">Tags an OSM-Punkten und Wegen bearbeiten oder neue Punkte erfassen. Änderungen bleiben lokal, bis du sie exportierst und selbst veröffentlichst.</p>
+          <div class="gis-actions"><button id="osmNearby" class="btn btn-ghost" type="button">Objekte im Umkreis suchen</button><button id="osmNew" class="btn btn-ghost" type="button" aria-pressed="false">Neuen Punkt setzen</button></div>
+          <label for="osmType">OSM-Objekttyp</label><select id="osmType" class="setting-input"><option value="node">Punkt (node)</option><option value="way">Weg / Fläche (way)</option></select>
+          <label for="osmID">OSM-ID</label><input id="osmID" class="setting-input" inputmode="numeric" placeholder="z. B. 123456"/>
+          <button id="osmLoad" class="btn btn-ghost" type="button">Aktuellen Stand von OSM laden</button>
+          <ul id="osmCandidates" class="osm-editor-list" aria-label="Lokale OSM-Objekte"></ul>
+          <p id="osmEditorStatus" role="status" aria-live="polite">Lokale Objekte suchen oder eine bekannte OSM-ID laden. Das Laden sendet die Objekt-ID an api.openstreetmap.org.</p>
+          <section id="osmForm" hidden><h3 id="osmSelected"></h3><div id="osmTags"></div><button id="osmAddTag" class="btn btn-ghost" type="button">Tag hinzufügen</button><h4>Änderungsvergleich</h4><ul id="osmDiff" class="osm-editor-list"></ul><div class="gis-actions"><button id="osmSave" class="btn btn-primary" type="button">Entwurf übernehmen</button><button id="osmDiscard" class="btn btn-ghost" type="button">Bearbeitung verwerfen</button></div></section>
+          <h3>Übernommene Entwürfe</h3><div class="gis-actions"><button id="osmUndo" class="btn btn-ghost" type="button" disabled>Rückgängig</button><button id="osmRedo" class="btn btn-ghost" type="button" disabled>Wiederholen</button><button id="osmCheck" class="btn btn-ghost" type="button">OSM-Versionen prüfen</button></div><ul id="osmDrafts" class="osm-editor-list"></ul>
+          <div class="gis-actions"><button id="osmExport" class="btn btn-ghost" type="button" disabled>OSM-Änderungsdatei (.osc)</button><button id="osmBackup" class="btn btn-ghost" type="button" disabled>Entwürfe sichern (.json)</button></div>
+          <label for="osmImport">Entwurfsdatei ergänzen (.json)</label><input id="osmImport" type="file" accept=".json,application/json" class="setting-input"/>
+          <p class="settings-hint">Bestehende Geometrien bleiben erhalten. Kein direkter Upload, keine Relationen oder Objektlöschungen. Vor Veröffentlichung Aktualität, Tagging und mögliche Duplikate prüfen. Nur übernommene Entwürfe werden gespeichert und exportiert.</p>
+        </details>
+        <details class="card gis-tools planning-tools">
           <summary>Messen &amp; Planen</summary>
           <p class="settings-hint">Strecken, Bezugsflächen und Gebäudegrundrisse direkt auf der Karte zeichnen.</p>
           <label for="planKind">Geometrietyp</label>
@@ -858,6 +873,7 @@
       </section>
     </div>
 
+    <script src="/static/osm-editor.js?v={{.Version}}"></script>
     <script src="/static/map-post.js?v={{.Version}}"></script>
     <script src="/static/planning.js?v={{.Version}}"></script>
     <script src="/static/ai-ui.js?v={{.Version}}&protocol=2"></script>

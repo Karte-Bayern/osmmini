@@ -2409,3 +2409,13 @@ body.map-welcome-open { overflow: hidden; }
 .post-preview[hidden], #mapPostTools [hidden] { display: none; }
 #mapPostTools textarea { resize: vertical; }
 #mapPostTools a.btn { text-decoration: none; }
+
+.osm-tag-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) 28px; gap: 5px; margin-bottom: 6px; }
+.osm-tag-row input, .osm-tag-row textarea { width: 100%; min-width: 0; box-sizing: border-box; padding: 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--input-bg); color: var(--text); font: inherit; font-size: 12px; }
+.osm-tag-row textarea { resize: vertical; }
+.osm-tag-row button { border: 0; border-radius: 6px; background: var(--input-bg); color: var(--text); cursor: pointer; }
+.osm-editor-list { list-style: none; padding: 0; margin: 8px 0; max-height: 230px; overflow: auto; overflow-wrap: anywhere; font-size: 12px; }
+.osm-editor-list li { padding: 6px 0; border-bottom: 1px solid var(--border); }
+.osm-editor-list button { white-space: normal; text-align: left; }
+#osmEditorTools h3, #osmEditorTools h4 { font-size: 13px; margin: 12px 0 6px; }
+#osmEditorTools [hidden] { display: none; }
