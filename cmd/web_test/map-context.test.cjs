@@ -41,6 +41,6 @@ test('ordinary left click never creates markers; explicit drawing modes still re
  const context=vm.createContext({map:{on:(_,cb)=>callback=cb},window:{},gisMeasureActive:false,addGISMeasurePoint:()=>count++});
  vm.runInContext(segment,context);callback({});assert.equal(count,0);
  context.gisMeasureActive=true;callback({});assert.equal(count,1);
- context.window.osmEditor={active:true,addPoint:()=>count+=10};callback({});assert.equal(count,11);
+ context.window.osmEditor={active:true,mapClick:()=>count+=10};callback({});assert.equal(count,11);
  assert.ok(!src.includes("deleteStopMarker(id);\n  });\n  return s;"));
 });

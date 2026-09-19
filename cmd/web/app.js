@@ -2325,7 +2325,7 @@ async function executeAgentActions(actions, session_id) {
 window.executeAgentActions = executeAgentActions;
 
 map.on('click', ev=>{
-  if (window.osmEditor?.active) { window.osmEditor.addPoint(ev); return; }
+  if (window.osmEditor?.active) { window.osmEditor.mapClick(ev); return; }
   if (window.planningTools?.active) { window.planningTools.addPoint(ev); return; }
   if (gisMeasureActive) { addGISMeasurePoint(ev); return; }
 
@@ -3589,17 +3589,7 @@ function completeMapWelcome(choice) {
   hideMapWelcome();
 }
 
-function openSettingsSection(headerID, contentID, storageKey) {
-  const settingsBodyEl = document.getElementById('settingsBody');
-  const settingsCardEl = document.getElementById('settingsCard');
-  const settingsToggleEl = document.getElementById('settingsToggle');
-  if (settingsBodyEl) settingsBodyEl.style.display = 'block';
-  settingsCardEl?.classList.remove('collapsed');
-  if (settingsToggleEl) {
-    settingsToggleEl.setAttribute('aria-expanded', 'true');
-  }
-  try { localStorage.setItem('settingsOpen', '1'); } catch (_) {}
-
+function openMapsSection(headerID, contentID, storageKey) {
   const header = document.getElementById(headerID);
   const content = document.getElementById(contentID);
   if (content) content.style.display = 'grid';
@@ -3609,8 +3599,8 @@ function openSettingsSection(headerID, contentID, storageKey) {
 }
 
 function showMapSourcePicker(filter = 'recommended') {
-  setMapsView('tools');
-  openSettingsSection('mapHeader', 'mapSettings', 'mapSettingsOpen');
+  setMapsView('maps');
+  openMapsSection('mapHeader', 'mapSettings', 'mapSettingsOpen');
   setTileSourceFilter(filter);
   window.setTimeout(() => {
     document.getElementById('tileSourceCards')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -3697,6 +3687,8 @@ const mapTypeEl = document.getElementById('mapType');
 if (mapTypeEl) {
   mapTypeEl.addEventListener('change', () => updateMapTypeVisibility(mapTypeEl.value));
 }
+
+document.getElementById('saveMapSettings')?.addEventListener('click', () => document.getElementById('save')?.click());
 
 document.getElementById('previewTileSource')?.addEventListener('click', () => {
   activeTilePresetID = '';
@@ -4132,7 +4124,8 @@ async function fetchTinyTilesStatus({ silent = false } = {}) {
 }
 
 function openTinyTilesBuilder() {
-  openSettingsSection('tinyTilesHeader', 'tinyTilesSettings', 'tinyTilesSettingsOpen');
+  setMapsView('maps');
+  openMapsSection('tinyTilesHeader', 'tinyTilesSettings', 'tinyTilesSettingsOpen');
   window.setTimeout(() => {
     document.getElementById('tinyTilesSettings')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }, 0);
@@ -5090,7 +5083,7 @@ if (helpToggle) {
 }
 
 // Collapsible settings sections
-function setupCollapsibleSection(headerId, contentId, storageKey) {
+function setupCollapsibleSection(headerId, contentId, storageKey, defaultOpen = false) {
   const header = document.getElementById(headerId);
   const content = document.getElementById(contentId);
   const section = header?.closest('.settings-section');
@@ -5107,14 +5100,13 @@ function setupCollapsibleSection(headerId, contentId, storageKey) {
     setOpen(content.style.display === 'none');
   });
   
-  // Default collapsed
   const saved = localStorage.getItem(storageKey);
-  setOpen(saved === '1');
+  setOpen(saved === null ? defaultOpen : saved === '1');
 }
 
 setupCollapsibleSection('highwayHeader', 'allowedHighways', 'highwaysOpen');
 setupCollapsibleSection('speedHeader', 'speedDefaults', 'speedsOpen');
-setupCollapsibleSection('mapHeader', 'mapSettings', 'mapSettingsOpen');
+setupCollapsibleSection('mapHeader', 'mapSettings', 'mapSettingsOpen', true);
 setupCollapsibleSection('tinyTilesHeader', 'tinyTilesSettings', 'tinyTilesSettingsOpen');
 
 // Sidebar shortcuts expose common next steps without requiring a
@@ -5122,20 +5114,21 @@ setupCollapsibleSection('tinyTilesHeader', 'tinyTilesSettings', 'tinyTilesSettin
 // controls so keyboard, stored collapse state and all normal interactions
 // stay identical.
 function revealSidebarTool(kind) {
-  setMapsView('tools');
   if (kind === 'map') {
     showMapSourcePicker();
     return;
   }
+  if (kind === 'offline') {
+    openTinyTilesBuilder();
+    return;
+  }
+  setMapsView('tools');
   const targets = {
-    offline: { card: 'settingsCard', body: 'settingsBody', toggle: 'settingsToggle', section: 'tinyTilesHeader' },
     territories: { card: 'territoryCard', body: 'territoryBody', toggle: 'territoryToggle' },
     settings: { card: 'settingsCard', body: 'settingsBody', toggle: 'settingsToggle' },
-    osm: { card: 'osmEditorTools', details: true, focus: 'osmNearby' },
   };
   const target = targets[kind];
   if (!target) return;
-  if (target.details) document.getElementById(target.card).open = true;
   const body = document.getElementById(target.body);
   if (body?.style.display === 'none') document.getElementById(target.toggle)?.click();
   if (target.section) {
@@ -5862,10 +5855,11 @@ function mapsCameraPadding() {
 
 // Map-first navigation keeps the existing route and specialist tools intact.
 function setMapsView(view) {
-  if (!['explore', 'route', 'tools', 'assistant'].includes(view)) return;
-  if (view !== 'tools') { window.planningTools?.cancel(); window.osmEditor?.cancel(); }
+  if (!['explore', 'route', 'tools', 'assistant', 'maps', 'edit'].includes(view)) return;
+  if (view !== 'tools') window.planningTools?.cancel();
   document.querySelector('.maps-shell')?.setAttribute('data-view', view);
-  document.getElementById('mapsPanelTitle').textContent = {explore:'Entdecken',route:'Route planen',assistant:'Kartenassistent',tools:'Werkzeuge'}[view];
+  document.getElementById('mapsPanelTitle').textContent = {explore:'Entdecken',route:'Route planen',assistant:'Kartenassistent',tools:'Werkzeuge',maps:'Karten',edit:'OSM-Edit'}[view];
+  if (view === 'edit') window.osmEditor?.enter(); else window.osmEditor?.leave();
   setMapsPanelCollapsed(false);
   document.querySelectorAll('.maps-rail [data-map-view]').forEach(button => {
     button.setAttribute('aria-pressed', String(button.dataset.mapView === view));
@@ -5875,6 +5869,10 @@ function setMapsView(view) {
   }
   const content = document.getElementById('mapsPanelContent');
   if (content) content.scrollTop = 0;
+  if (view === 'maps') {
+    openMapsSection('mapHeader', 'mapSettings', 'mapSettingsOpen');
+    window.setTimeout(hydrateVisibleTilePreviews, 0);
+  }
   map.resize();
   map.setPadding(mapsCameraPadding());
 }
@@ -6118,8 +6116,7 @@ registerMapLayerRehydrate(() => window.osmHover.render());
 window.addEventListener('osmmini:edit-object', event => {
   const {type,id}=event.detail||{};
   if (!type || !id) return;
-  setMapsView('tools');
-  document.getElementById('osmEditorTools').open=true;
+  setMapsView('edit');
   window.osmEditor?.load(type,id);
 });
 window.addEventListener('osmmini:route-object', event => {
@@ -6148,11 +6145,11 @@ window.mapContext = MapContext.create(map, [
     if (other.value.trim()) compute();
   }})),
   { label: 'Neuen OSM-Ort hier eintragen', run(point) {
-    setMapsView('tools'); document.getElementById('osmEditorTools').open = true;
+    setMapsView('edit');
     window.osmEditor.startAt(point);
   } },
   { label: 'OSM-Orte in der Nähe bearbeiten', run(point) {
-    setMapsView('tools'); document.getElementById('osmEditorTools').open = true;
+    setMapsView('edit');
     window.osmEditor.findNearby(point);
   } },
   { label: 'Hier messen oder planen', run(point) {

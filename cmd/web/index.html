@@ -33,8 +33,9 @@
         <button type="button" data-map-view="explore" aria-pressed="true"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="m16 8-2.5 5.5L8 16l2.5-5.5Z"/></svg></span>Entdecken</button>
         <button type="button" data-map-view="route" aria-pressed="false"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M7 20V9a3 3 0 0 1 3-3h10m-5-5 5 5-5 5"/></svg></span>Route</button>
         <button type="button" data-map-view="assistant" aria-pressed="false"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m12 3 2.8 6.2L21 12l-6.2 2.8L12 21l-2.8-6.2L3 12l6.2-2.8Z"/></svg></span>Assistent</button>
+        <button type="button" data-map-view="maps" aria-pressed="false"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m12 3 10 6-10 6L2 9ZM2 13l10 6 10-6M2 17l10 6 10-6"/></svg></span>Karten</button>
+        <button type="button" data-map-view="edit" aria-pressed="false"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m4 6 6-3 6 3 4-2v14l-4 2-6-3-6 3Z"/><path d="M10 3v15m6-12v15"/><path d="m15 11 4 4-4 4"/></svg></span>OSM-Edit</button>
         <button type="button" data-map-view="tools" aria-pressed="false"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="9" cy="18" r="2"/></svg></span>Werkzeuge</button>
-        <button type="button" class="maps-rail-shortcut" data-sidebar-open="osm" aria-label="OpenStreetMap bearbeiten"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m4 6 6-3 6 3 4-2v14l-4 2-6-3-6 3Z"/><path d="M10 3v15m6-12v15"/><path d="m15 11 4 4-4 4"/></svg></span>OSM-Edit</button>
         <button type="button" class="maps-rail-shortcut" data-sidebar-open="settings" aria-label="Einstellungen öffnen"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.1 2.1-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.55v.09h-3v-.09A1.7 1.7 0 0 0 10.7 18.6a1.7 1.7 0 0 0-1.88.34l-.06.06-2.1-2.1.06-.06A1.7 1.7 0 0 0 7.06 15a1.7 1.7 0 0 0-1.55-1.03h-.09v-3h.09A1.7 1.7 0 0 0 7.06 9.94a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.1-2.1.06.06a1.7 1.7 0 0 0 1.88.34 1.7 1.7 0 0 0 1.03-1.55v-.09h3v.09a1.7 1.7 0 0 0 1.03 1.55 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.1 2.1-.06.06a1.7 1.7 0 0 0-.34 1.88 1.7 1.7 0 0 0 1.55 1.03h.09v3h-.09A1.7 1.7 0 0 0 19.4 15Z"/></svg></span>Einstellungen</button>
         <div class="maps-rail-footer">OSM<br>mini</div>
       </nav>
@@ -58,7 +59,7 @@
         <div id="mapsPanelContent" class="maps-panel-content">
         <div class="sidebar-primary">
 
-        <section class="maps-explore" aria-label="Orte entdecken">
+        <section class="maps-explore" data-view-only="explore" aria-label="Orte entdecken">
           <div class="maps-intro"><span class="maps-eyebrow">DEINE KARTE. DEIN WEG.</span><h2>Was liegt vor dir?</h2><p>Finde einen Ort. Entdecke die Umgebung.<br>Und mach dich auf den Weg.</p></div>
           <div class="maps-local-note"><span aria-hidden="true"><svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-location"/></svg></span><div><strong>In deiner Region unterwegs</strong><p>Adressen und Orte aus deiner geladenen OSM-Region.</p></div></div>
           <div class="maps-results-heading"><h3 id="placeResultsTitle">Orte entdecken</h3><button id="clearPlaces" type="button" hidden>Zurücksetzen</button></div>
@@ -83,17 +84,17 @@
           </div>
         </div>
 
-        <section class="workspace-context" aria-label="Aktiver Kartenmodus" aria-live="polite">
+        <section class="workspace-context" data-view-only="route maps" aria-label="Aktiver Kartenmodus" aria-live="polite">
           <span id="mapModeIcon" class="workspace-context-icon" aria-hidden="true">◌</span>
           <div class="workspace-context-copy">
             <strong id="mapModeTitle">Karte wird vorbereitet</strong>
             <span id="mapModeMeta">Routing &amp; Suche: lokale PBF.</span>
           </div>
-          <button id="openMapSources" type="button" class="workspace-context-action">Karte</button>
+          <button id="openMapSources" type="button" class="workspace-context-action" aria-label="Karte ändern">Ändern</button>
         </section>
 
         <!-- ── Route card ── -->
-        <section class="card route-card">
+        <section class="card route-card" data-view-only="route">
 
           <div class="route-inputs">
             <!-- From -->
@@ -220,68 +221,234 @@
 
         </section>
 
-        <nav class="sidebar-quick-actions" aria-label="Schnellzugriff">
-          <button type="button" class="sidebar-quick-action" data-sidebar-open="map">
-            <span aria-hidden="true"><svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-map"/></svg></span><span>Karte</span>
-          </button>
-          <button type="button" class="sidebar-quick-action" data-sidebar-open="offline">
-            <span aria-hidden="true"><svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-box"/></svg></span><span>Offline</span>
-          </button>
-          <button type="button" class="sidebar-quick-action" data-sidebar-open="territories">
-            <span aria-hidden="true"><svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-map"/></svg></span><span>Gebiete</span>
-          </button>
-        </nav>
 
+        <section id="mapsView" class="maps-map-view" data-view-only="maps" aria-labelledby="mapsViewTitle">
+          <div class="maps-intro"><span class="maps-eyebrow">KARTEN</span><h2 id="mapsViewTitle">Welche Karte möchtest du sehen?</h2><p>Online-Karten, Bayern-Karten oder eine lokale Offline-Karte aus deiner PBF. Routing und Suche laufen immer lokal.</p></div>
+        <div class="settings-section collapsible" id="mapSection">
+          <button type="button" class="section-header clickable" id="mapHeader" aria-expanded="false" aria-controls="mapSettings">
+            <span class="section-icon" aria-hidden="true">🗺️</span><span class="section-header-title">Kartenquelle</span>
+            <span class="collapse-indicator" aria-hidden="true"><svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-chevron"/></svg></span>
+          </button>
+          <div id="mapSettings" style="display:none">
+            <div class="tile-source-picker" aria-label="Kartenquelle auswählen">
+              <div class="tile-source-picker-heading">
+                <div>
+                  <span class="setting-label">Karte auswählen</span>
+                  <p class="settings-hint">Vorschau wählen, dann bei Bedarf mit „Speichern“ dauerhaft übernehmen.</p>
+                </div>
+                <button id="tileSourceAdvancedToggle" type="button" class="btn btn-ghost tile-source-advanced-toggle" aria-expanded="false">Eigene Quelle</button>
+              </div>
+              <div class="tile-source-filters" id="tileSourceFilters" role="tablist" aria-label="Kartenquellen filtern">
+                <button type="button" class="tile-source-filter is-active" data-tile-filter="recommended" role="tab" aria-selected="true">Empfohlen</button>
+                <button type="button" class="tile-source-filter" data-tile-filter="online" role="tab" aria-selected="false">Online</button>
+                <button type="button" class="tile-source-filter" data-tile-filter="bayern" role="tab" aria-selected="false">Bayern</button>
+                <button type="button" class="tile-source-filter" data-tile-filter="offline" role="tab" aria-selected="false">Offline</button>
+              </div>
+              <div id="tileSourceCards" class="tile-source-cards" role="list" aria-live="polite" aria-busy="true">
+                <div class="tile-source-empty">Kartenquellen werden geladen …</div>
+              </div>
+              <p id="tileSourceSelectionHint" class="tile-source-selection-hint" aria-live="polite"></p>
+            </div>
+            <div id="tileSourceAdvanced" class="tile-source-advanced" hidden>
+              <div class="settings-grid">
+              <div class="setting-item">
+                <label class="setting-label">Kartentyp</label>
+                <select id="mapType" class="setting-select">
+                  <option value="raster">Raster</option>
+                  <option value="raster-direct">Raster direkt (ohne Proxy)</option>
+                  <option value="vector">Vektor (MapLibre GL)</option>
+                  <option value="wms">WMS</option>
+                </select>
+              </div>
+              <div class="setting-item" id="upstreamRow">
+                <label class="setting-label">Tile-URL ({z}/{x}/{y})</label>
+                <input id="tileUpstream" type="text" class="setting-input" placeholder="https://…/{z}/{x}/{y}.png"/>
+              </div>
+              <div class="setting-item" id="styleUrlRow" style="display:none">
+                <label class="setting-label">Style-URL</label>
+                <input id="tileStyleUrl" type="text" class="setting-input" placeholder="https://…/style.json"/>
+              </div>
+              <div class="setting-item" id="wmsLayersRow" style="display:none">
+                <label class="setting-label">WMS-Layer</label>
+                <input id="wmsLayers" type="text" class="setting-input" placeholder="layer1,layer2"/>
+              </div>
+              <div class="setting-item">
+                <label class="setting-label">Maximaler Zoom</label>
+                <input id="tileMaxZoom" type="number" min="0" max="22" step="1" class="setting-input" placeholder="19"/>
+              </div>
+              <div class="setting-item">
+                <label class="setting-label">Attribution</label>
+                <input id="tileAttribution" type="text" class="setting-input" placeholder="© OpenStreetMap contributors"/>
+              </div>
+            </div>
+            <div class="settings-actions">
+              <button id="previewTileSource" type="button" class="btn btn-ghost">Karte Vorschau</button>
+            </div>
+            </div>
+          </div>
         </div>
 
-        <div class="sidebar-secondary" aria-label="Weitere Werkzeuge">
-        <details class="card gis-tools" id="osmEditorTools" open>
-          <summary>OpenStreetMap bearbeiten</summary>
-          <p class="osm-local-note">Dein Arbeitsstand bleibt in diesem Browser. Hier wird nichts auf OpenStreetMap veröffentlicht.</p>
-          <div class="osm-hover-control">
-            <button id="osmHoverToggle" class="btn btn-ghost" type="button" aria-pressed="false">Objekte unter dem Zeiger prüfen</button>
-            <p>Zeigt erfasste Objekte direkt auf der Karte an und lädt ihre aktuellen OSM-Tags nur bei Bedarf.</p>
+        <div class="settings-section collapsible" id="tinyTilesSection">
+          <button type="button" class="section-header clickable" id="tinyTilesHeader" aria-expanded="false" aria-controls="tinyTilesSettings">
+            <span class="section-icon" aria-hidden="true">📦</span><span class="section-header-title">Offline-Karte (tinyTiles)</span>
+            <span class="collapse-indicator" aria-hidden="true"><svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-chevron"/></svg></span>
+          </button>
+          <div id="tinyTilesSettings" style="display:none">
+            <p class="settings-hint">Erzeugt aus der beim Server geladenen OSM-PBF eine lokale Straßen-, Gebäude-, Gewässer- und Landbedeckungskarte. Flüsse, Bäche und Kanäle werden als lokale Vektorebene ergänzt. Während des Builds bleibt Routing verfügbar; der Build benötigt freien lokalen Speicher.</p>
+            <details id="offlineStyleEditor" class="offline-style-editor">
+              <summary>Kartenstil anpassen</summary>
+              <p class="settings-hint">Direkte Vorschau auf der Offline-Karte. Kein erneutes Erzeugen nötig; Speicherung in diesem Browser.</p>
+              <label class="setting-label" for="offlineStylePreset">Vorlage</label>
+              <select id="offlineStylePreset" class="setting-select">
+                <option value="standard">Standard · Natur</option><option value="atlas">Atlas · klare Straßen</option><option value="night">Nacht</option><option value="contrast">Hoher Kontrast</option><option value="custom" disabled>Eigener Stil</option>
+              </select>
+              <div class="offline-style-colors">
+                <label>Hintergrund<input type="color" id="offlineColorbackground" data-style-field="background" aria-label="Farbe: Hintergrund"/></label>
+                <label>Gewässer<input type="color" id="offlineColorwater" data-style-field="water" aria-label="Farbe: Gewässer"/></label>
+                <label>Wald<input type="color" id="offlineColorforest" data-style-field="forest" aria-label="Farbe: Wald"/></label>
+                <label>Felder<input type="color" id="offlineColorfarmland" data-style-field="farmland" aria-label="Farbe: Felder"/></label>
+                <label>Wiesen<input type="color" id="offlineColormeadow" data-style-field="meadow" aria-label="Farbe: Wiesen"/></label>
+                <label>Gebäude<input type="color" id="offlineColorbuildings" data-style-field="buildings" aria-label="Farbe: Gebäude"/></label>
+                <label>Fernstraßen<input type="color" id="offlineColormotorway" data-style-field="motorway" aria-label="Farbe: Fernstraßen"/></label>
+                <label>Hauptstraßen<input type="color" id="offlineColorprimary" data-style-field="primary" aria-label="Farbe: Hauptstraßen"/></label>
+                <label>Nebenstraßen<input type="color" id="offlineColorresidential" data-style-field="residential" aria-label="Farbe: Nebenstraßen"/></label>
+                <label>Beschriftung<input type="color" id="offlineColortext" data-style-field="text" aria-label="Farbe: Beschriftung"/></label>
+                <label>Textumrandung<input type="color" id="offlineColorhalo" data-style-field="halo" aria-label="Farbe: Textumrandung"/></label>
+              </div>
+              <label class="offline-style-range" for="offlineroadWidth">Straßenbreite<output id="offlineroadWidthValue" for="offlineroadWidth">100 %</output><input id="offlineroadWidth" data-style-field="roadWidth" type="range" min="0.6" max="2" step="0.05"/></label>
+              <label class="offline-style-range" for="offlinelabelSize">Beschriftungsgröße<output id="offlinelabelSizeValue" for="offlinelabelSize">100 %</output><input id="offlinelabelSize" data-style-field="labelSize" type="range" min="0.8" max="1.5" step="0.05"/></label>
+              <label class="checkbox"><input type="checkbox" data-style-field="showBuildings"/>Gebäude anzeigen</label>
+              <label class="checkbox"><input type="checkbox" data-style-field="showPaths"/>Wege anzeigen</label>
+              <label class="checkbox"><input type="checkbox" data-style-field="showLabels"/>Beschriftungen anzeigen</label>
+              <div class="tinytiles-actions"><button id="offlineStyleSave" type="button" class="btn btn-primary">Stil speichern</button><button id="offlineStyleReset" type="button" class="btn btn-ghost">Standard wiederherstellen</button></div>
+              <p id="offlineStyleStatus" class="settings-hint" role="status">Die Einstellungen betreffen nur die lokale Offline-Karte.</p>
+            </details>
+            <div class="tinytiles-presets" role="group" aria-label="Zoom-Voreinstellung für die Offline-Karte">
+              <button type="button" class="tinytiles-preset" data-tinytiles-min="5" data-tinytiles-max="10"><strong>Übersicht</strong><span>5–10 · klein &amp; schnell</span></button>
+              <button type="button" class="tinytiles-preset is-selected" data-tinytiles-min="8" data-tinytiles-max="14"><strong>Ausgewogen</strong><span>8–14 · empfohlen</span></button>
+              <button type="button" class="tinytiles-preset" data-tinytiles-min="10" data-tinytiles-max="14"><strong>Details</strong><span>10–14 · für ein Gebiet</span></button>
+            </div>
+            <div class="settings-grid">
+              <div class="setting-item">
+                <label class="setting-label" for="tinyTilesMinZoom">Minimaler Zoom</label>
+                <input id="tinyTilesMinZoom" type="number" min="5" max="14" step="1" value="8" class="setting-input" inputmode="numeric"/>
+              </div>
+              <div class="setting-item">
+                <label class="setting-label" for="tinyTilesMaxZoom">Maximaler Zoom</label>
+                <input id="tinyTilesMaxZoom" type="number" min="5" max="14" step="1" value="14" class="setting-input" inputmode="numeric"/>
+              </div>
+            </div>
+            <div class="tinytiles-actions">
+              <button id="tinyTilesBuild" type="button" class="btn btn-primary">Offline-Karte erzeugen</button>
+              <button id="tinyTilesActivate" type="button" class="btn btn-ghost" style="display:none">Offline-Karte anzeigen</button>
+            </div>
+            <form id="tinyTilesPostcodeLookup" class="tinytiles-postcode-lookup" hidden>
+              <label class="setting-label" for="tinyTilesPostcodeInput">PLZ-Gebiet finden</label>
+              <div class="tinytiles-postcode-row">
+                <input id="tinyTilesPostcodeInput" type="search" class="setting-input" inputmode="numeric" autocomplete="postal-code" maxlength="12" placeholder="z. B. 94032"/>
+                <button type="submit" class="btn btn-ghost">Anzeigen</button>
+              </div>
+              <p id="tinyTilesPostcodeStatus" class="tinytiles-postcode-status" aria-live="polite">Suche lokal in den PLZ-Grenzen der Offline-Karte.</p>
+            </form>
+            <div id="tinyTilesBuildStatus" class="tinytiles-status" role="status" aria-live="polite" data-state="idle">
+              <span id="tinyTilesStatusIcon" class="tinytiles-status-icon" aria-hidden="true">○</span>
+              <div class="tinytiles-status-copy">
+                <strong id="tinyTilesStatusTitle">Noch keine Offline-Karte</strong>
+                <span id="tinyTilesStatusMessage">Die lokale Karte wird aus der geladenen PBF erzeugt.</span>
+              </div>
+            </div>
+            <div id="tinyTilesProgress" class="tinytiles-progress" role="progressbar" aria-label="Erzeugung der Offline-Karte" aria-valuemin="0" aria-valuemax="100" aria-valuetext="Nicht gestartet" hidden>
+              <div class="tinytiles-progress-bar"><span></span></div>
+            </div>
+            <dl id="tinyTilesFacts" class="tinytiles-facts" aria-live="polite" hidden></dl>
           </div>
-          <div id="osmHoverInfo" class="osm-hover-info" role="status" aria-live="polite" hidden></div>
-          <section class="osm-step" aria-labelledby="osmStepChoose">
-            <h3 id="osmStepChoose">1. Ort auswählen</h3>
-            <p class="settings-hint">Bewege die Karte zum gewünschten Ort. Die Suche findet bis zu 50 erfasste Orte im Umkreis von 500 m um die Kartenmitte.</p>
-            <div class="gis-actions"><button id="osmNearby" class="btn btn-primary" type="button">Orte in der Nähe finden</button><button id="osmNew" class="btn btn-ghost" type="button" aria-pressed="false">Neuen Ort eintragen</button></div>
-            <p id="osmPlacement" class="osm-local-note" hidden>Klicke auf die genaue Position in der Karte. Mit Escape oder „Punktsetzen abbrechen“ beenden.</p>
-            <ul id="osmCandidates" class="osm-editor-list" aria-label="Gefundene Orte"></ul>
-            <details class="osm-advanced"><summary>Über eine bekannte OSM-ID laden</summary>
-              <label for="osmType">Objekttyp</label><select id="osmType" class="setting-input"><option value="node">Punkt (node)</option><option value="way">Weg oder Fläche (way)</option></select>
+        </div>
+
+          <div class="panel-actionbar">
+            <button id="saveMapSettings" class="btn btn-primary" type="button">Kartenwahl speichern</button>
+            <p class="settings-hint">Eine Vorschau gilt nur bis zum Neuladen. Speichern macht die Karte zum Standard.</p>
+          </div>
+        </section>
+        <section id="osmEditView" class="maps-edit-view" data-view-only="edit" aria-labelledby="osmViewTitle">
+          <header class="osm-head">
+            <span class="maps-eyebrow">OPENSTREETMAP</span>
+            <h2 id="osmViewTitle">Karte verbessern</h2>
+            <p>Änderungen bleiben als Entwurf in diesem Browser. Auf OpenStreetMap wird nichts veröffentlicht.</p>
+          </header>
+          <div class="osm-tabs" role="tablist" aria-label="Arbeitsschritte">
+            <button id="osmTabFind" class="osm-tab" type="button" role="tab" aria-selected="true" aria-controls="osmPanelFind">Finden</button>
+            <button id="osmTabEdit" class="osm-tab" type="button" role="tab" aria-selected="false" aria-controls="osmPanelEdit" tabindex="-1">Bearbeiten</button>
+            <button id="osmTabDrafts" class="osm-tab" type="button" role="tab" aria-selected="false" aria-controls="osmPanelDrafts" tabindex="-1">Entwürfe <span id="osmDraftCount" class="osm-tab-count" hidden>0</span></button>
+          </div>
+          <p id="osmEditorStatus" class="osm-status" tabindex="-1" role="status" aria-live="polite">Wähle auf der Karte einen Ort, um ihn zu bearbeiten.</p>
+
+          <div id="osmPanelFind" role="tabpanel" aria-labelledby="osmTabFind">
+            <div id="osmPickHint" class="osm-pick-hint" data-active="true"><span aria-hidden="true"><svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-location"/></svg></span><p id="osmPickText">Wähle auf der Karte einen Ort aus, den du bearbeiten möchtest.</p></div>
+            <div id="osmPickMiss" class="osm-miss" hidden><p>An dieser Stelle ist noch kein Ort erfasst.</p><button id="osmPickPlace" class="btn btn-primary" type="button">Hier neuen Ort eintragen</button></div>
+            <form id="osmSearchForm" class="osm-search" role="search">
+              <label for="osmSearch">Orte suchen</label>
+              <div class="osm-search-row"><input id="osmSearch" type="search" class="setting-input" placeholder="Name oder Art, z. B. Café" autocomplete="off"/><button id="osmNearby" class="btn btn-primary" type="submit">Suchen</button></div>
+              <p class="settings-hint">Ohne Suchbegriff zeigt die Liste erfasste Orte im Umkreis von 500 m um die Kartenmitte.</p>
+            </form>
+            <ul id="osmCandidates" class="osm-candidates" aria-label="Gefundene Orte"></ul>
+            <p id="osmCandidatesEmpty" class="osm-empty">Noch keine Orte in der Liste. Suche oder tippe auf die Karte.</p>
+            <button id="osmNew" class="btn btn-ghost osm-new" type="button" aria-pressed="false">Neuen Ort eintragen</button>
+            <details class="osm-advanced"><summary>Weitere Möglichkeiten</summary>
+              <div class="osm-hover-control">
+                <button id="osmHoverToggle" class="btn btn-ghost" type="button" aria-pressed="false">Objekte unter dem Zeiger prüfen</button>
+                <p>Zeigt erfasste Objekte direkt auf der Karte an und lädt ihre aktuellen OSM-Tags nur bei Bedarf.</p>
+              </div>
+              <div id="osmHoverInfo" class="osm-hover-info" role="status" aria-live="polite" hidden></div>
+              <label for="osmType">Über eine bekannte OSM-ID laden</label>
+              <select id="osmType" class="setting-input"><option value="node">Punkt (node)</option><option value="way">Weg oder Fläche (way)</option></select>
               <label for="osmID">OSM-ID</label><input id="osmID" class="setting-input" inputmode="numeric" placeholder="z. B. 123456"/>
               <button id="osmLoad" class="btn btn-ghost" type="button">Objekt laden</button>
+              <p class="settings-hint">Beim Laden wird der aktuelle Stand des Objekts von OpenStreetMap abgerufen; dafür wird seine ID an OSM gesendet.</p>
             </details>
-            <p class="settings-hint">Bei der Auswahl eines bestehenden Ortes wird dessen aktueller Stand von OpenStreetMap geladen. Dafür wird die Objekt-ID an OSM gesendet.</p>
-          </section>
-          <p id="osmEditorStatus" tabindex="-1" role="status" aria-live="polite">Beginne mit „Orte in der Nähe finden“ oder „Neuen Ort eintragen“.</p>
-          <section id="osmForm" class="osm-step" hidden aria-labelledby="osmSelected">
-            <h3>2. Angaben bearbeiten</h3><h4 id="osmSelected" tabindex="-1"></h4><p id="osmObjectMeta" class="settings-hint"></p>
-            <p id="osmEditState" class="osm-edit-state"></p>
-            <fieldset id="osmFormFields" aria-label="Angaben zum ausgewählten Ort">
-              <div id="osmPresetWrap"><label for="osmPreset">Was möchtest du eintragen?</label><div class="gis-actions"><select id="osmPreset" class="setting-input"><option value="" disabled>Art auswählen …</option><option value="bench">Sitzbank</option><option value="drinking_water">Trinkwasserstelle</option><option value="bicycle_parking">Fahrradparkplatz</option><option value="cafe">Café</option><option value="defibrillator">Defibrillator</option><option value="post_box">Briefkasten</option><option value="toilets">Öffentliche Toilette</option><option value="charging_station">Ladestation</option><option value="bus_stop">Bushaltestelle</option><option value="playground">Spielplatz</option><option value="barrier_free_entrance">Barrierefreier Zugang</option></select></div><p class="settings-hint">Weitere Arten kannst du unter „Alle Eigenschaften“ eintragen.</p></div>
-              <label for="osmName">Name</label><input id="osmName" class="setting-input" placeholder="Nur falls der Ort einen eigenen Namen hat"/>
-              <label for="osmWebsite">Website</label><input id="osmWebsite" class="setting-input" type="url" placeholder="https://…"/>
-              <label for="osmHours">Öffnungszeiten</label><input id="osmHours" class="setting-input" placeholder="z. B. Mo-Fr 09:00-18:00" aria-describedby="osmHoursHint"/><p id="osmHoursHint" class="settings-hint">OSM-Schreibweise verwenden. Unbekannte Angaben frei lassen.</p>
-              <details id="osmAdvancedTags" class="osm-advanced"><summary>Alle Eigenschaften (OSM-Tags)</summary><p class="settings-hint">Tags sind Schlüssel und Werte, etwa amenity = bench für eine Sitzbank. Entfernen löscht die Eigenschaft aus dem Entwurf.</p><div class="osm-tag-head" aria-hidden="true"><span>Schlüssel</span><span>Wert</span></div><div id="osmTags"></div><button id="osmAddTag" class="btn btn-ghost" type="button">Eigenschaft hinzufügen</button></details>
-              <h4>Diese Angaben ändern sich</h4><ul id="osmDiff" class="osm-editor-list"></ul>
-              <p id="osmValidation" role="alert" aria-atomic="true"></p>
-              <div class="gis-actions osm-form-actions"><button id="osmSave" class="btn btn-primary" type="button">Änderungen lokal speichern</button><button id="osmDiscard" class="btn btn-ghost" type="button">Bearbeitung schließen</button></div>
-            </fieldset>
-          </section>
-          <section class="osm-step" aria-labelledby="osmStepExport">
-            <h3 id="osmStepExport">3. Arbeitsstand prüfen &amp; exportieren</h3><p id="osmDraftSummary" tabindex="-1" class="settings-hint"></p>
+          </div>
+
+          <div id="osmPanelEdit" role="tabpanel" aria-labelledby="osmTabEdit" hidden>
+            <div id="osmEmpty" class="osm-empty-state"><p>Noch kein Ort ausgewählt.</p><button id="osmEmptyFind" class="btn btn-primary" type="button">Ort auswählen</button></div>
+            <div id="osmForm" hidden>
+              <div class="osm-object">
+                <div class="osm-object-title"><h3 id="osmSelected" tabindex="-1"></h3><span id="osmEditState" class="osm-badge" data-state="clean"></span></div>
+                <p id="osmObjectMeta" class="osm-meta"></p>
+                <div class="osm-object-actions"><button id="osmLocate" class="btn btn-ghost" type="button">Auf Karte zeigen</button><a id="osmOsmLink" class="btn btn-ghost" href="#" target="_blank" rel="noopener noreferrer" hidden>In OSM ansehen ↗</a></div>
+              </div>
+              <div id="osmDuplicates" class="osm-duplicates" role="status" hidden></div>
+              <div id="osmPresetWrap" hidden><h4 class="osm-section-title">Was möchtest du eintragen?</h4><div id="osmPresetChips"></div></div>
+              <fieldset id="osmFormFields" class="osm-fieldset" aria-label="Angaben zum ausgewählten Ort">
+                <div id="osmFields"></div>
+                <details id="osmAdvancedTags" class="osm-advanced"><summary>Alle Eigenschaften (OSM-Tags)</summary>
+                  <p class="settings-hint">Tags sind Schlüssel und Werte, etwa amenity = bench für eine Sitzbank. Entfernen löscht die Eigenschaft aus dem Entwurf.</p>
+                  <div class="osm-tag-head" aria-hidden="true"><span>Schlüssel</span><span>Wert</span></div>
+                  <div id="osmTags"></div>
+                  <button id="osmAddTag" class="btn btn-ghost" type="button">Eigenschaft hinzufügen</button>
+                </details>
+                <details class="osm-changes" open><summary id="osmDiffSummary">Änderungen</summary><ul id="osmDiff" class="osm-editor-list"></ul></details>
+                <p id="osmValidation" role="alert" aria-atomic="true"></p>
+              </fieldset>
+              <div class="osm-actionbar"><button id="osmSave" class="btn btn-primary" type="button">Als Entwurf speichern</button><button id="osmDiscard" class="btn btn-ghost" type="button">Schließen</button></div>
+            </div>
+          </div>
+
+          <div id="osmPanelDrafts" role="tabpanel" aria-labelledby="osmTabDrafts" hidden>
             <div id="osmDraftOverview" class="osm-draft-overview" aria-live="polite"></div>
-            <div class="gis-actions"><button id="osmUndo" class="btn btn-ghost" type="button" disabled>Rückgängig</button><button id="osmRedo" class="btn btn-ghost" type="button" disabled>Wiederholen</button></div><p class="settings-hint">Rückgängig bezieht sich auf gespeicherte Entwurfsänderungen in dieser Sitzung.</p><ul id="osmDrafts" class="osm-editor-list"></ul>
-            <button id="osmCheck" class="btn btn-ghost" type="button" disabled>Mit aktuellem OSM-Stand vergleichen</button><p id="osmCheckState" class="settings-hint"></p>
-            <button id="osmExport" class="btn btn-primary" type="button" disabled>Änderungsdatei herunterladen (.osc)</button><p class="settings-hint">Zum Prüfen und späteren Veröffentlichen in einem OSM-Editor. Der Download veröffentlicht noch nichts.</p>
+            <p id="osmDraftSummary" tabindex="-1" class="settings-hint"></p>
+            <ul id="osmDrafts" class="osm-drafts" aria-label="Entwürfe im Arbeitsstand"></ul>
+            <div class="osm-history"><button id="osmUndo" class="btn btn-ghost" type="button" disabled>Rückgängig</button><button id="osmRedo" class="btn btn-ghost" type="button" disabled>Wiederholen</button></div>
+            <ol class="osm-export-steps">
+              <li><h4>Mit OSM vergleichen</h4><p class="settings-hint">Prüft, ob sich die Originale seit deinem Abruf geändert haben. Erfordert eine Internetverbindung.</p><button id="osmCheck" class="btn btn-ghost" type="button" disabled>Mit aktuellem OSM-Stand vergleichen</button><p id="osmCheckState" class="settings-hint"></p></li>
+              <li><h4>Änderungsdatei laden</h4><p class="settings-hint">Zum Prüfen und späteren Veröffentlichen in einem OSM-Editor. Der Download veröffentlicht noch nichts.</p><button id="osmExport" class="btn btn-primary" type="button" disabled>Änderungsdatei herunterladen (.osc)</button></li>
+            </ol>
             <details class="osm-advanced"><summary>Arbeitsstand sichern oder wiederherstellen</summary><p class="settings-hint">JSON-Dateien enthalten deine gespeicherten Entwürfe und lassen sich hier wieder öffnen. Neue Dateien ergänzen den Arbeitsstand; doppelte Objekte werden nicht überschrieben.</p><button id="osmBackup" class="btn btn-ghost" type="button" disabled>Sicherung herunterladen (.json)</button><label for="osmImport">Sicherung ergänzen</label><input id="osmImport" type="file" accept=".json,application/json" class="setting-input"/></details>
             <p class="settings-hint">Bearbeitbar sind Eigenschaften von Punkten, Wegen und Flächen sowie neue Punkte. Bestehende Formen und Positionen bleiben erhalten.</p>
-          </section>
-        </details>
-        <details class="card gis-tools planning-tools">
+          </div>
+        </section>
+        </div>
+
+        <div class="sidebar-secondary" data-view-only="tools assistant" aria-label="Weitere Werkzeuge">
+        <details class="card gis-tools planning-tools" data-view-only="tools">
           <summary>Messen &amp; Planen</summary>
           <p class="settings-hint">Strecken, Bezugsflächen und Gebäudegrundrisse direkt auf der Karte zeichnen.</p>
           <label for="planKind">Geometrietyp</label>
@@ -296,7 +463,7 @@
           <button id="planExport" type="button" class="btn btn-ghost" disabled>Entwurf als GeoJSON</button>
           <p class="settings-hint">Unverbindliche Entwurfswerte auf einer Erdkugel, keine amtliche Vermessung oder Prüfung von Bauvorgaben. Geschossfläche = Grundriss × Geschosse. Unbebaut bedeutet nicht unversiegelt. Automatische Speicherung nur in diesem Browser; Export enthält übernommene Geometrien.</p>
         </details>
-        <details class="card gis-tools" id="mapPostTools">
+        <details class="card gis-tools" id="mapPostTools" data-view-only="tools">
           <summary>Kartenbeitrag</summary>
           <p class="settings-hint">Eine Ankündigung mit Kartenausschnitt gestalten. Vorschau, PNG und Begleittext bleiben lokal bis du sie selbst teilst.</p>
           <label for="postTitle">Überschrift</label><input id="postTitle" aria-required="true" class="setting-input" maxlength="80" placeholder="z. B. Neue Radverbindung"/>
@@ -312,7 +479,7 @@
           <div class="gis-actions"><a id="postPNG" class="btn btn-ghost" download="kartenbeitrag.png" hidden>PNG herunterladen</a><a id="postTXT" class="btn btn-ghost" download="kartenbeitrag.txt" hidden>Begleittext herunterladen</a></div>
           <p class="settings-hint">Der Export enthält Kartenebenen, Zeichnungen und die rote Ortsmarkierung. Andere interaktive Marker und Popups werden nicht übernommen. Quellenangaben stehen im Bild; Bildbeschreibung und Informationslink im Begleittext. Vor dem Teilen die Vorschau prüfen.</p>
         </details>
-        <details class="card gis-tools">
+        <details class="card gis-tools" data-view-only="tools">
           <summary>GIS &amp; Geo-Werkzeuge</summary>
           <p class="settings-hint">POIs im Ausschnitt oder um die Kartenmitte suchen. Entfernungen sind Luftlinien.</p>
           <label for="gisQuery">Name oder Suchbegriff</label>
@@ -339,7 +506,7 @@
           <p id="gisMeasureStatus" role="status" aria-live="polite">Messmodus aktivieren und Punkte auf der Karte setzen.</p>
         </details>
         <!-- ── AI Assistant card ── -->
-        <section class="card ai-card collapsed" id="aiCard">
+        <section class="card ai-card collapsed" id="aiCard" data-view-only="assistant">
           <div class="card-header" id="aiCardHeader" title="KI-Assistent ein-/ausklappen">
             <div class="card-header-left">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9h6M9 12h6M9 15h4"/></svg>
@@ -381,7 +548,7 @@
         </section>
 
         <!-- ── Territories card ── -->
-        <section class="card territory-card collapsed" id="territoryCard">
+        <section class="card territory-card collapsed" id="territoryCard" data-view-only="tools">
           <div class="card-header" id="territoryCardHeader" title="Gebiete ein-/ausklappen">
             <div class="card-header-left">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"/><line x1="9" y1="3" x2="9" y2="18"/><line x1="15" y1="6" x2="15" y2="21"/></svg>
@@ -432,7 +599,7 @@
         </section>
 
         <!-- ── Operations log card ── -->
-        <section class="card operations-card collapsed" id="operationsCard">
+        <section class="card operations-card collapsed" id="operationsCard" data-view-only="tools">
           <div class="card-header" id="operationsCardHeader" title="Zustellung und Wartung ein-/ausklappen">
             <div class="card-header-left">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
@@ -507,7 +674,7 @@
         </section>
 
         <!-- ── Settings card ── -->
-        <section class="card settings-card collapsed" id="settingsCard">
+        <section class="card settings-card collapsed" id="settingsCard" data-view-only="tools">
           <div class="card-header" id="settingsCardHeader" title="Einstellungen ein-/ausklappen">
             <div class="card-header-left">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93l-1.41 1.41M4.93 19.07l-1.41 1.41M20 12h-2M6 12H4M19.07 19.07l-1.41-1.41M4.93 4.93l1.41 1.41M12 20v-2M12 6V4"/></svg>
@@ -625,146 +792,6 @@
               </div>
             </div>
 
-            <div class="settings-section collapsible" id="mapSection">
-              <button type="button" class="section-header clickable" id="mapHeader" aria-expanded="false" aria-controls="mapSettings">
-                <span class="section-icon" aria-hidden="true">🗺️</span><span class="section-header-title">Kartenquelle</span>
-                <span class="collapse-indicator" aria-hidden="true"><svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-chevron"/></svg></span>
-              </button>
-              <div id="mapSettings" style="display:none">
-                <div class="tile-source-picker" aria-label="Kartenquelle auswählen">
-                  <div class="tile-source-picker-heading">
-                    <div>
-                      <span class="setting-label">Karte auswählen</span>
-                      <p class="settings-hint">Vorschau wählen, dann bei Bedarf mit „Speichern“ dauerhaft übernehmen.</p>
-                    </div>
-                    <button id="tileSourceAdvancedToggle" type="button" class="btn btn-ghost tile-source-advanced-toggle" aria-expanded="false">Eigene Quelle</button>
-                  </div>
-                  <div class="tile-source-filters" id="tileSourceFilters" role="tablist" aria-label="Kartenquellen filtern">
-                    <button type="button" class="tile-source-filter is-active" data-tile-filter="recommended" role="tab" aria-selected="true">Empfohlen</button>
-                    <button type="button" class="tile-source-filter" data-tile-filter="online" role="tab" aria-selected="false">Online</button>
-                    <button type="button" class="tile-source-filter" data-tile-filter="bayern" role="tab" aria-selected="false">Bayern</button>
-                    <button type="button" class="tile-source-filter" data-tile-filter="offline" role="tab" aria-selected="false">Offline</button>
-                  </div>
-                  <div id="tileSourceCards" class="tile-source-cards" role="list" aria-live="polite" aria-busy="true">
-                    <div class="tile-source-empty">Kartenquellen werden geladen …</div>
-                  </div>
-                  <p id="tileSourceSelectionHint" class="tile-source-selection-hint" aria-live="polite"></p>
-                </div>
-                <div id="tileSourceAdvanced" class="tile-source-advanced" hidden>
-                  <div class="settings-grid">
-                  <div class="setting-item">
-                    <label class="setting-label">Kartentyp</label>
-                    <select id="mapType" class="setting-select">
-                      <option value="raster">Raster</option>
-                      <option value="raster-direct">Raster direkt (ohne Proxy)</option>
-                      <option value="vector">Vektor (MapLibre GL)</option>
-                      <option value="wms">WMS</option>
-                    </select>
-                  </div>
-                  <div class="setting-item" id="upstreamRow">
-                    <label class="setting-label">Tile-URL ({z}/{x}/{y})</label>
-                    <input id="tileUpstream" type="text" class="setting-input" placeholder="https://…/{z}/{x}/{y}.png"/>
-                  </div>
-                  <div class="setting-item" id="styleUrlRow" style="display:none">
-                    <label class="setting-label">Style-URL</label>
-                    <input id="tileStyleUrl" type="text" class="setting-input" placeholder="https://…/style.json"/>
-                  </div>
-                  <div class="setting-item" id="wmsLayersRow" style="display:none">
-                    <label class="setting-label">WMS-Layer</label>
-                    <input id="wmsLayers" type="text" class="setting-input" placeholder="layer1,layer2"/>
-                  </div>
-                  <div class="setting-item">
-                    <label class="setting-label">Maximaler Zoom</label>
-                    <input id="tileMaxZoom" type="number" min="0" max="22" step="1" class="setting-input" placeholder="19"/>
-                  </div>
-                  <div class="setting-item">
-                    <label class="setting-label">Attribution</label>
-                    <input id="tileAttribution" type="text" class="setting-input" placeholder="© OpenStreetMap contributors"/>
-                  </div>
-                </div>
-                <div class="settings-actions">
-                  <button id="previewTileSource" type="button" class="btn btn-ghost">Karte Vorschau</button>
-                </div>
-                </div>
-              </div>
-            </div>
-
-            <div class="settings-section collapsible" id="tinyTilesSection">
-              <button type="button" class="section-header clickable" id="tinyTilesHeader" aria-expanded="false" aria-controls="tinyTilesSettings">
-                <span class="section-icon" aria-hidden="true">📦</span><span class="section-header-title">Offline-Karte (tinyTiles)</span>
-                <span class="collapse-indicator" aria-hidden="true"><svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-chevron"/></svg></span>
-              </button>
-              <div id="tinyTilesSettings" style="display:none">
-                <p class="settings-hint">Erzeugt aus der beim Server geladenen OSM-PBF eine lokale Straßen-, Gebäude-, Gewässer- und Landbedeckungskarte. Flüsse, Bäche und Kanäle werden als lokale Vektorebene ergänzt. Während des Builds bleibt Routing verfügbar; der Build benötigt freien lokalen Speicher.</p>
-                <details id="offlineStyleEditor" class="offline-style-editor">
-                  <summary>Kartenstil anpassen</summary>
-                  <p class="settings-hint">Direkte Vorschau auf der Offline-Karte. Kein erneutes Erzeugen nötig; Speicherung in diesem Browser.</p>
-                  <label class="setting-label" for="offlineStylePreset">Vorlage</label>
-                  <select id="offlineStylePreset" class="setting-select">
-                    <option value="standard">Standard · Natur</option><option value="atlas">Atlas · klare Straßen</option><option value="night">Nacht</option><option value="contrast">Hoher Kontrast</option><option value="custom" disabled>Eigener Stil</option>
-                  </select>
-                  <div class="offline-style-colors">
-                    <label>Hintergrund<input type="color" id="offlineColorbackground" data-style-field="background" aria-label="Farbe: Hintergrund"/></label>
-                    <label>Gewässer<input type="color" id="offlineColorwater" data-style-field="water" aria-label="Farbe: Gewässer"/></label>
-                    <label>Wald<input type="color" id="offlineColorforest" data-style-field="forest" aria-label="Farbe: Wald"/></label>
-                    <label>Felder<input type="color" id="offlineColorfarmland" data-style-field="farmland" aria-label="Farbe: Felder"/></label>
-                    <label>Wiesen<input type="color" id="offlineColormeadow" data-style-field="meadow" aria-label="Farbe: Wiesen"/></label>
-                    <label>Gebäude<input type="color" id="offlineColorbuildings" data-style-field="buildings" aria-label="Farbe: Gebäude"/></label>
-                    <label>Fernstraßen<input type="color" id="offlineColormotorway" data-style-field="motorway" aria-label="Farbe: Fernstraßen"/></label>
-                    <label>Hauptstraßen<input type="color" id="offlineColorprimary" data-style-field="primary" aria-label="Farbe: Hauptstraßen"/></label>
-                    <label>Nebenstraßen<input type="color" id="offlineColorresidential" data-style-field="residential" aria-label="Farbe: Nebenstraßen"/></label>
-                    <label>Beschriftung<input type="color" id="offlineColortext" data-style-field="text" aria-label="Farbe: Beschriftung"/></label>
-                    <label>Textumrandung<input type="color" id="offlineColorhalo" data-style-field="halo" aria-label="Farbe: Textumrandung"/></label>
-                  </div>
-                  <label class="offline-style-range" for="offlineroadWidth">Straßenbreite<output id="offlineroadWidthValue" for="offlineroadWidth">100 %</output><input id="offlineroadWidth" data-style-field="roadWidth" type="range" min="0.6" max="2" step="0.05"/></label>
-                  <label class="offline-style-range" for="offlinelabelSize">Beschriftungsgröße<output id="offlinelabelSizeValue" for="offlinelabelSize">100 %</output><input id="offlinelabelSize" data-style-field="labelSize" type="range" min="0.8" max="1.5" step="0.05"/></label>
-                  <label class="checkbox"><input type="checkbox" data-style-field="showBuildings"/>Gebäude anzeigen</label>
-                  <label class="checkbox"><input type="checkbox" data-style-field="showPaths"/>Wege anzeigen</label>
-                  <label class="checkbox"><input type="checkbox" data-style-field="showLabels"/>Beschriftungen anzeigen</label>
-                  <div class="tinytiles-actions"><button id="offlineStyleSave" type="button" class="btn btn-primary">Stil speichern</button><button id="offlineStyleReset" type="button" class="btn btn-ghost">Standard wiederherstellen</button></div>
-                  <p id="offlineStyleStatus" class="settings-hint" role="status">Die Einstellungen betreffen nur die lokale Offline-Karte.</p>
-                </details>
-                <div class="tinytiles-presets" role="group" aria-label="Zoom-Voreinstellung für die Offline-Karte">
-                  <button type="button" class="tinytiles-preset" data-tinytiles-min="5" data-tinytiles-max="10"><strong>Übersicht</strong><span>5–10 · klein &amp; schnell</span></button>
-                  <button type="button" class="tinytiles-preset is-selected" data-tinytiles-min="8" data-tinytiles-max="14"><strong>Ausgewogen</strong><span>8–14 · empfohlen</span></button>
-                  <button type="button" class="tinytiles-preset" data-tinytiles-min="10" data-tinytiles-max="14"><strong>Details</strong><span>10–14 · für ein Gebiet</span></button>
-                </div>
-                <div class="settings-grid">
-                  <div class="setting-item">
-                    <label class="setting-label" for="tinyTilesMinZoom">Minimaler Zoom</label>
-                    <input id="tinyTilesMinZoom" type="number" min="5" max="14" step="1" value="8" class="setting-input" inputmode="numeric"/>
-                  </div>
-                  <div class="setting-item">
-                    <label class="setting-label" for="tinyTilesMaxZoom">Maximaler Zoom</label>
-                    <input id="tinyTilesMaxZoom" type="number" min="5" max="14" step="1" value="14" class="setting-input" inputmode="numeric"/>
-                  </div>
-                </div>
-                <div class="tinytiles-actions">
-                  <button id="tinyTilesBuild" type="button" class="btn btn-primary">Offline-Karte erzeugen</button>
-                  <button id="tinyTilesActivate" type="button" class="btn btn-ghost" style="display:none">Offline-Karte anzeigen</button>
-                </div>
-                <form id="tinyTilesPostcodeLookup" class="tinytiles-postcode-lookup" hidden>
-                  <label class="setting-label" for="tinyTilesPostcodeInput">PLZ-Gebiet finden</label>
-                  <div class="tinytiles-postcode-row">
-                    <input id="tinyTilesPostcodeInput" type="search" class="setting-input" inputmode="numeric" autocomplete="postal-code" maxlength="12" placeholder="z. B. 94032"/>
-                    <button type="submit" class="btn btn-ghost">Anzeigen</button>
-                  </div>
-                  <p id="tinyTilesPostcodeStatus" class="tinytiles-postcode-status" aria-live="polite">Suche lokal in den PLZ-Grenzen der Offline-Karte.</p>
-                </form>
-                <div id="tinyTilesBuildStatus" class="tinytiles-status" role="status" aria-live="polite" data-state="idle">
-                  <span id="tinyTilesStatusIcon" class="tinytiles-status-icon" aria-hidden="true">○</span>
-                  <div class="tinytiles-status-copy">
-                    <strong id="tinyTilesStatusTitle">Noch keine Offline-Karte</strong>
-                    <span id="tinyTilesStatusMessage">Die lokale Karte wird aus der geladenen PBF erzeugt.</span>
-                  </div>
-                </div>
-                <div id="tinyTilesProgress" class="tinytiles-progress" role="progressbar" aria-label="Erzeugung der Offline-Karte" aria-valuemin="0" aria-valuemax="100" aria-valuetext="Nicht gestartet" hidden>
-                  <div class="tinytiles-progress-bar"><span></span></div>
-                </div>
-                <dl id="tinyTilesFacts" class="tinytiles-facts" aria-live="polite" hidden></dl>
-              </div>
-            </div>
-
             <div class="settings-section collapsible" id="highwaySection">
               <button type="button" class="section-header clickable" id="highwayHeader" aria-expanded="false" aria-controls="allowedHighways">
                 <span class="section-icon" aria-hidden="true">🛣️</span><span class="section-header-title">Erlaubte Straßentypen</span>
@@ -826,7 +853,7 @@
         </section>
 
         <!-- ── Help card ── -->
-        <section class="card help-card collapsed" id="helpCard">
+        <section class="card help-card collapsed" id="helpCard" data-view-only="tools">
           <div class="card-header" id="helpCardHeader" title="Shortcuts ein-/ausklappen">
             <div class="card-header-left">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
@@ -842,6 +869,7 @@
               <div class="shortcut-item"><kbd>Long-Tap</kbd><span>Kartenaktionen öffnen</span></div>
               <div class="shortcut-item"><kbd>Shift+F10</kbd><span>Kartenaktionen an der Kartenmitte</span></div>
               <div class="shortcut-item"><kbd>Rechtsklick</kbd><span>Kartenaktionen öffnen</span></div>
+              <div class="shortcut-item"><kbd>Cmd/Ctrl+S</kbd><span>OSM-Entwurf speichern</span></div>
             </div>
           </div>
         </section>
@@ -908,6 +936,7 @@
 
     <p id="mapContextHint" class="sr-only">Kartenaktionen mit Rechtsklick oder langem Drücken öffnen. Auf der fokussierten Karte öffnet Umschalt+F10 das Menü an der Kartenmitte.</p>
     <script src="/static/map-context.js?v={{.Version}}"></script>
+    <script src="/static/osm-presets.js?v={{.Version}}"></script>
     <script src="/static/osm-editor.js?v={{.Version}}"></script>
     <script src="/static/osm-hover.js?v={{.Version}}"></script>
     <script src="/static/map-post.js?v={{.Version}}"></script>
