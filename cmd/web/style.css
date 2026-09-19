@@ -2275,7 +2275,7 @@ body.map-welcome-open { overflow: hidden; }
   .maps-shell .map-pane { inset: 0 0 64px; }
   .maps-rail { inset: auto 0 0; height: 64px; width: 100%; flex-direction: row; justify-content: space-around; padding: 2px 12px; gap: 0; border-top: 1px solid var(--border); }
   .maps-brand { font-size: 29px; margin: 0 12px 0 0; }
-  .maps-rail button { width: 80px; gap: 0; padding: 0; }
+  .maps-rail button { width: auto; flex: 1 1 0; min-width: 0; gap: 0; padding: 0; font-size: 8px; }
   .maps-rail button > span { font-size: 23px; line-height: 30px; }
   .maps-rail-footer { display: none; }
   .maps-shell .sidebar { inset: auto 8px 98px; width: auto; height: auto; max-height: 47dvh; border-radius: 20px; }
@@ -2316,7 +2316,7 @@ body.map-welcome-open { overflow: hidden; }
 .ai-output button { background: var(--primary-dim); color: var(--primary); }
 @media (max-width: 768px) {
   .maps-rail { padding-left: 4px; padding-right: 4px; }
-  .maps-rail button { width: 66px; }
+  .maps-rail button { width: auto; }
   .maps-brand { margin-right: 6px; }
   .maps-shell[data-view="assistant"] .sidebar { max-height: 60dvh; }
   .maps-shell[data-view="assistant"] .ai-messages { max-height: 26dvh; }
@@ -2417,6 +2417,17 @@ body.map-welcome-open { overflow: hidden; }
 .osm-editor-list { list-style: none; padding: 0; margin: 8px 0; max-height: 230px; overflow: auto; overflow-wrap: anywhere; font-size: 12px; }
 .osm-editor-list li { padding: 6px 0; border-bottom: 1px solid var(--border); }
 .osm-editor-list button { white-space: normal; text-align: left; }
+.osm-hover-control { display: grid; gap: 6px; margin: 10px 0; }
+.osm-hover-control p { margin: 0; color: var(--text-2); font-size: 11px; line-height: 1.45; }
+.osm-hover-info { margin: 8px 0 12px; padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--primary-dim); font-size: 12px; line-height: 1.45; }
+.osm-hover-info strong { display: block; margin-bottom: 3px; color: var(--text); }
+.osm-hover-info dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 8px; margin: 7px 0 0; }
+.osm-hover-info dt { color: var(--text-2); }
+.osm-hover-info dd { margin: 0; overflow-wrap: anywhere; }
+.osm-hover-actions, .osm-draft-overview { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+.osm-hover-actions .btn { flex: 1 1 118px; }
+.osm-draft-overview { align-items: center; justify-content: space-between; padding: 10px; border-radius: 10px; background: var(--input-bg); font-size: 12px; }
+.osm-draft-overview strong { color: var(--text); }
 #osmEditorTools h3, #osmEditorTools h4 { font-size: 13px; margin: 12px 0 6px; }
 #osmEditorTools [hidden] { display: none; }
 

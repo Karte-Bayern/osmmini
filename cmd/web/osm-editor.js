@@ -71,8 +71,9 @@
     let undo=[],redo=[],saved=JSON.stringify(drafts),checkedFor='',conflicts=[];
     const versions=()=>JSON.stringify(drafts.filter(d=>d.base).map(d=>[d.base.type,d.base.id,d.base.version]).sort());
     const fieldNames=Object.assign(Object.create(null),{name:'Name',website:'Website',opening_hours:'Öffnungszeiten',amenity:'Art des Ortes'});
-    const kinds=Object.assign(Object.create(null),{bench:'Sitzbank',drinking_water:'Trinkwasserstelle',bicycle_parking:'Fahrradparkplatz',cafe:'Café'});
-    const label=e=>e.tags.name||kinds[e.tags.amenity]||(e.type==='node'?'Unbenannter Ort':'Unbenannter Weg / Fläche');
+    const presets=Object.assign(Object.create(null),{bench:{label:'Sitzbank',tags:{amenity:'bench'}},drinking_water:{label:'Trinkwasserstelle',tags:{amenity:'drinking_water'}},bicycle_parking:{label:'Fahrradparkplatz',tags:{amenity:'bicycle_parking'}},cafe:{label:'Café',tags:{amenity:'cafe'}},defibrillator:{label:'Defibrillator',tags:{emergency:'defibrillator'}},post_box:{label:'Briefkasten',tags:{amenity:'post_box'}},toilets:{label:'Öffentliche Toilette',tags:{amenity:'toilets'}},charging_station:{label:'Ladestation',tags:{amenity:'charging_station'}},bus_stop:{label:'Bushaltestelle',tags:{highway:'bus_stop'}},playground:{label:'Spielplatz',tags:{leisure:'playground'}},barrier_free_entrance:{label:'Barrierefreier Zugang',tags:{entrance:'yes',wheelchair:'yes'}}});
+    const presetForTags=tagSet=>Object.entries(presets).find(([,preset])=>Object.entries(preset.tags).every(([key,value])=>tagSet[key]===value))?.[1];
+    const label=e=>e.tags.name||presetForTags(e.tags)?.label||(e.type==='node'?'Unbenannter Ort':'Unbenannter Weg / Fläche');
     const common={osmName:'name',osmWebsite:'website',osmHours:'opening_hours'};
     let validForm=false;
     function syncCommon(){for(const [id,key] of Object.entries(common)){const row=[...el('osmTags').children].find(r=>r.children[0].value===key);el(id).value=row?.children[1].value||'';}}
@@ -93,6 +94,8 @@
       for(const id of ['osmExport','osmBackup'])el(id).disabled=busy||dirty||!drafts.length;
       el('osmDraftSummary').textContent=drafts.length?`${drafts.length} ${drafts.length===1?'Entwurf':'Entwürfe'} im Arbeitsstand.${dirty?' Offene Änderungen zuerst speichern oder verwerfen.':''}`:'Noch keine gespeicherten Entwürfe. Wähle einen Ort aus oder trage einen neuen ein.';
       el('osmCheckState').textContent=!drafts.length?'':checkedFor===versions()&&conflicts.length?'OSM wurde inzwischen geändert. Sichere den Arbeitsstand und löse die Konflikte in einem OSM-Editor.':!drafts.some(d=>d.base)?'Nur neue Orte. Bitte vor Veröffentlichung prüfen, ob sie bereits in OSM existieren.':checkedFor===versions()?'Beim letzten Vergleich waren die OSM-Versionen aktuell. Vor Veröffentlichung erneut prüfen.':'Noch nicht mit dem aktuellen OSM-Stand verglichen. Internetverbindung erforderlich.';
+      const overview=el('osmDraftOverview');overview.replaceChildren();
+      if(drafts.length){const title=document.createElement('strong'),next=document.createElement('button');const outdated=checkedFor!==versions()&&drafts.some(d=>d.base);title.textContent=conflicts.length?`${conflicts.length} Versionswarnung${conflicts.length===1?'':'en'}`:outdated?'Prüfung vor Export ausstehend':'Export bereit';next.type='button';next.className='btn btn-ghost';next.textContent=conflicts.length?'Warnung anzeigen':outdated?'Jetzt vergleichen':'Entwürfe ansehen';next.addEventListener('click',()=>{if(conflicts.length){const issue=conflicts[0].match(/^(node|way)\/(\d+)/);const draft=issue&&drafts.find(d=>d.value.type===issue[1]&&String(d.value.id)===issue[2]);if(draft&&canSwitch())open(draft);}else if(outdated)el('osmCheck').focus();else el('osmDrafts').scrollIntoView({block:'nearest',behavior:'smooth'});});overview.append(title,next);}
       if(checkedFor===versions()&&conflicts.length)el('osmExport').disabled=true;
     }
     function setBusy(value){if(value&&active)cancel();busy=value;syncUI();}
@@ -128,7 +131,7 @@
       remove.type='button';remove.innerHTML='<svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-close"/></svg>';remove.setAttribute('aria-label',(fieldNames[k]||k||'Eigenschaft')+' entfernen');remove.addEventListener('click',()=>{const index=[...el('osmTags').children].indexOf(div);div.remove();dirty=true;syncCommon();diff();const next=el('osmTags').children[index]||el('osmTags').children[index-1];(next?.children[0]||el('osmAddTag')).focus?.();});
       div.append(input,value,remove);el('osmTags').append(div);
     }
-    function open(d){current=structuredClone(d);dirty=false;el('osmForm').hidden=false;el('osmSelected').textContent=label(d.value);el('osmObjectMeta').textContent=d.base?`${d.value.type==='node'?'Punkt':'Weg / Fläche'} · OSM-ID ${d.value.id} · Version ${d.value.version}`:`Neuer Ort · ${d.value.lat.toFixed(5)}, ${d.value.lon.toFixed(5)}`;el('osmPresetWrap').hidden=!!d.base;el('osmPreset').value=Object.hasOwn(kinds,d.value.tags.amenity)?d.value.tags.amenity:'';el('osmTags').replaceChildren();Object.entries(d.value.tags).forEach(([k,v])=>row(k,v));syncCommon();diff();render();el('osmSelected').focus?.();}
+    function open(d){current=structuredClone(d);dirty=false;el('osmForm').hidden=false;el('osmSelected').textContent=label(d.value);el('osmObjectMeta').textContent=d.base?`${d.value.type==='node'?'Punkt':'Weg / Fläche'} · OSM-ID ${d.value.id} · Version ${d.value.version}`:`Neuer Ort · ${d.value.lat.toFixed(5)}, ${d.value.lon.toFixed(5)}`;el('osmPresetWrap').hidden=!!d.base;el('osmPreset').value=Object.entries(presets).find(([,preset])=>presetForTags(d.value.tags)===preset)?.[0]||'';el('osmTags').replaceChildren();Object.entries(d.value.tags).forEach(([k,v])=>row(k,v));syncCommon();diff();render();el('osmSelected').focus?.();}
 
     function canSwitch(){if(dirty){status.textContent='Du hast ungespeicherte Änderungen. Speichere sie in Schritt 2 oder verwirf sie dort.';el('osmSelected').focus?.();return false;}return !busy;}
     function render(){
@@ -174,8 +177,8 @@
       dirty=true;diff();
     });
     el('osmPreset').addEventListener('change',()=>{
-      const kind=el('osmPreset').value;if(!current||current.base||!Object.hasOwn(kinds,kind)){status.textContent='Wähle zuerst eine Art für den neuen Ort.';return;}
-      try{const next=readTags();next.amenity=kind;el('osmTags').replaceChildren();Object.entries(next).forEach(([k,v])=>row(k,v));dirty=true;syncCommon();diff();status.textContent=kinds[kind]+' gewählt. Ergänze nur Angaben, die du kennst, und speichere den Entwurf.';}catch(e){status.textContent=userError(e);}
+      const kind=el('osmPreset').value,preset=presets[kind];if(!current||current.base||!preset){status.textContent='Wähle zuerst eine Art für den neuen Ort.';return;}
+      try{const next=readTags();Object.assign(next,preset.tags);el('osmTags').replaceChildren();Object.entries(next).forEach(([k,v])=>row(k,v));dirty=true;syncCommon();diff();status.textContent=preset.label+' gewählt. Ergänze nur Angaben, die du kennst, und speichere den Entwurf.';}catch(e){status.textContent=userError(e);}
     });
     el('osmDiscard').addEventListener('click',()=>{current=null;dirty=false;el('osmForm').hidden=true;status.textContent='Bearbeitung geschlossen. Bereits gespeicherte Entwürfe bleiben erhalten.';syncUI();render();el('osmNearby').focus?.();});
     el('osmSave').addEventListener('click',()=>{
@@ -204,7 +207,7 @@
     });
     root.addEventListener?.('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue='';}});
     document.addEventListener('keydown',e=>{if(e.key==='Escape'&&active){cancel();status.textContent='Punktsetzen beendet.';}});
-    refresh();const api={startAt(point){if(!canSwitch())return;options.onStart?.();active=true;api.addPoint({lngLat:point});},findNearby(point){if(!canSwitch())return;nearbyPoint=point;el('osmNearby').click();el('osmEditorStatus').focus?.();},get active(){return active;},cancel,render,addPoint(event){if(!active||event.originalEvent?.target?.closest?.('.maplibregl-marker, .maplibregl-popup'))return;const id=Math.min(0,...drafts.map(d=>d.value.id))-1;try{const value=element({type:'node',id,lat:event.lngLat.lat,lon:((event.lngLat.lng+180)%360+360)%360-180,tags:{}},true);cancel();open({base:null,value});dirty=true;diff();status.textContent='Position gewählt. Wähle in Schritt 2 die Art des Ortes und ergänze seine Angaben.';el('osmPreset').focus?.();}catch(e){status.textContent=userError(e);}}};return api;
+    refresh();const api={startAt(point){if(!canSwitch())return;options.onStart?.();active=true;api.addPoint({lngLat:point});},findNearby(point){if(!canSwitch())return;nearbyPoint=point;el('osmNearby').click();el('osmEditorStatus').focus?.();},load,get active(){return active;},cancel,render,addPoint(event){if(!active||event.originalEvent?.target?.closest?.('.maplibregl-marker, .maplibregl-popup'))return;const id=Math.min(0,...drafts.map(d=>d.value.id))-1;try{const value=element({type:'node',id,lat:event.lngLat.lat,lon:((event.lngLat.lng+180)%360+360)%360-180,tags:{}},true);cancel();open({base:null,value});dirty=true;diff();status.textContent='Position gewählt. Wähle in Schritt 2 die Art des Ortes und ergänze seine Angaben.';el('osmPreset').focus?.();}catch(e){status.textContent=userError(e);}}};return api;
   }
   root.OSMEditor={tags,element,changes,validateDraft,osc,restore,checkVersions,create};
 })(typeof window==='undefined'?globalThis:window);

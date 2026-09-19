@@ -5117,7 +5117,7 @@ setupCollapsibleSection('speedHeader', 'speedDefaults', 'speedsOpen');
 setupCollapsibleSection('mapHeader', 'mapSettings', 'mapSettingsOpen');
 setupCollapsibleSection('tinyTilesHeader', 'tinyTilesSettings', 'tinyTilesSettingsOpen');
 
-// Sidebar shortcuts expose the three common next steps without requiring a
+// Sidebar shortcuts expose common next steps without requiring a
 // long scroll through the tool cards. They reuse the existing expansion
 // controls so keyboard, stored collapse state and all normal interactions
 // stay identical.
@@ -5130,9 +5130,12 @@ function revealSidebarTool(kind) {
   const targets = {
     offline: { card: 'settingsCard', body: 'settingsBody', toggle: 'settingsToggle', section: 'tinyTilesHeader' },
     territories: { card: 'territoryCard', body: 'territoryBody', toggle: 'territoryToggle' },
+    settings: { card: 'settingsCard', body: 'settingsBody', toggle: 'settingsToggle' },
+    osm: { card: 'osmEditorTools', details: true, focus: 'osmNearby' },
   };
   const target = targets[kind];
   if (!target) return;
+  if (target.details) document.getElementById(target.card).open = true;
   const body = document.getElementById(target.body);
   if (body?.style.display === 'none') document.getElementById(target.toggle)?.click();
   if (target.section) {
@@ -5140,7 +5143,10 @@ function revealSidebarTool(kind) {
     const content = header?.nextElementSibling;
     if (content?.style.display === 'none') header?.click();
   }
-  window.setTimeout(() => document.getElementById(target.section || target.card)?.scrollIntoView({ block: 'start', behavior: 'smooth' }), 0);
+  window.setTimeout(() => {
+    document.getElementById(target.section || target.card)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    document.getElementById(target.focus)?.focus({ preventScroll: true });
+  }, 0);
 }
 
 document.querySelectorAll('[data-sidebar-open]').forEach((button) => {
@@ -6106,6 +6112,23 @@ window.osmEditor = OSMEditor.create(map, {
   }
 });
 registerMapLayerRehydrate(() => window.osmEditor.render());
+
+window.osmHover = OSMHover.create(map);
+registerMapLayerRehydrate(() => window.osmHover.render());
+window.addEventListener('osmmini:edit-object', event => {
+  const {type,id}=event.detail||{};
+  if (!type || !id) return;
+  setMapsView('tools');
+  document.getElementById('osmEditorTools').open=true;
+  window.osmEditor?.load(type,id);
+});
+window.addEventListener('osmmini:route-object', event => {
+  const point=event.detail||{};
+  if (!Number.isFinite(point.lat)||!Number.isFinite(point.lon)) return;
+  applySearchResultToInput(document.getElementById('to'),point);
+  setMapsView('route');
+  document.getElementById('from')?.focus();
+});
 
 // Ordinary clicks pan/select; location actions live in the context menu.
 window.mapContext = MapContext.create(map, [

@@ -34,6 +34,8 @@
         <button type="button" data-map-view="route" aria-pressed="false"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M7 20V9a3 3 0 0 1 3-3h10m-5-5 5 5-5 5"/></svg></span>Route</button>
         <button type="button" data-map-view="assistant" aria-pressed="false"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m12 3 2.8 6.2L21 12l-6.2 2.8L12 21l-2.8-6.2L3 12l6.2-2.8Z"/></svg></span>Assistent</button>
         <button type="button" data-map-view="tools" aria-pressed="false"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="9" cy="18" r="2"/></svg></span>Werkzeuge</button>
+        <button type="button" class="maps-rail-shortcut" data-sidebar-open="osm" aria-label="OpenStreetMap bearbeiten"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m4 6 6-3 6 3 4-2v14l-4 2-6-3-6 3Z"/><path d="M10 3v15m6-12v15"/><path d="m15 11 4 4-4 4"/></svg></span>OSM-Edit</button>
+        <button type="button" class="maps-rail-shortcut" data-sidebar-open="settings" aria-label="Einstellungen öffnen"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.1 2.1-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.55v.09h-3v-.09A1.7 1.7 0 0 0 10.7 18.6a1.7 1.7 0 0 0-1.88.34l-.06.06-2.1-2.1.06-.06A1.7 1.7 0 0 0 7.06 15a1.7 1.7 0 0 0-1.55-1.03h-.09v-3h.09A1.7 1.7 0 0 0 7.06 9.94a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.1-2.1.06.06a1.7 1.7 0 0 0 1.88.34 1.7 1.7 0 0 0 1.03-1.55v-.09h3v.09a1.7 1.7 0 0 0 1.03 1.55 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.1 2.1-.06.06a1.7 1.7 0 0 0-.34 1.88 1.7 1.7 0 0 0 1.55 1.03h.09v3h-.09A1.7 1.7 0 0 0 19.4 15Z"/></svg></span>Einstellungen</button>
         <div class="maps-rail-footer">OSM<br>mini</div>
       </nav>
       <aside class="sidebar" aria-label="Routenplanung und Werkzeuge">
@@ -236,6 +238,11 @@
         <details class="card gis-tools" id="osmEditorTools" open>
           <summary>OpenStreetMap bearbeiten</summary>
           <p class="osm-local-note">Dein Arbeitsstand bleibt in diesem Browser. Hier wird nichts auf OpenStreetMap veröffentlicht.</p>
+          <div class="osm-hover-control">
+            <button id="osmHoverToggle" class="btn btn-ghost" type="button" aria-pressed="false">Objekte unter dem Zeiger prüfen</button>
+            <p>Zeigt erfasste Objekte direkt auf der Karte an und lädt ihre aktuellen OSM-Tags nur bei Bedarf.</p>
+          </div>
+          <div id="osmHoverInfo" class="osm-hover-info" role="status" aria-live="polite" hidden></div>
           <section class="osm-step" aria-labelledby="osmStepChoose">
             <h3 id="osmStepChoose">1. Ort auswählen</h3>
             <p class="settings-hint">Bewege die Karte zum gewünschten Ort. Die Suche findet bis zu 50 erfasste Orte im Umkreis von 500 m um die Kartenmitte.</p>
@@ -254,7 +261,7 @@
             <h3>2. Angaben bearbeiten</h3><h4 id="osmSelected" tabindex="-1"></h4><p id="osmObjectMeta" class="settings-hint"></p>
             <p id="osmEditState" class="osm-edit-state"></p>
             <fieldset id="osmFormFields" aria-label="Angaben zum ausgewählten Ort">
-              <div id="osmPresetWrap"><label for="osmPreset">Was möchtest du eintragen?</label><div class="gis-actions"><select id="osmPreset" class="setting-input"><option value="" disabled>Art auswählen …</option><option value="bench">Sitzbank</option><option value="drinking_water">Trinkwasserstelle</option><option value="bicycle_parking">Fahrradparkplatz</option><option value="cafe">Café</option></select></div><p class="settings-hint">Weitere Arten kannst du unter „Alle Eigenschaften“ eintragen.</p></div>
+              <div id="osmPresetWrap"><label for="osmPreset">Was möchtest du eintragen?</label><div class="gis-actions"><select id="osmPreset" class="setting-input"><option value="" disabled>Art auswählen …</option><option value="bench">Sitzbank</option><option value="drinking_water">Trinkwasserstelle</option><option value="bicycle_parking">Fahrradparkplatz</option><option value="cafe">Café</option><option value="defibrillator">Defibrillator</option><option value="post_box">Briefkasten</option><option value="toilets">Öffentliche Toilette</option><option value="charging_station">Ladestation</option><option value="bus_stop">Bushaltestelle</option><option value="playground">Spielplatz</option><option value="barrier_free_entrance">Barrierefreier Zugang</option></select></div><p class="settings-hint">Weitere Arten kannst du unter „Alle Eigenschaften“ eintragen.</p></div>
               <label for="osmName">Name</label><input id="osmName" class="setting-input" placeholder="Nur falls der Ort einen eigenen Namen hat"/>
               <label for="osmWebsite">Website</label><input id="osmWebsite" class="setting-input" type="url" placeholder="https://…"/>
               <label for="osmHours">Öffnungszeiten</label><input id="osmHours" class="setting-input" placeholder="z. B. Mo-Fr 09:00-18:00" aria-describedby="osmHoursHint"/><p id="osmHoursHint" class="settings-hint">OSM-Schreibweise verwenden. Unbekannte Angaben frei lassen.</p>
@@ -266,6 +273,7 @@
           </section>
           <section class="osm-step" aria-labelledby="osmStepExport">
             <h3 id="osmStepExport">3. Arbeitsstand prüfen &amp; exportieren</h3><p id="osmDraftSummary" tabindex="-1" class="settings-hint"></p>
+            <div id="osmDraftOverview" class="osm-draft-overview" aria-live="polite"></div>
             <div class="gis-actions"><button id="osmUndo" class="btn btn-ghost" type="button" disabled>Rückgängig</button><button id="osmRedo" class="btn btn-ghost" type="button" disabled>Wiederholen</button></div><p class="settings-hint">Rückgängig bezieht sich auf gespeicherte Entwurfsänderungen in dieser Sitzung.</p><ul id="osmDrafts" class="osm-editor-list"></ul>
             <button id="osmCheck" class="btn btn-ghost" type="button" disabled>Mit aktuellem OSM-Stand vergleichen</button><p id="osmCheckState" class="settings-hint"></p>
             <button id="osmExport" class="btn btn-primary" type="button" disabled>Änderungsdatei herunterladen (.osc)</button><p class="settings-hint">Zum Prüfen und späteren Veröffentlichen in einem OSM-Editor. Der Download veröffentlicht noch nichts.</p>
@@ -901,6 +909,7 @@
     <p id="mapContextHint" class="sr-only">Kartenaktionen mit Rechtsklick oder langem Drücken öffnen. Auf der fokussierten Karte öffnet Umschalt+F10 das Menü an der Kartenmitte.</p>
     <script src="/static/map-context.js?v={{.Version}}"></script>
     <script src="/static/osm-editor.js?v={{.Version}}"></script>
+    <script src="/static/osm-hover.js?v={{.Version}}"></script>
     <script src="/static/map-post.js?v={{.Version}}"></script>
     <script src="/static/planning.js?v={{.Version}}"></script>
     <script src="/static/ai-ui.js?v={{.Version}}&protocol=2"></script>
