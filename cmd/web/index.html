@@ -379,6 +379,7 @@
             <button id="osmTabFind" class="osm-tab" type="button" role="tab" aria-selected="true" aria-controls="osmPanelFind">Finden</button>
             <button id="osmTabEdit" class="osm-tab" type="button" role="tab" aria-selected="false" aria-controls="osmPanelEdit" tabindex="-1">Bearbeiten</button>
             <button id="osmTabDrafts" class="osm-tab" type="button" role="tab" aria-selected="false" aria-controls="osmPanelDrafts" tabindex="-1">Entwürfe <span id="osmDraftCount" class="osm-tab-count" hidden>0</span></button>
+            <button id="osmTabRelations" class="osm-tab" type="button" role="tab" aria-selected="false" aria-controls="osmPanelRelations" tabindex="-1">Relationen</button>
           </div>
           <p id="osmEditorStatus" class="osm-status" tabindex="-1" role="status" aria-live="polite">Wähle auf der Karte einen Ort, um ihn zu bearbeiten.</p>
 
@@ -393,6 +394,18 @@
             <ul id="osmCandidates" class="osm-candidates" aria-label="Gefundene Orte"></ul>
             <p id="osmCandidatesEmpty" class="osm-empty">Noch keine Orte in der Liste. Suche oder tippe auf die Karte.</p>
             <button id="osmNew" class="btn btn-ghost osm-new" type="button" aria-pressed="false">Neuen Ort eintragen</button>
+            <div class="osm-draw-actions">
+              <button id="osmDrawLine" class="btn btn-ghost" type="button">Neuen Weg zeichnen</button>
+              <button id="osmDrawArea" class="btn btn-ghost" type="button">Neue Fläche zeichnen</button>
+            </div>
+            <div id="osmDrawBar" class="osm-draw-bar" role="status" aria-live="polite" hidden>
+              <p><span id="osmDrawCount">0</span> Punkte gesetzt</p>
+              <div class="osm-draw-bar-actions">
+                <button id="osmDrawUndo" class="btn btn-ghost" type="button">Letzten Punkt entfernen</button>
+                <button id="osmDrawFinish" class="btn btn-primary" type="button">Fertig</button>
+                <button id="osmDrawCancel" class="btn btn-ghost" type="button">Abbrechen</button>
+              </div>
+            </div>
             <details class="osm-advanced"><summary>Weitere Möglichkeiten</summary>
               <div class="osm-hover-control">
                 <button id="osmHoverToggle" class="btn btn-ghost" type="button" aria-pressed="false">Objekte unter dem Zeiger prüfen</button>
@@ -413,10 +426,34 @@
               <div class="osm-object">
                 <div class="osm-object-title"><h3 id="osmSelected" tabindex="-1"></h3><span id="osmEditState" class="osm-badge" data-state="clean"></span></div>
                 <p id="osmObjectMeta" class="osm-meta"></p>
-                <div class="osm-object-actions"><button id="osmLocate" class="btn btn-ghost" type="button">Auf Karte zeigen</button><a id="osmOsmLink" class="btn btn-ghost" href="#" target="_blank" rel="noopener noreferrer" hidden>In OSM ansehen ↗</a></div>
+                <div class="osm-object-actions"><button id="osmLocate" class="btn btn-ghost" type="button">Auf Karte zeigen</button><a id="osmOsmLink" class="btn btn-ghost" href="#" target="_blank" rel="noopener noreferrer" hidden>In OSM ansehen ↗</a><button id="osmGeometryToggle" class="btn btn-ghost" type="button" aria-pressed="false" hidden>Punkte bearbeiten</button></div>
+                <div id="osmTopologyTools" class="osm-topology-tools" hidden>
+                  <button id="osmSplit" class="btn btn-ghost" type="button">Weg teilen</button>
+                  <div class="osm-merge">
+                    <label for="osmMergeId">Mit Weg-ID verbinden</label>
+                    <div class="osm-merge-row"><input id="osmMergeId" class="setting-input" inputmode="numeric" placeholder="z. B. 654321"/><button id="osmMergeGo" class="btn btn-ghost" type="button">Verbinden</button></div>
+                  </div>
+                </div>
               </div>
               <div id="osmDuplicates" class="osm-duplicates" role="status" hidden></div>
+              <div id="osmMemberships" class="osm-duplicates" role="status" hidden></div>
               <div id="osmPresetWrap" hidden><h4 class="osm-section-title">Was möchtest du eintragen?</h4><div id="osmPresetChips"></div></div>
+              <div id="osmRelationTools" class="osm-relation-tools" hidden>
+                <h4 class="osm-section-title">Mitglieder</h4>
+                <ul id="osmMembers" class="osm-members" aria-label="Mitglieder der Relation"></ul>
+                <p id="osmMembersEmpty" class="osm-empty">Noch keine Mitglieder.</p>
+                <div class="osm-member-add">
+                  <label for="osmMemberDraft">Aus den eigenen Entwürfen hinzufügen</label>
+                  <select id="osmMemberDraft" class="setting-input"><option value="">– auswählen –</option></select>
+                  <label for="osmMemberType">Oder über OSM-ID hinzufügen</label>
+                  <div class="osm-member-add-row">
+                    <select id="osmMemberType" class="setting-input"><option value="node">Punkt</option><option value="way">Weg/Fläche</option><option value="relation">Relation</option></select>
+                    <input id="osmMemberId" class="setting-input" inputmode="numeric" placeholder="ID"/>
+                    <input id="osmMemberRole" class="setting-input" placeholder="Rolle (optional)"/>
+                    <button id="osmMemberAdd" class="btn btn-ghost" type="button">Hinzufügen</button>
+                  </div>
+                </div>
+              </div>
               <fieldset id="osmFormFields" class="osm-fieldset" aria-label="Angaben zum ausgewählten Ort">
                 <div id="osmFields"></div>
                 <details id="osmAdvancedTags" class="osm-advanced"><summary>Alle Eigenschaften (OSM-Tags)</summary>
@@ -442,7 +479,17 @@
               <li><h4>Änderungsdatei laden</h4><p class="settings-hint">Zum Prüfen und späteren Veröffentlichen in einem OSM-Editor. Der Download veröffentlicht noch nichts.</p><button id="osmExport" class="btn btn-primary" type="button" disabled>Änderungsdatei herunterladen (.osc)</button></li>
             </ol>
             <details class="osm-advanced"><summary>Arbeitsstand sichern oder wiederherstellen</summary><p class="settings-hint">JSON-Dateien enthalten deine gespeicherten Entwürfe und lassen sich hier wieder öffnen. Neue Dateien ergänzen den Arbeitsstand; doppelte Objekte werden nicht überschrieben.</p><button id="osmBackup" class="btn btn-ghost" type="button" disabled>Sicherung herunterladen (.json)</button><label for="osmImport">Sicherung ergänzen</label><input id="osmImport" type="file" accept=".json,application/json" class="setting-input"/></details>
-            <p class="settings-hint">Bearbeitbar sind Eigenschaften von Punkten, Wegen und Flächen sowie neue Punkte. Bestehende Formen und Positionen bleiben erhalten.</p>
+            <p class="settings-hint">Bearbeitbar sind Eigenschaften, Positionen, neue oder geänderte Wege/Flächen sowie Relationen. Löschungen erscheinen als eigene Gruppe im Exportformat.</p>
+          </div>
+
+          <div id="osmPanelRelations" role="tabpanel" aria-labelledby="osmTabRelations" hidden>
+            <button id="osmNewRelation" class="btn btn-ghost osm-new" type="button">Neue Relation anlegen</button>
+            <div class="osm-relation-load">
+              <label for="osmRelationId">Relation über OSM-ID laden</label>
+              <div class="osm-search-row"><input id="osmRelationId" class="setting-input" inputmode="numeric" placeholder="z. B. 987654"/><button id="osmRelationLoad" class="btn btn-ghost" type="button">Laden</button></div>
+            </div>
+            <ul id="osmRelationsList" class="osm-drafts" aria-label="Relationen im Arbeitsstand"></ul>
+            <p id="osmRelationsEmpty" class="osm-empty">Noch keine Relationen im Arbeitsstand.</p>
           </div>
         </section>
         </div>

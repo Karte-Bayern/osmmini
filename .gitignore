@@ -14,3 +14,10 @@ leaflet-maplibre-gl.js
 osmmini-server
 operations.json
 operators.json
+
+# Local operational data (never for the public repo: real fire-department
+# rosters, internal documents, generated PLZ/POI caches from a loaded PBF).
+ffw/
+fire-stations.json
+territories/
+*.poi.json

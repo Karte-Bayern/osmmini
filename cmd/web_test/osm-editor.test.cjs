@@ -11,8 +11,10 @@ test('OSC preserves version geometry and way references and escapes XML',()=>{
  const xml=E.osc([{base,value:{...base,tags:{name:'A & "B" <C>\nD'}}},{base:way,value:{...way,tags:{building:'house'}}},{base:null,value:{type:'node',id:-1,lat:49,lon:13,tags:{amenity:'bench'}}}]);
  assert.match(xml,/<modify>/);assert.match(xml,/<create>/);assert.match(xml,/id="42" version="3" lat="48" lon="12"/);assert.match(xml,/A &amp; &quot;B&quot; &lt;C&gt;&#10;D/);assert.equal((xml.match(/<nd ref=/g)||[]).length,4);assert.ok(!xml.includes('changeset='));
 });
-test('invalid versions geometry mutations and duplicate IDs are blocked',()=>{
- for(const value of [{...base,version:4},{...base,lat:49},{...base,type:'relation'},{...base,id:43},{...base,version:0}])assert.throws(()=>E.validateDraft({base,value}));
+test('invalid versions and type/ID mutations are blocked, but a real geometry change now validates',()=>{
+ for(const value of [{...base,version:4},{...base,type:'relation'},{...base,id:43},{...base,version:0}])assert.throws(()=>E.validateDraft({base,value}));
+ const moved=E.validateDraft({base,value:{...base,lat:49}});assert.equal(moved.value.lat,49);assert.equal(moved.base.lat,48);
+ assert.match(E.osc([{base,value:{...base,lat:49}}]),/<modify>[\s\S]*lat="49"/);
  const d={base,value:{...base,tags:{name:'Neu'}}};assert.throws(()=>E.osc([d,d]));
  assert.throws(()=>E.element({...base,id:Number.MAX_SAFE_INTEGER+1}));
  assert.throws(()=>E.element({type:'way',id:2,version:1,nodes:[],tags:{}}));
@@ -20,8 +22,46 @@ test('invalid versions geometry mutations and duplicate IDs are blocked',()=>{
 test('unchanged objects do not appear in OSC; backups validate on restore',()=>{
  assert.ok(!E.osc([{base,value:base}]).includes('<modify>'));
  const restored=E.restore(JSON.stringify({version:1,drafts:[{base,value:{...base,tags:{name:'Neu'}}}]}));assert.equal(restored[0].base.version,3);
- assert.throws(()=>E.restore(JSON.stringify({version:1,drafts:[{base,value:{...base,lon:13}}]})));
+ const moved=E.restore(JSON.stringify({version:1,drafts:[{base,value:{...base,lon:13}}]}));assert.equal(moved[0].value.lon,13);
+ const way={type:'way',id:33,version:9,nodes:[1,2,3],tags:{building:'yes'}};
+ assert.throws(()=>E.restore(JSON.stringify({version:1,drafts:[{base:way,value:{...way,nodes:[1,2,-999]}}]})),/unbekannt/);
  assert.throws(()=>E.restore(JSON.stringify({version:2,drafts:[]})));
+});
+test('relations validate members, order create groups by type and delete in reverse',()=>{
+ const wayA={type:'way',id:10,version:1,nodes:[1,2],tags:{highway:'residential'}};
+ const rel={type:'relation',id:5,version:2,members:[{type:'way',ref:10,role:''},{type:'way',ref:11,role:''}],tags:{type:'route'}};
+ assert.throws(()=>E.element({type:'relation',id:5,version:2,members:[{type:'way',ref:0,role:''}],tags:{}}));
+ assert.throws(()=>E.element({type:'relation',id:5,version:2,members:Array.from({length:301},()=>({type:'way',ref:1,role:''})),tags:{}}));
+ assert.throws(()=>E.validateDraft({base:null,value:{type:'relation',id:-1,members:[],tags:{}}}),/mindestens eine Eigenschaft/);
+ const newWay={type:'way',id:-1,tags:{highway:'path'},nodes:[1,-2]};
+ const newNode={type:'node',id:-2,tags:{},lat:48.001,lon:12.001};
+ const newRel={type:'relation',id:-3,tags:{type:'route'},members:[{type:'way',ref:10,role:''},{type:'way',ref:-1,role:''}]};
+ const xml=E.osc([{base:wayA,value:wayA},{base:null,value:newWay},{base:null,value:newNode},{base:null,value:newRel},{base:rel,deleted:true}]);
+ const createBlock=xml.match(/<create>[\s\S]*?<\/create>/)[0];
+ assert.ok(createBlock.indexOf('<node')<createBlock.indexOf('<way')&&createBlock.indexOf('<way')<createBlock.indexOf('<relation'));
+ assert.match(xml,/<member type="way" ref="10" role=""\/>/);
+ assert.match(xml,/<relation id="5" version="2"\/>/);
+ assert.throws(()=>E.osc([{base:null,value:{type:'way',id:-1,tags:{highway:'path'},nodes:[1,-777]}}]),/unbekannt oder gelöscht/);
+ assert.throws(()=>E.osc([{base:wayA,deleted:true},{base:rel,value:rel}]),/kann nicht gelöscht werden/);
+ assert.throws(()=>E.osc([{base:null,value:{type:'node',id:-9,tags:{},lat:48,lon:12}}]),/braucht eine Eigenschaft/);
+ assert.equal(E.checkReferences([{base:null,value:{type:'way',id:-1,tags:{highway:'path'},nodes:[1,-777]}}]).length,1);
+});
+test('per-type temporary IDs are independent negative counters',()=>{
+ const drafts=[{base:null,value:{type:'node',id:-1,tags:{},lat:1,lon:1}},{base:null,value:{type:'way',id:-1,tags:{highway:'path'},nodes:[1,-1]}}];
+ assert.equal(E.nextTempId(drafts,'node'),-2);
+ assert.equal(E.nextTempId(drafts,'way'),-2);
+ assert.equal(E.nextTempId(drafts,'relation'),-1);
+});
+test('geometry and member diffs are summarised in plain language for the change list',()=>{
+ const way={type:'way',id:33,version:9,nodes:[1,2,3],tags:{}};
+ assert.equal(E.geometryChange(way,{...way,nodes:[1,2,3,4]}).key,'_geometry');
+ assert.equal(E.geometryChange(base,{...base,lat:49}).key,'_position');
+ assert.equal(E.geometryChange(base,base),null);
+ const rel={type:'relation',id:5,version:1,members:[{type:'way',ref:10,role:'outer'}],tags:{}};
+ const added=E.memberChanges(rel,{...rel,members:[...rel.members,{type:'way',ref:11,role:'inner'}]});
+ assert.ok(added.some(c=>c.after?.includes('way/11')));
+ const roleChanged=E.memberChanges(rel,{...rel,members:[{type:'way',ref:10,role:'inner'}]});
+ assert.ok(roleChanged.some(c=>c.after?.includes('Rolle')));
 });
 test('version check detects external edits and deleted objects without changing drafts',async()=>{
  const d={base,value:{...base,tags:{name:'Neu'}}},snapshot=JSON.stringify(d);
@@ -40,6 +80,25 @@ test('way outlines, click radius and distances are derived without touching the 
  assert.equal(E.wayShape([{type:'way',id:9,nodes:[1,2]}],9),null);
  assert.ok(E.pickRadiusMeters(48,10)>E.pickRadiusMeters(48,19));assert.equal(E.pickRadiusMeters(48,30),6);assert.equal(E.pickRadiusMeters(0,0),500);
  assert.equal(E.formatDistance(12.4),'12 m');assert.equal(E.formatDistance(1530),'1,5 km');assert.equal(E.formatDistance(undefined),'');
+});
+test('resolveLiveCandidates hit-tests real way geometry directly against OSM, bypassing the local POI index',async()=>{
+ const fetcher=async url=>{
+  assert.match(url,/map\.json\?bbox=/);
+  return {ok:true,json:async()=>({elements:[
+   {type:'node',id:1,lon:12,lat:48,tags:{}},
+   {type:'node',id:2,lon:12.001,lat:48,tags:{}},
+   {type:'node',id:5,lon:12.0002,lat:48.0001,tags:{name:'Alte Schmiede',craft:'blacksmith'}},
+   {type:'way',id:9,nodes:[1,2],tags:{highway:'residential'}},
+  ]})};
+ };
+ const found=await E.resolveLiveCandidates(48,12.0002,50,fetcher);
+ const way=found.find(c=>c.type==='way'&&c.id===9);
+ assert.ok(way,'a plain residential way is found even though the local POI index excludes untagged roads');
+ assert.ok(way.distance<5,`expected the click to sit almost on the segment, got ${way.distance}`);
+ const node=found.find(c=>c.type==='node'&&c.id===5);
+ assert.ok(node);assert.equal(node.category,'blacksmith');assert.equal(node.label,'Alte Schmiede');
+ assert.equal(found.some(c=>c.type==='node'&&(c.id===1||c.id===2)),false,'bare untagged way vertices are not offered as their own selectable object');
+ assert.ok(found[0].distance<=found[1].distance,'results are sorted nearest first');
 });
 test('a stored map position survives backups but never reaches the export',()=>{
  const way={type:'way',id:33,version:9,nodes:[1,2,3],tags:{building:'yes'}};
@@ -73,7 +132,12 @@ function harness(initial=[],routes={}){
  let stored=JSON.stringify({version:1,drafts:initial});
  global.localStorage={getItem:()=>stored,setItem:(_,v)=>stored=v};
  const sources={},layers={},canvas={style:{}};
- const map={sources,layers,canvas,isStyleLoaded:()=>true,getSource:id=>sources[id]?{setData:d=>sources[id].data=d}:null,addSource:(id,s)=>sources[id]={data:s.data},addLayer:l=>layers[l.id]=l,getLayer:id=>layers[id],getCanvas:()=>canvas,flyTo(o){this.flown=o;},fitBounds(b,o){this.fitted=[b,o];},getZoom:()=>17,getCenter:()=>({lng:12,lat:48})};
+ const map={sources,layers,canvas,isStyleLoaded:()=>true,getSource:id=>sources[id]?{setData:d=>sources[id].data=d}:null,addSource:(id,s)=>sources[id]={data:s.data},addLayer:l=>layers[l.id]=l,getLayer:id=>layers[id],getCanvas:()=>canvas,flyTo(o){this.flown=o;},fitBounds(b,o){this.fitted=[b,o];},getZoom:()=>17,getCenter:()=>({lng:12,lat:48}),
+  on(type,fn){(this.handlers??={})[type]=fn;},
+  project:coord=>({x:(Array.isArray(coord)?coord[0]:coord.lng)*100000,y:-(Array.isArray(coord)?coord[1]:coord.lat)*100000}),
+  getBounds:()=>({getWest:()=>11.999,getSouth:()=>47.999,getEast:()=>12.001,getNorth:()=>48.001}),
+  dragPan:{disabled:false,disable(){this.disabled=true;},enable(){this.disabled=false;}},
+ };
  const originalFetch=global.fetch;
  global.fetch=async url=>{
   requests.push(String(url));
@@ -199,6 +263,46 @@ test('a click without a recorded place offers to add one there',withHarness([],{
  e.osmPickPlace.click();assert.equal(e.osmPickMiss.hidden,true);assert.equal(h.editor.tab,'edit');assert.equal(h.data('osm-drafts').features[0].geometry.coordinates[1],48.5);
 }));
 
+test('picking a spot with several recorded places lets you choose instead of silently guessing',withHarness([],{'api/v1/geo/pois':{body:{features:[poi(42,'Café Alt','cafe',5),poi(43,'Bank','bench',7)]}}},async h=>{
+ const e=h.es,setTimeoutOriginal=global.setTimeout;global.setTimeout=()=>0;
+ try{h.editor.enter();}finally{global.setTimeout=setTimeoutOriginal;}
+ await h.editor.mapClick({lngLat:{lat:48,lng:12}});
+ assert.equal(h.editor.tab,'find');
+ assert.equal(e.osmCandidates.children.length,2);
+ assert.match(e.osmEditorStatus.textContent,/2 Objekte/);
+}));
+
+test('picking a spot the local index excludes still resolves the real way underneath via a direct OSM lookup',withHarness([],{
+ 'api/v1/geo/pois':{body:{features:[]}},
+ 'map.json':{body:{elements:[
+  {type:'node',id:1,lon:12,lat:48},
+  {type:'node',id:2,lon:12.001,lat:48},
+  {type:'way',id:9,nodes:[1,2],tags:{highway:'residential'}},
+ ]}},
+ 'way/9/full.json':{body:{elements:[
+  {type:'node',id:1,version:1,lon:12,lat:48,tags:{}},
+  {type:'node',id:2,version:1,lon:12.001,lat:48,tags:{}},
+  {type:'way',id:9,version:1,nodes:[1,2],tags:{highway:'residential'}},
+ ]}},
+},async h=>{
+ const e=h.es,setTimeoutOriginal=global.setTimeout;global.setTimeout=()=>0;
+ try{h.editor.enter();}finally{global.setTimeout=setTimeoutOriginal;}
+ await h.editor.mapClick({lngLat:{lat:48,lng:12.0002}});
+ assert.equal(h.editor.tab,'edit');
+ assert.match(e.osmObjectMeta.textContent,/OSM-ID 9/);
+}));
+
+test('searching by name falls back to a direct OSM lookup when the local index has nothing',withHarness([],{
+ 'api/v1/geo/pois':{body:{features:[]}},
+ 'map.json':{body:{elements:[{type:'node',id:1,lon:12,lat:48,tags:{name:'Alte Schmiede',craft:'blacksmith'}}]}},
+},async h=>{
+ const e=h.es;
+ e.osmSearch.value='Schmiede';
+ await e.osmSearchForm.listeners.submit({preventDefault(){}});
+ assert.equal(e.osmCandidates.children.length,1);
+ assert.ok(walk(e.osmCandidates).some(n=>n.textContent?.includes('Alte Schmiede')));
+}));
+
 test('search lists places with category, distance and a name that describes the action',withHarness([],{'api/v1/geo/pois':{body:{features:[poi(42,'Café Alt','cafe',120),poi(7,'Bank','bench',2300,'way')]}},'node/42':{body:{elements:[cafe]}}},async h=>{
  const e=h.es;e.osmSearch.value='Bank';await e.osmSearchForm.listeners.submit({preventDefault(){}});
  assert.match(h.requests[0],/q=Bank/);assert.match(h.requests[0],/radius_m=5000/);
@@ -210,13 +314,213 @@ test('search lists places with category, distance and a name that describes the 
  await first.click();assert.equal(h.editor.tab,'edit');assert.equal(e.osmSelected.textContent,'Alt');assert.equal(h.data('osm-candidates').features.length,0);
 }));
 
-test('ways load their outline, keep a stored centre and never change geometry',withHarness([],{'way/9/full.json':{body:{elements:[{type:'node',id:1,lon:12,lat:48},{type:'node',id:2,lon:12.002,lat:48},{type:'node',id:3,lon:12.002,lat:48.001},{type:'node',id:4,lon:12,lat:48.001},{type:'way',id:9,version:2,nodes:[1,2,3,4,1],tags:{building:'yes'}}]}}},async h=>{
+test('ways load their outline, keep a stored centre and never change geometry',withHarness([],{'way/9/full.json':{body:{elements:[{type:'node',id:1,version:1,lon:12,lat:48,tags:{}},{type:'node',id:2,version:1,lon:12.002,lat:48,tags:{}},{type:'node',id:3,version:1,lon:12.002,lat:48.001,tags:{}},{type:'node',id:4,version:1,lon:12,lat:48.001,tags:{}},{type:'way',id:9,version:2,nodes:[1,2,3,4,1],tags:{building:'yes'}}]}}},async h=>{
  const e=h.es;await h.editor.load('way',9);
- assert.match(h.requests.at(-1),/way\/9\/full\.json/);assert.equal(h.data('osm-selection').features[0].geometry.type,'Polygon');assert.ok(h.map.fitted);
+ assert.ok(h.requests.some(r=>/way\/9\/full\.json/.test(r)));assert.equal(h.data('osm-selection').features[0].geometry.type,'Polygon');assert.ok(h.map.fitted);
  assert.equal(e.osmSelected.textContent,'Gebäude');assert.ok(h.field('name'));
  h.type('name','Rathaus');e.osmSave.click();
  const [draft]=h.drafts();near(draft.center,[12.001,48.0005]);assert.deepEqual(draft.value.nodes,[1,2,3,4,1]);assert.equal(h.data('osm-drafts').features[0].geometry.type,'Point');
  assert.equal(e.osmDrafts.children[0].children[1].disabled,false);
+}));
+
+test('drawing a new way places its vertices as bare nodes and needs a type before it can be saved',withHarness([],{},async h=>{
+ const e=h.es;
+ await h.editor.startDrawing('line');
+ assert.equal(h.editor.drawing,true);assert.equal(h.map.canvas.style.cursor,'crosshair');
+ await h.editor.mapClick({lngLat:{lat:48,lng:12}});
+ await h.editor.mapClick({lngLat:{lat:48.001,lng:12.001}});
+ assert.equal(h.editor.drawPointCount,2);
+ h.editor.finishDraw();
+ assert.equal(h.editor.drawing,false);assert.equal(h.editor.tab,'edit');
+ assert.equal(h.drafts().length,0);
+ assert.match(e.osmValidation.textContent,/Art/);
+ h.preset('Bushaltestelle');
+ e.osmSave.click();
+ const ways=h.drafts().filter(d=>d.value.type==='way'),nodes=h.drafts().filter(d=>d.value.type==='node');
+ assert.equal(ways.length,1);assert.equal(nodes.length,2);
+ assert.deepEqual(ways[0].value.nodes,[nodes[0].value.id,nodes[1].value.id]);
+ assert.equal(ways[0].value.tags.highway,'bus_stop');
+ assert.equal(Object.keys(nodes[0].value.tags).length,0);
+ assert.doesNotThrow(()=>E.osc(h.drafts()));
+}));
+
+test('drawing snaps onto an already-recorded node instead of creating a duplicate',withHarness([],{'map.json':{body:{elements:[{type:'node',id:501,lon:12,lat:48}]}}},async h=>{
+ await h.editor.startDrawing('line');
+ await h.editor.mapClick({lngLat:{lat:48,lng:12}});
+ await h.editor.mapClick({lngLat:{lat:48.001,lng:12.001}});
+ h.editor.finishDraw();
+ h.preset('Bushaltestelle');
+ h.es.osmSave.click();
+ const ways=h.drafts().filter(d=>d.value.type==='way'),nodes=h.drafts().filter(d=>d.value.type==='node');
+ assert.equal(ways[0].value.nodes[0],501);
+ assert.equal(nodes.length,1);
+ assert.equal(nodes[0].value.id<0,true);
+}));
+
+test('escape cancels an in-progress drawing and clears its preview layer',withHarness([],{},async h=>{
+ const e=h.es;
+ await h.editor.startDrawing('line');
+ await h.editor.mapClick({lngLat:{lat:48,lng:12}});
+ assert.equal(h.data('osm-draw').features.length,1);
+ h.keydowns.forEach(f=>f({key:'Escape',preventDefault(){}}));
+ assert.equal(h.editor.drawing,false);
+ assert.equal(h.data('osm-draw').features.length,0);
+ assert.match(e.osmEditorStatus.textContent,/abgebrochen/);
+}));
+
+test('dragging an existing way vertex moves the node without disturbing the way',withHarness([],{'way/9/full.json':{body:{elements:[
+ {type:'node',id:1,version:5,lon:12,lat:48,tags:{}},
+ {type:'node',id:2,version:3,lon:12.002,lat:48,tags:{}},
+ {type:'node',id:3,version:1,lon:12.002,lat:48.001,tags:{}},
+ {type:'way',id:9,version:2,nodes:[1,2,3],tags:{building:'yes'}},
+]}}},async h=>{
+ await h.editor.load('way',9);
+ h.editor.toggleGeometryMode();
+ assert.equal(h.editor.geometryMode,true);
+ const hitPoint=h.map.project([12,48]);
+ h.editor.mapMouseDown({point:hitPoint,lngLat:{lng:12,lat:48},originalEvent:{}});
+ assert.equal(h.map.dragPan.disabled,true);
+ h.editor.mapMouseMove({point:hitPoint,lngLat:{lng:12.0007,lat:48.0007}});
+ await h.editor.mapMouseUp();
+ assert.equal(h.map.dragPan.disabled,false);
+ const nodeDraft=h.drafts().find(d=>d.value.type==='node'&&d.value.id===1);
+ assert.ok(nodeDraft);assert.equal(nodeDraft.base.version,5);
+ assert.ok(Math.abs(nodeDraft.value.lat-48.0007)<1e-9);
+ assert.equal(h.drafts().some(d=>d.value.type==='way'),false);
+ const line=h.data('osm-selection').features[0].geometry.coordinates;
+ assert.ok(Math.abs(line[0][1]-48.0007)<1e-9,'the outline follows the dragged vertex, not its pre-drag position');
+}));
+
+test('splitting a way at an interior point keeps the base way and drafts a new segment',withHarness([],{'way/9/full.json':{body:{elements:[
+ {type:'node',id:1,version:1,lon:12,lat:48,tags:{}},
+ {type:'node',id:2,version:1,lon:12.001,lat:48,tags:{}},
+ {type:'node',id:3,version:1,lon:12.002,lat:48,tags:{}},
+ {type:'way',id:9,version:4,nodes:[1,2,3],tags:{highway:'residential'}},
+]}}},async h=>{
+ await h.editor.load('way',9);
+ h.editor.startSplit();
+ assert.equal(h.editor.splitMode,true);assert.equal(h.editor.geometryMode,true);
+ const point=h.map.project([12.001,48]);
+ h.editor.mapMouseDown({point,lngLat:{lng:12.001,lat:48}});
+ assert.equal(h.editor.splitMode,false);
+ const ways=h.drafts().filter(d=>!d.deleted&&d.value.type==='way');
+ assert.equal(ways.length,2);
+ const first=ways.find(w=>w.base?.id===9),second=ways.find(w=>!w.base);
+ assert.deepEqual(first.value.nodes,[1,2]);
+ assert.deepEqual(second.value.nodes,[2,3]);
+ assert.equal(second.value.tags.highway,'residential');
+ assert.equal(second.value.id<0,true);
+ assert.doesNotThrow(()=>E.osc(h.drafts()));
+}));
+
+test('splitting at an endpoint is rejected because both parts would be degenerate',withHarness([],{'way/9/full.json':{body:{elements:[
+ {type:'node',id:1,version:1,lon:12,lat:48,tags:{}},
+ {type:'node',id:2,version:1,lon:12.001,lat:48,tags:{}},
+ {type:'way',id:9,version:4,nodes:[1,2],tags:{highway:'residential'}},
+]}}},async h=>{
+ await h.editor.load('way',9);
+ h.editor.startSplit();
+ const point=h.map.project([12,48]);
+ h.editor.mapMouseDown({point,lngLat:{lng:12,lat:48}});
+ assert.equal(h.drafts().length,0);
+ assert.match(h.es.osmEditorStatus.textContent,/inneren Punkt/);
+}));
+
+test('merging two ways with a shared endpoint unions their tags, keeps one and deletes the other',withHarness(
+ [{base:{type:'way',id:20,version:2,nodes:[5,6],tags:{highway:'unclassified',surface:'asphalt'}},value:{type:'way',id:20,version:2,nodes:[5,6],tags:{highway:'unclassified',surface:'asphalt'}}}],
+ {'way/9/full.json':{body:{elements:[
+   {type:'node',id:2,version:1,lon:12.001,lat:48,tags:{}},
+   {type:'node',id:5,version:1,lon:12.002,lat:48,tags:{}},
+   {type:'way',id:9,version:4,nodes:[2,5],tags:{highway:'residential'}},
+ ]}}},
+ async h=>{
+  const e=h.es;
+  await h.editor.load('way',9);
+  await h.editor.mergeWith('20');
+  const ways=h.drafts().filter(d=>!d.deleted&&d.value.type==='way'),deleted=h.drafts().filter(d=>d.deleted);
+  assert.equal(ways.length,1);assert.equal(deleted.length,1);
+  assert.equal(deleted[0].base.id,20);
+  assert.deepEqual(ways[0].value.nodes,[2,5,6]);
+  assert.equal(ways[0].value.tags.highway,'residential');
+  assert.equal(ways[0].value.tags.surface,'asphalt');
+  assert.match(e.osmEditorStatus.textContent,/highway/);
+  assert.doesNotThrow(()=>E.osc(h.drafts()));
+  const deletedRow=e.osmDrafts.children.find(li=>li.className.includes('osm-draft-deleted'));
+  assert.ok(deletedRow);assert.ok(walk(deletedRow).some(n=>n.textContent?.includes('wird gelöscht')));
+  walk(deletedRow).find(n=>n.tag==='button').click();
+  assert.equal(h.drafts().filter(d=>d.deleted).length,0);
+ }
+));
+
+test('merging ways without a shared endpoint is refused',withHarness([],{'way/9/full.json':{body:{elements:[
+ {type:'node',id:1,version:1,lon:12,lat:48,tags:{}},
+ {type:'node',id:2,version:1,lon:12.001,lat:48,tags:{}},
+ {type:'way',id:9,version:4,nodes:[1,2],tags:{highway:'residential'}},
+]}},'way/30/full.json':{body:{elements:[
+ {type:'node',id:40,version:1,lon:13,lat:49,tags:{}},
+ {type:'node',id:41,version:1,lon:13.001,lat:49,tags:{}},
+ {type:'way',id:30,version:1,nodes:[40,41],tags:{highway:'residential'}},
+]}}},async h=>{
+ await h.editor.load('way',9);
+ await h.editor.mergeWith('30');
+ assert.equal(h.drafts().length,0);
+ assert.match(h.es.osmEditorStatus.textContent,/keinen Endpunkt/);
+}));
+
+test('creating a relation lets you add members from drafts and by ID, reorder and save',withHarness(
+ [{base:null,value:{type:'way',id:-1,tags:{highway:'path'},nodes:[1,2]}}],{},
+ async h=>{
+  const e=h.es;
+  h.editor.newRelation();
+  assert.equal(h.editor.tab,'edit');
+  assert.equal(e.osmRelationTools.hidden,false);assert.equal(e.osmPresetWrap.hidden,true);
+  const option=[...e.osmMemberDraft.children].find(o=>o.value==='way/-1');
+  assert.ok(option);
+  e.osmMemberDraft.value='way/-1';e.osmMemberDraft.listeners.change();
+  assert.equal(h.editor.members.length,1);assert.equal(h.editor.members[0].ref,-1);
+  e.osmMemberType.value='way';e.osmMemberId.value='500';e.osmMemberRole.value='outer';
+  e.osmMemberAdd.click();
+  assert.equal(h.editor.members.length,2);
+  const up=e.osmMembers.children[1].children[2];
+  up.click();
+  assert.equal(h.editor.members[0].ref,500);assert.equal(h.editor.members[1].ref,-1);
+  h.control('type').children.find(b=>b.textContent==='Route').click();
+  e.osmSave.click();
+  const rel=h.drafts().find(d=>!d.deleted&&d.value.type==='relation');
+  assert.ok(rel);assert.equal(rel.value.tags.type,'route');
+  assert.deepEqual(rel.value.members.map(m=>m.ref),[500,-1]);
+  assert.equal(h.editor.tab,'relations');
+  assert.doesNotThrow(()=>E.osc(h.drafts()));
+ }
+));
+
+test('loading an existing relation supports editing roles and removing members',withHarness([],{'relation/50/full.json':{body:{elements:[
+ {type:'way',id:10,version:1,nodes:[1,2],tags:{}},
+ {type:'way',id:11,version:1,nodes:[2,3],tags:{}},
+ {type:'relation',id:50,version:3,members:[{type:'way',ref:10,role:'outer'},{type:'way',ref:11,role:'inner'}],tags:{type:'multipolygon'}},
+]}}},async h=>{
+ const e=h.es;
+ await h.editor.loadRelation('50');
+ assert.equal(h.editor.tab,'edit');
+ assert.equal(h.editor.members.length,2);assert.equal(e.osmMembers.children.length,2);
+ const removeButton=e.osmMembers.children[1].children[4];
+ removeButton.click();
+ assert.equal(h.editor.members.length,1);
+ assert.match(e.osmDiff.children[0].textContent,/Mitglied/);
+ e.osmSave.click();
+ const rel=h.drafts().find(d=>!d.deleted&&d.value.type==='relation');
+ assert.equal(rel.value.members.length,1);assert.equal(rel.base.id,50);
+}));
+
+test('opening a way shows which relations it already belongs to, with a shortcut to edit them',withHarness([],{
+ 'way/9/full.json':{body:{elements:[{type:'node',id:1,lon:12,lat:48},{type:'node',id:2,lon:12.001,lat:48},{type:'way',id:9,version:1,nodes:[1,2],tags:{highway:'residential'}}]}},
+ 'way/9/relations.json':{body:{elements:[{type:'relation',id:77,tags:{type:'route',name:'Wanderweg'},members:[{type:'way',ref:9,role:''}]}]}},
+},async h=>{
+ const e=h.es;
+ await h.editor.load('way',9);
+ await new Promise(resolve=>setTimeout(resolve,0));
+ assert.equal(e.osmMemberships.hidden,false);
+ assert.ok(walk(e.osmMemberships).some(n=>n.textContent?.includes('Wanderweg')));
 }));
 
 test('tabs follow the keyboard pattern and control panels',withHarness([],{},async h=>{
@@ -224,8 +528,10 @@ test('tabs follow the keyboard pattern and control panels',withHarness([],{},asy
  assert.equal(e.osmTabFind.attrs['aria-selected'],'true');assert.equal(e.osmTabEdit.attrs.tabindex,'-1');assert.equal(e.osmPanelDrafts.hidden,true);
  let prevented=false;e.osmTabFind.listeners.keydown({key:'ArrowRight',preventDefault:()=>prevented=true});
  assert.equal(prevented,true);assert.equal(e.osmTabEdit.attrs['aria-selected'],'true');assert.equal(e.osmTabEdit.focused,true);assert.equal(e.osmPanelEdit.hidden,false);assert.equal(e.osmPanelFind.hidden,true);
- e.osmTabEdit.listeners.keydown({key:'End',preventDefault(){}});assert.equal(h.editor.tab,'drafts');
- e.osmTabDrafts.listeners.keydown({key:'ArrowRight',preventDefault(){}});assert.equal(h.editor.tab,'find');
+ e.osmTabEdit.listeners.keydown({key:'End',preventDefault(){}});assert.equal(h.editor.tab,'relations');
+ e.osmTabRelations.listeners.keydown({key:'ArrowRight',preventDefault(){}});assert.equal(h.editor.tab,'find');
+ e.osmTabFind.listeners.keydown({key:'Home',preventDefault(){}});assert.equal(h.editor.tab,'find');
+ e.osmTabFind.listeners.keydown({key:'ArrowLeft',preventDefault(){}});assert.equal(h.editor.tab,'relations');
 }));
 
 test('the save shortcut works only with an open, valid form',withHarness([],{},async h=>{

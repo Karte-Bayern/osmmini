@@ -1,9 +1,12 @@
-/* Versioned OSM tag drafts with a map-first guided editor; no uploads or topology mutations. */
+/* Versioned OSM drafts (nodes, ways, relations) with a map-first guided editor; no uploads. */
 (function(root){
   'use strict';
   const validID=n=>Number.isSafeInteger(n)&&n>0;
+  const refID=n=>Number.isSafeInteger(n)&&n!==0;
   const xmlText=s=>![...s].some(c=>{const n=c.codePointAt(0);return !(n===9||n===10||n===13||(n>=32&&n<=0xD7FF)||(n>=0xE000&&n<=0xFFFD)||(n>=0x10000&&n<=0x10FFFF));});
   const normLon=lng=>((lng+180)%360+360)%360-180;
+  const TYPE_RANK={node:0,way:1,relation:2};
+  const KIND_WORD={node:'Knoten',way:'Weg',relation:'Relation'};
   function tags(entries) {
     if(entries.length>200)throw Error('Maximal 200 Tags pro Objekt.');
     const out=Object.create(null);
@@ -16,43 +19,128 @@
     }
     return out;
   }
+  // A relation member reference; ref may be a real OSM ID or a negative placeholder from this same batch.
+  function member(raw){
+    if(!raw||!Object.hasOwn(TYPE_RANK,raw.type)||!refID(raw.ref))throw Error('Ungültiges Relationsmitglied.');
+    const role=raw.role||'';
+    if(typeof role!=='string'||[...role].length>255||!xmlText(role))throw Error('Ungültige Rolle in einer Relation.');
+    return {type:raw.type,ref:raw.ref,role};
+  }
   function element(raw,create=false){
-    if(!raw||!['node','way'].includes(raw.type)||!(create?raw.type==='node'&&Number.isSafeInteger(raw.id)&&raw.id<0:validID(raw.id)&&validID(raw.version))||raw.visible===false)throw Error('Objekt ohne gültige ID/Version oder nicht mehr sichtbar.');
+    if(!raw||!Object.hasOwn(TYPE_RANK,raw.type)||!(create?Number.isSafeInteger(raw.id)&&raw.id<0:validID(raw.id)&&validID(raw.version))||raw.visible===false)throw Error('Objekt ohne gültige ID/Version oder nicht mehr sichtbar.');
     if(raw.tags!==undefined&&(!raw.tags||typeof raw.tags!=='object'||Array.isArray(raw.tags)))throw Error('Ungültige Tags.');
     const e={type:raw.type,id:raw.id,...(!create?{version:raw.version}:{}),tags:tags(Object.entries(raw.tags||{}))};
     if(e.type==='node'){
       if(!Number.isFinite(raw.lon)||!Number.isFinite(raw.lat)||Math.abs(raw.lon)>180||Math.abs(raw.lat)>90)throw Error('Ungültige Punktkoordinaten.');
       e.lon=raw.lon;e.lat=raw.lat;
-    }else{
-      if(!Array.isArray(raw.nodes)||raw.nodes.length<2||raw.nodes.length>2000||!raw.nodes.every(validID))throw Error('Unvollständige Wegreferenzen.');
+    }else if(e.type==='way'){
+      if(!Array.isArray(raw.nodes)||raw.nodes.length<2||raw.nodes.length>2000||!raw.nodes.every(refID))throw Error('Unvollständige Wegreferenzen.');
       e.nodes=raw.nodes.slice();
+    }else{
+      if(!Array.isArray(raw.members))throw Error('Eine Relation benötigt eine Mitgliederliste.');
+      if(raw.members.length>300)throw Error('Eine Relation darf höchstens 300 Mitglieder haben.');
+      e.members=raw.members.map(member);
     }
     return e;
   }
   function changes(before,after){
     return [...new Set([...Object.keys(before),...Object.keys(after)])].sort().filter(k=>before[k]!==after[k]).map(key=>({key,before:before[key],after:after[key]}));
   }
+  // Coarse, human-readable summary of a geometry change; used only for the on-screen diff, never for export.
+  function geometryChange(base,value){
+    if(!base)return null;
+    if(base.type==='node')return base.lat===value.lat&&base.lon===value.lon?null:{key:'_position',before:`${base.lat.toFixed(5)}, ${base.lon.toFixed(5)}`,after:`${value.lat.toFixed(5)}, ${value.lon.toFixed(5)}`};
+    if(base.type==='way')return JSON.stringify(base.nodes)===JSON.stringify(value.nodes)?null:{key:'_geometry',before:`${base.nodes.length} Punkte`,after:`${value.nodes.length} Punkte`};
+    return null;
+  }
+  // Added/removed/renamed relation members, in plain language for the diff list.
+  function memberChanges(base,value){
+    const before=base?base.members:[],after=value.members,label=m=>`${m.type}/${m.ref}${m.role?' ('+m.role+')':''}`,key=m=>m.type+'/'+m.ref;
+    const beforeKeys=before.map(key),afterKeys=after.map(key),out=[];
+    for(const m of before)if(!afterKeys.includes(key(m)))out.push({key:'_member',before:label(m),after:undefined});
+    for(const m of after)if(!beforeKeys.includes(key(m)))out.push({key:'_member',before:undefined,after:label(m)});
+    for(const m of after){
+      const prior=before.find(b=>key(b)===key(m));
+      if(prior&&prior.role!==m.role)out.push({key:'_member',before:`${key(m)} Rolle „${prior.role||'–'}“`,after:`${key(m)} Rolle „${m.role||'–'}“`});
+    }
+    if(!out.length&&JSON.stringify(beforeKeys)!==JSON.stringify(afterKeys))out.push({key:'_member',before:'Reihenfolge',after:'geändert'});
+    return out;
+  }
   // A map position kept next to a draft so ways can be found again; it never reaches the export.
   const viewCenter=raw=>Array.isArray(raw)&&raw.length===2&&raw.every(Number.isFinite)&&Math.abs(raw[0])<=180&&Math.abs(raw[1])<=90?[raw[0],raw[1]]:undefined;
   function validateDraft(d){
+    if(d.deleted===true){
+      if(!d.base)throw Error('Nur bereits gespeicherte Objekte können gelöscht werden.');
+      return {base:element(d.base),deleted:true};
+    }
     const base=d.base?element(d.base):null, value=element(d.value,!base), center=viewCenter(d.center);
-    if(base&&(base.type!==value.type||base.id!==value.id||base.version!==value.version||base.lon!==value.lon||base.lat!==value.lat||JSON.stringify(base.nodes)!==JSON.stringify(value.nodes)))throw Error('Bestehende Geometrien und Versionen dürfen nicht verändert werden.');
-    if(!base&&!Object.values(value.tags).some(v=>v.trim()))throw Error('Ein neuer Punkt benötigt mindestens einen Tag.');
+    if(base&&(base.type!==value.type||base.id!==value.id||base.version!==value.version))throw Error('Typ, ID und Version eines bestehenden Objekts dürfen sich nicht ändern.');
+    if(!base&&value.type!=='node'&&!Object.values(value.tags).some(v=>v.trim()))throw Error('Ein neuer Weg oder eine neue Relation benötigt mindestens eine Eigenschaft.');
     return {base,value,...(center?{center}:{})};
+  }
+  // Per-type negative placeholder IDs: OSC create IDs are independent counters per element type.
+  function nextTempId(drafts,type){
+    const ids=drafts.filter(d=>!d.deleted&&d.value.type===type&&d.value.id<0).map(d=>d.value.id);
+    return Math.min(0,...ids)-1;
+  }
+  // Cross-draft referential integrity: every way/relation reference must resolve, and nothing
+  // still in use may be deleted. A brand-new, untagged node must be part of a way or relation —
+  // otherwise it is a meaningless floating point rather than a way vertex.
+  function collectIssues(validated){
+    const issues=[],known=new Map();
+    for(const d of validated){const e=d.deleted?d.base:d.value;known.set(e.type+'/'+e.id,!!d.deleted);}
+    const exists=(type,id)=>known.has(type+'/'+id)?!known.get(type+'/'+id):id>0;
+    for(const d of validated){
+      if(d.deleted)continue;
+      const e=d.value;
+      if(e.type==='way')for(const ref of e.nodes)if(!exists('node',ref))issues.push(`Weg ${e.id}: Knoten ${ref} ist unbekannt oder gelöscht.`);
+      if(e.type==='relation')for(const m of e.members)if(!exists(m.type,m.ref))issues.push(`Relation ${e.id}: Mitglied ${m.type}/${m.ref} ist unbekannt oder gelöscht.`);
+    }
+    for(const d of validated){
+      if(!d.deleted)continue;
+      const e=d.base;
+      for(const other of validated){
+        if(other===d||other.deleted)continue;
+        const v=other.value;
+        if(e.type==='node'&&v.type==='way'&&v.nodes.includes(e.id))issues.push(`Knoten ${e.id} kann nicht gelöscht werden: wird von Weg ${v.id} verwendet.`);
+        if(v.type==='relation'&&v.members.some(m=>m.type===e.type&&m.ref===e.id))issues.push(`${KIND_WORD[e.type]} ${e.id} kann nicht gelöscht werden: wird von Relation ${v.id} verwendet.`);
+      }
+    }
+    for(const d of validated){
+      if(d.deleted||d.base||d.value.type!=='node'||Object.values(d.value.tags).some(v=>v.trim()))continue;
+      const used=validated.some(other=>!other.deleted&&((other.value.type==='way'&&other.value.nodes.includes(d.value.id))||(other.value.type==='relation'&&other.value.members.some(m=>m.type==='node'&&m.ref===d.value.id))));
+      if(!used)issues.push(`Neuer Punkt ${d.value.id} braucht eine Eigenschaft oder muss Teil eines Wegs sein.`);
+    }
+    return issues;
+  }
+  function checkReferences(drafts){return collectIssues(drafts.map(validateDraft));}
+  // True when neither tags, geometry nor (for a relation) membership differ from the base.
+  function elementUnchanged(base,value){
+    if(changes(base.tags,value.tags).length)return false;
+    return value.type==='relation'?!memberChanges(base,value).length:!geometryChange(base,value);
   }
   const esc=s=>String(s).replace(/[&<>"'\n\r\t]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;','\n':'&#10;','\r':'&#13;','\t':'&#9;'}[c]));
   function osc(drafts){
     if(drafts.length>100)throw Error('Maximal 100 Entwürfe.');
-    const seen=new Set(),groups={create:[],modify:[]};
-    for(const raw of drafts){
-      const {base,value:e}=validateDraft(raw),key=e.type+'/'+e.id;
-      if(seen.has(key))throw Error('Objekt mehrfach vorhanden.');seen.add(key);
-      if(base&&!changes(base.tags,e.tags).length)continue;
+    const validated=drafts.map(validateDraft),seen=new Set();
+    for(const d of validated){const e=d.deleted?d.base:d.value,key=e.type+'/'+e.id;if(seen.has(key))throw Error('Objekt mehrfach vorhanden.');seen.add(key);}
+    const issues=collectIssues(validated);
+    if(issues.length)throw Error(issues.join(' '));
+    const groups={create:[],modify:[],delete:[]};
+    for(const d of validated){
+      if(d.deleted){groups.delete.push({rank:TYPE_RANK[d.base.type],xml:`    <${d.base.type} id="${d.base.id}" version="${d.base.version}"/>`});continue;}
+      const {base,value:e}=d;
+      if(base&&elementUnchanged(base,e))continue;
       const attrs=`id="${e.id}"${base?` version="${e.version}"`:''}${e.type==='node'?` lat="${e.lat}" lon="${e.lon}"`:''}`;
-      const children=(e.nodes||[]).map(id=>`      <nd ref="${id}"/>`).concat(Object.keys(e.tags).sort().map(k=>`      <tag k="${esc(k)}" v="${esc(e.tags[k])}"/>`));
-      groups[base?'modify':'create'].push(`    <${e.type} ${attrs}>\n${children.join('\n')}\n    </${e.type}>`);
+      const children=(e.nodes||[]).map(id=>`      <nd ref="${id}"/>`)
+        .concat((e.members||[]).map(m=>`      <member type="${m.type}" ref="${m.ref}" role="${esc(m.role)}"/>`))
+        .concat(Object.keys(e.tags).sort().map(k=>`      <tag k="${esc(k)}" v="${esc(e.tags[k])}"/>`));
+      groups[base?'modify':'create'].push({rank:TYPE_RANK[e.type],xml:`    <${e.type} ${attrs}>\n${children.join('\n')}\n    </${e.type}>`});
     }
-    return '<?xml version="1.0" encoding="UTF-8"?>\n<osmChange version="0.6" generator="OSMmini">\n'+Object.entries(groups).filter(([,es])=>es.length).map(([g,es])=>`  <${g}>\n${es.join('\n')}\n  </${g}>`).join('\n')+'\n</osmChange>\n';
+    groups.create.sort((a,b)=>a.rank-b.rank);
+    groups.delete.sort((a,b)=>b.rank-a.rank);
+    const body=['create','modify','delete'].filter(g=>groups[g].length).map(g=>`  <${g}>\n${groups[g].map(x=>x.xml).join('\n')}\n  </${g}>`).join('\n');
+    return '<?xml version="1.0" encoding="UTF-8"?>\n<osmChange version="0.6" generator="OSMmini">\n'+body+'\n</osmChange>\n';
   }
   function restore(raw){const d=JSON.parse(raw);if(d.version!==1||!Array.isArray(d.drafts)||d.drafts.length>100)throw Error('Ungültige Entwurfsdatei.');const drafts=d.drafts.map(validateDraft);osc(drafts);return drafts;}
   async function checkVersions(drafts, fetcher=fetch){
@@ -68,6 +156,13 @@
     return issues;
   }
 
+  // Full node elements (id, version, lat/lon, tags) from an API `/full` response, keyed by ID —
+  // needed to move an existing way's vertices, since a plain lon/lat pair can't build a node draft.
+  function nodeIndex(elements){
+    const map=new Map();
+    for(const e of elements||[]){if(e.type==='node')try{map.set(e.id,element(e));}catch{}}
+    return map;
+  }
   // Outline and centre of a way from an API `/full` response, used for the map highlight.
   function wayShape(elements,id){
     const nodes=new Map((elements||[]).filter(e=>e.type==='node'&&Number.isFinite(e.lon)&&Number.isFinite(e.lat)).map(n=>[n.id,[n.lon,n.lat]]));
@@ -85,6 +180,54 @@
     return Math.max(6,Math.min(metresPerPixel*pixels,500));
   }
   const formatDistance=m=>!Number.isFinite(m)?'':m<1000?`${Math.max(1,Math.round(m))} m`:`${(m/1000).toFixed(1).replace('.',',')} km`;
+  function metersBetween(lat1,lon1,lat2,lon2){
+    const dLat=(lat2-lat1)*111320,dLon=(lon2-lon1)*111320*Math.cos((lat1+lat2)/2*Math.PI/180);
+    return Math.hypot(dLat,dLon);
+  }
+  // Closest point on a line segment to (lat,lon), all in a flat local-metres approximation —
+  // fine at the short distances a click radius or a bbox around one covers.
+  function nearestPointOnSegment(lat,lon,aLat,aLon,bLat,bLon){
+    const cos=Math.cos(lat*Math.PI/180)||1;
+    const toXY=(la,lo)=>[(lo-lon)*111320*cos,(la-lat)*111320];
+    const [ax,ay]=toXY(aLat,aLon),[bx,by]=toXY(bLat,bLon);
+    const dx=bx-ax,dy=by-ay,lenSq=dx*dx+dy*dy;
+    const t=lenSq>0?Math.max(0,Math.min(1,(-ax*dx-ay*dy)/lenSq)):0;
+    const px=ax+t*dx,py=ay+t*dy;
+    return {distance:Math.hypot(px,py),lon:lon+px/(111320*cos),lat:lat+py/111320};
+  }
+  // Live fallback for object selection: the local POI index only covers a curated set of tagged
+  // categories and never relations (see isIndexablePOITags server-side), so a plain path or an
+  // untagged building is otherwise unselectable. When a click or search finds nothing locally,
+  // this asks OSM directly for a small bbox around the point — any tagged node, and any way at
+  // all hit-tested against its real line geometry, not just a POI point.
+  async function resolveLiveCandidates(lat,lon,radiusMeters,fetcher=fetch){
+    const cos=Math.cos(lat*Math.PI/180)||1;
+    const dLat=radiusMeters/111320,dLon=radiusMeters/(111320*cos);
+    const west=normLon(lon-dLon),east=normLon(lon+dLon),south=Math.max(-90,lat-dLat),north=Math.min(90,lat+dLat);
+    const response=await fetcher(`https://api.openstreetmap.org/api/0.6/map.json?bbox=${west},${south},${east},${north}`,{signal:AbortSignal.timeout(12000),credentials:'omit'});
+    if(!response.ok)throw Error('Kartendaten von OSM konnten nicht geladen werden.');
+    const body=await response.json();
+    const nodeCoords=new Map();
+    for(const e of body.elements||[])if(e.type==='node'&&Number.isFinite(e.lon)&&Number.isFinite(e.lat))nodeCoords.set(e.id,[e.lon,e.lat]);
+    const primaryCategory=tags=>root.OSMPresets?.primaryCategory(tags||{})||'';
+    const out=[];
+    for(const e of body.elements||[]){
+      if(e.type==='node'&&e.tags&&Object.keys(e.tags).length){
+        const d=metersBetween(lat,lon,e.lat,e.lon);
+        if(d<=radiusMeters)out.push({type:'node',id:e.id,label:e.tags.name||'',category:primaryCategory(e.tags),distance:d,coordinates:[e.lon,e.lat]});
+      }else if(e.type==='way'&&Array.isArray(e.nodes)&&e.nodes.length>1){
+        let best=null;
+        for(let i=0;i<e.nodes.length-1;i++){
+          const a=nodeCoords.get(e.nodes[i]),b=nodeCoords.get(e.nodes[i+1]);
+          if(!a||!b)continue;
+          const hit=nearestPointOnSegment(lat,lon,a[1],a[0],b[1],b[0]);
+          if(!best||hit.distance<best.distance)best=hit;
+        }
+        if(best&&best.distance<=radiusMeters)out.push({type:'way',id:e.id,label:e.tags?.name||'',category:primaryCategory(e.tags),distance:best.distance,coordinates:[best.lon,best.lat]});
+      }
+    }
+    return out.sort((a,b)=>a.distance-b.distance).slice(0,20);
+  }
 
   const iconHTML=id=>`<svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#${id}"/></svg>`;
   const PROPS=new Set(['value','type','hidden','disabled','placeholder','rows','href','id','inputMode','maxLength','target','rel','className','innerHTML']);
@@ -108,21 +251,25 @@
     if(!P)throw Error('OSMPresets muss vor dem Editor geladen werden.');
     const el=id=>document.getElementById(id),status=el('osmEditorStatus'),key='osmmini.osm-drafts.v1';
     const say=text=>{status.textContent=text;};
-    const TABS=[['find','osmTabFind','osmPanelFind'],['edit','osmTabEdit','osmPanelEdit'],['drafts','osmTabDrafts','osmPanelDrafts']];
-    let drafts=[],current=null,working=[],dirty=false,busy=false,viewActive=false,placing=false,tab='find';
+    const TABS=[['find','osmTabFind','osmPanelFind'],['edit','osmTabEdit','osmPanelEdit'],['drafts','osmTabDrafts','osmPanelDrafts'],['relations','osmTabRelations','osmPanelRelations']];
+    let drafts=[],current=null,working=[],members=[],dirty=false,busy=false,viewActive=false,placing=false,tab='find';
     let candidates=[],highlighted='',nearbyPoint=null,lastSearch=null,missPoint=null,presetOpen=false,customKind=false,renderedKind='';
     let undo=[],redo=[],checkedFor='',conflicts=[],validForm=false;
+    let geometryMode=false,dragNodeId=null,splitMode=false;const dragPreview=new Map();
+    let drawing=false,drawPoints=[],drawKind='line',drawSnapNodes=null;
     const fieldNodes=new Map();
     try{const raw=localStorage.getItem(key);if(raw)drafts=restore(raw);}catch{say('Gespeicherte Entwürfe konnten nicht geladen werden.');}
     let saved=JSON.stringify(drafts);
 
     const versions=()=>JSON.stringify(drafts.filter(d=>d.base).map(d=>[d.base.type,d.base.id,d.base.version]).sort());
-    const sameObject=(a,b)=>a.value.id===b.value.id&&a.value.type===b.value.type;
-    const isCurrent=d=>!!current&&sameObject(d,current);
-    const positionOf=d=>d.center||(d.value.type==='node'?[d.value.lon,d.value.lat]:null);
-    const kindName=type=>type==='node'?'Punkt':'Weg / Fläche';
+    // A deleted draft carries no `.value` — key it by `.base` instead, like every other identity check here.
+    const keyOf=d=>{const e=d.deleted?d.base:d.value;return e.type+'/'+e.id;};
+    const sameObject=(a,b)=>keyOf(a)===keyOf(b);
+    const isCurrent=d=>!d.deleted&&!!current&&sameObject(d,current);
+    const positionOf=d=>d.deleted?(d.base.type==='node'?[d.base.lon,d.base.lat]:null):d.center||(d.value.type==='node'?[d.value.lon,d.value.lat]:null);
+    const kindName=type=>type==='node'?'Punkt':type==='relation'?'Relation':'Weg / Fläche';
     const fieldLabel=P.keyLabel;
-    const label=e=>e.tags.name||P.presetForTags(e.tags)?.label||P.categoryLabel(P.primaryCategory(e.tags))||(e.type==='node'?'Unbenannter Ort':'Unbenannter Weg / Fläche');
+    const label=e=>e.tags.name||P.presetForTags(e.tags)?.label||P.categoryLabel(P.primaryCategory(e.tags))||(e.type==='node'?'Unbenannter Ort':e.type==='relation'?'Unbenannte Relation':'Unbenannter Weg / Fläche');
     const iconFor=e=>P.presetForTags(e.tags)?.icon||P.categoryIcon(P.primaryCategory(e.tags));
     const trimmed=()=>working.map(([k,v])=>[k.trim(),v.trim()]);
     const valueOf=k=>working.find(row=>row[0]===k)?.[1]||'';
@@ -140,18 +287,29 @@
       return error.message;
     }
 
-    // ── Modes: the editor owns map clicks while the view is open on "Finden" or while placing a point.
-    const mode=()=>placing?'place':viewActive&&tab==='find'&&!busy?'pick':null;
+    // ── Modes: the editor owns map clicks while the view is open on "Finden", while placing a
+    // point, or while drawing a new way/area. Dragging a vertex is a separate, always-armed
+    // mousedown/mousemove/mouseup path gated on geometryMode, since it needs raw pointer events
+    // rather than a settled click.
+    const mode=()=>drawing?'draw':placing?'place':viewActive&&tab==='find'&&!busy?'pick':null;
     function applyMode(){
       const m=mode();
-      map.getCanvas().style.cursor=m==='place'?'crosshair':m==='pick'?'pointer':'';
+      map.getCanvas().style.cursor=m==='place'||m==='draw'?'crosshair':m==='pick'?'pointer':'';
       el('osmNew').setAttribute('aria-pressed',String(placing));
       el('osmNew').textContent=placing?'Punktsetzen abbrechen':'Neuen Ort eintragen';
       el('osmPickText').textContent=placing?'Klicke auf die Karte, um den neuen Ort zu setzen. Abbrechen mit Escape.':'Wähle auf der Karte einen Ort aus, den du bearbeiten möchtest.';
       el('osmPickHint').setAttribute('data-active',String(!!m));
       el('osmEditView').setAttribute('data-mode',m||'');
+      const drawBar=el('osmDrawBar');if(drawBar)drawBar.hidden=!drawing;
+      const drawCount=el('osmDrawCount');if(drawCount)drawCount.textContent=String(drawPoints.length);
+      const geomButton=el('osmGeometryToggle');if(geomButton)geomButton.setAttribute('aria-pressed',String(geometryMode));
     }
-    function cancel(){placing=false;applyMode();}
+    function cancel(){
+      const hadDraw=drawing&&drawPoints.length;
+      placing=false;drawing=false;drawPoints=[];drawSnapNodes=null;
+      applyMode();
+      if(hadDraw)render();
+    }
     function setTab(name,focus=false){
       tab=name;
       for(const [id,buttonId,panelId] of TABS){
@@ -178,7 +336,7 @@
       if(dirty){say('Du hast ungespeicherte Änderungen. Speichere sie oder verwirf sie im Reiter „Bearbeiten“.');setTab('edit');el('osmSelected').focus?.();return false;}
       return !busy;
     }
-    function closeCurrent(){current=null;working=[];dirty=false;presetOpen=false;customKind=false;renderForm();render();syncUI();}
+    function closeCurrent(){current=null;working=[];members=[];dirty=false;presetOpen=false;customKind=false;geometryMode=false;dragNodeId=null;splitMode=false;dragPreview.clear();renderForm();applyMode();render();syncUI();}
 
     // ── Analysis of the working tags: validity, diff, hints
     const display=(k,v)=>{
@@ -198,16 +356,20 @@
       });
       let delta=[];
       if(current){
+        const isRelation=current.value.type==='relation';
         try{
-          const next=tags(trimmed());delta=changes(current.base?.tags||{},next);
-          el('osmSelected').textContent=label({...current.value,tags:next});
+          const next=tags(trimmed());
+          const tagDelta=changes(current.base?.tags||{},next);
+          const memberDelta=isRelation&&current.base?memberChanges(current.base,{...current.value,members}):[];
+          delta=[...tagDelta,...memberDelta];
+          el('osmSelected').textContent=label({...current.value,tags:next,...(isRelation?{members}:{})});
           for(const d of delta){
             const item=document.createElement('li');
-            item.textContent=`${fieldLabel(d.key)}: ${d.before===undefined?'neu':display(d.key,d.before)} → ${d.after===undefined?'wird entfernt':display(d.key,d.after)}`;
+            item.textContent=d.key==='_member'?`Mitglied: ${d.before===undefined?'neu':d.before} → ${d.after===undefined?'entfernt':d.after}`:`${fieldLabel(d.key)}: ${d.before===undefined?'neu':display(d.key,d.before)} → ${d.after===undefined?'wird entfernt':display(d.key,d.after)}`;
             list.append(item);
           }
-          if(!current.base&&!Object.values(next).some(v=>v.trim()))message='Wähle eine Art aus oder ergänze eine Eigenschaft für den neuen Ort.';
-          else validForm=!!delta.length||drafts.some(isCurrent);
+          if(!current.base&&!Object.values(next).some(v=>v.trim()))message=isRelation?'Ergänze mindestens eine Eigenschaft, z. B. die Art der Relation.':'Wähle eine Art aus oder ergänze eine Eigenschaft für den neuen Ort.';
+          else validForm=!!tagDelta.length||!!memberDelta.length||drafts.some(isCurrent);
         }catch(e){message=e.message;}
         if(!delta.length&&!message){const item=document.createElement('li');item.textContent='Noch nichts geändert.';list.append(item);}
       }
@@ -223,6 +385,7 @@
       if(el('osmValidation').textContent!==message)el('osmValidation').textContent=message;
       const wantedKind=P.presetKeyForTags(tagsNow());
       if(current&&wantedKind!==renderedKind){renderPresets();renderFields();}
+      renderMembers();
       syncUI();
     }
 
@@ -268,6 +431,10 @@
     }
     function renderFields(){
       const box=el('osmFields');box.replaceChildren();fieldNodes.clear();
+      if(current?.value.type==='relation'){
+        box.hidden=false;box.append(fieldNode(P.fields.type));
+        return;
+      }
       const kind=P.presetKeyForTags(tagsNow());renderedKind=kind;
       const show=!!current&&(current.base||kind||customKind);
       box.hidden=!show;
@@ -281,8 +448,8 @@
     function renderPresets(focusFirst=false){
       const wrap=el('osmPresetChips');wrap.replaceChildren();let first=null;
       const kind=P.presetKeyForTags(tagsNow()),preset=P.presets[kind];
-      el('osmPresetWrap').hidden=!current||!!current.base;
-      if(!current||current.base)return;
+      el('osmPresetWrap').hidden=!current||!!current.base||current.value.type==='relation';
+      if(!current||current.base||current.value.type==='relation')return;
       if(preset&&!presetOpen){
         wrap.append(h('div',{class:'osm-preset-current'},h('span',{class:'osm-preset-icon','aria-hidden':'true',text:preset.icon}),h('strong',{text:preset.label}),h('button',{type:'button',class:'btn btn-ghost',text:'Ändern','aria-label':'Art des Ortes ändern',on:{click:()=>{presetOpen=true;renderPresets(true);}}})));
         return;
@@ -327,17 +494,100 @@
       el('osmForm').hidden=!current;el('osmEmpty').hidden=!!current;
       if(!current){el('osmDuplicates').hidden=true;return;}
       const {value,base}=current;
-      el('osmObjectMeta').textContent=base?`${kindName(value.type)} · OSM-ID ${value.id} · Version ${value.version}`:`Neuer Ort · ${value.lat.toFixed(5)}, ${value.lon.toFixed(5)}`;
+      el('osmObjectMeta').textContent=base?`${kindName(value.type)} · OSM-ID ${value.id} · Version ${value.version}`:value.type==='node'?`Neuer Ort · ${value.lat.toFixed(5)}, ${value.lon.toFixed(5)}`:`Neuer ${kindName(value.type)}`;
       const link=el('osmOsmLink');link.hidden=!base;if(base)link.href=`https://www.openstreetmap.org/${value.type}/${value.id}`;
-      renderPresets();renderFields();renderTable();
+      const geomToggle=el('osmGeometryToggle');
+      if(geomToggle){geomToggle.hidden=value.type!=='way';geomToggle.setAttribute('aria-pressed',String(geometryMode));geomToggle.textContent=geometryMode?'Punkte bearbeiten beenden':'Punkte bearbeiten';}
+      const topology=el('osmTopologyTools');
+      if(topology)topology.hidden=value.type!=='way'||!base;
+      const relationTools=el('osmRelationTools');
+      if(relationTools)relationTools.hidden=value.type!=='relation';
+      renderPresets();renderFields();renderTable();renderMembers();
+    }
+    // A saved way draft never carries `shape` (it's transient, UI-only) — rebuild it from our
+    // own node drafts when every referenced node is one we drew ourselves, so "auf Karte zeigen"
+    // and the vertex layer still work after reopening from the Entwürfe list or a page reload.
+    function localWayShape(value){
+      const known=new Map(drafts.filter(d=>!d.deleted&&d.value.type==='node').map(d=>[d.value.id,d.value]));
+      if(!value.nodes.every(id=>known.has(id)))return null;
+      const elements=value.nodes.map(id=>({type:'node',id,lon:known.get(id).lon,lat:known.get(id).lat}));
+      return wayShape([...elements,{type:'way',id:value.id,nodes:value.nodes}],value.id);
     }
     function open(d){
       current=structuredClone(d);dirty=false;working=Object.entries(current.value.tags);
-      presetOpen=!current.base&&!P.presetKeyForTags(current.value.tags);customKind=false;
+      if(current.value.type==='way'&&!current.shape){const shape=localWayShape(current.value);if(shape)current.shape=shape;}
+      members=current.value.type==='relation'?current.value.members.map(m=>({...m})):[];
+      presetOpen=!current.base&&current.value.type!=='relation'&&!P.presetKeyForTags(current.value.tags);customKind=false;
       el('osmDuplicates').hidden=true;el('osmDuplicates').replaceChildren();
+      const memberships=el('osmMemberships');if(memberships){memberships.hidden=true;memberships.replaceChildren();}
       el('osmSelected').textContent=label(current.value);
       renderForm();analyze();setTab('edit');render();
       el('osmSelected').focus?.();
+      if(current.base&&current.value.type!=='relation')loadMemberships(current.value.type,current.value.id);
+    }
+
+    // ── Relations: membership list, member editing, and read-only "part of" lookups
+    function memberLabel(m){
+      const draft=drafts.find(d=>!d.deleted&&d.value.type===m.type&&d.value.id===m.ref);
+      const name=draft?label(draft.value):`${kindName(m.type)} ${m.ref}`;
+      return m.role?`${name} · Rolle „${m.role}“`:name;
+    }
+    function addMember(type,ref,role){
+      if(!current||current.value.type!=='relation')return;
+      if(members.some(m=>m.type===type&&m.ref===ref)){say('Dieses Mitglied ist bereits in der Relation.');return;}
+      members.push({type,ref,role});
+      dirty=true;renderMembers();analyze();
+      say('Mitglied hinzugefügt.');
+    }
+    function renderMembers(){
+      const box=el('osmMembers');if(!box)return;
+      box.replaceChildren();
+      const show=!!current&&current.value.type==='relation';
+      const empty=el('osmMembersEmpty');if(empty)empty.hidden=!show||!!members.length;
+      if(!show)return;
+      members.forEach((m,i)=>{
+        const roleInput=h('input',{value:m.role,placeholder:'Rolle (optional)','aria-label':`Rolle für ${memberLabel(m)}`});
+        roleInput.addEventListener('input',()=>{members[i]={...m,role:roleInput.value};dirty=true;analyze();});
+        const up=h('button',{type:'button',class:'osm-icon-button',text:'↑',disabled:i===0,'aria-label':`${memberLabel(m)} nach oben verschieben`,on:{click:()=>{[members[i-1],members[i]]=[members[i],members[i-1]];dirty=true;renderMembers();analyze();}}});
+        const down=h('button',{type:'button',class:'osm-icon-button',text:'↓',disabled:i===members.length-1,'aria-label':`${memberLabel(m)} nach unten verschieben`,on:{click:()=>{[members[i+1],members[i]]=[members[i],members[i+1]];dirty=true;renderMembers();analyze();}}});
+        const remove=h('button',{type:'button',class:'osm-icon-button osm-danger',innerHTML:iconHTML('icon-close'),'aria-label':`${memberLabel(m)} entfernen`,on:{click:()=>{members.splice(i,1);dirty=true;renderMembers();analyze();}}});
+        box.append(h('li',{class:'osm-member-row'},h('span',{class:'osm-member-label',text:memberLabel(m)}),roleInput,up,down,remove));
+      });
+      const picker=el('osmMemberDraft');
+      if(picker){
+        picker.replaceChildren(h('option',{value:'',text:'– auswählen –'}));
+        for(const d of drafts){
+          if(d.deleted||d.value.type==='relation'||isCurrent(d))continue;
+          picker.append(h('option',{value:`${d.value.type}/${d.value.id}`,text:`${kindName(d.value.type)}: ${label(d.value)}`}));
+        }
+      }
+    }
+    // Read-only: which relations already contain this node/way, fetched live since the local
+    // POI index deliberately excludes relations.
+    async function loadMemberships(type,id){
+      const box=el('osmMemberships');if(!box)return;
+      try{
+        const response=await fetch(`https://api.openstreetmap.org/api/0.6/${type}/${id}/relations.json`,{signal:AbortSignal.timeout(10000),credentials:'omit'});
+        const stillOpen=()=>!!current&&!current.deleted&&current.value.type===type&&current.value.id===id;
+        if(!response.ok||!stillOpen())return;
+        const body=await response.json();
+        const relations=(body.elements||[]).filter(e=>e.type==='relation');
+        if(!relations.length||!stillOpen())return;
+        box.replaceChildren(h('strong',{text:'Teil von Relationen:'}));
+        for(const r of relations.slice(0,10)){
+          const role=r.members?.find(m=>m.type===type&&m.ref===id)?.role||'';
+          const name=r.tags?.name||`Relation ${r.id}`;
+          box.append(h('button',{type:'button',class:'osm-dup','aria-label':`${name} bearbeiten`,on:{click:()=>{if(canSwitch())load('relation',r.id);}}},h('span',{text:name}),h('small',{text:role||r.tags?.type||''})));
+        }
+        box.hidden=false;
+      }catch{/* the hint is optional */}
+    }
+    function newRelation(){
+      if(!canSwitch())return;
+      const id=nextTempId(drafts,'relation');
+      const value=element({type:'relation',id,members:[],tags:{}},true);
+      cancel();open({base:null,value});dirty=true;analyze();
+      say('Neue Relation angelegt. Wähle die Art und ergänze Mitglieder.');
     }
 
     // ── Sync of buttons, badges and status cards with the current state
@@ -367,7 +617,7 @@
         overview.setAttribute('data-state',state);
         const title=conflicts.length&&!outdated?`${conflicts.length} Versionswarnung${conflicts.length===1?'':'en'}`:outdated?'Vor dem Export mit OSM vergleichen':'Export bereit';
         const next=h('button',{type:'button',class:'btn btn-ghost',text:conflicts.length&&!outdated?'Warnung anzeigen':outdated?'Jetzt vergleichen':'Entwürfe ansehen',on:{click:()=>{
-          if(conflicts.length&&!outdated){const issue=conflicts[0].match(/^(node|way)\/(\d+)/),draft=issue&&drafts.find(d=>d.value.type===issue[1]&&String(d.value.id)===issue[2]);if(draft&&canSwitch())open(draft);}
+          if(conflicts.length&&!outdated){const issue=conflicts[0].match(/^(node|way)\/(\d+)/),draft=issue&&drafts.find(d=>!d.deleted&&d.value.type===issue[1]&&String(d.value.id)===issue[2]);if(draft&&canSwitch())open(draft);}
           else if(outdated)el('osmCheck').focus?.();
           else el('osmDrafts').scrollIntoView?.({block:'nearest',behavior:'smooth'});
         }}});
@@ -377,6 +627,16 @@
       if(checkedFor===versions()&&conflicts.length)el('osmExport').disabled=true;
     }
     function draftNode(d,index){
+      if(d.deleted){
+        const name=label(d.base);
+        const main=h('span',{class:'osm-draft-main'},h('span',{class:'osm-draft-icon','aria-hidden':'true',text:iconFor(d.base)}),h('span',{class:'osm-draft-text'},h('strong',{text:name}),h('small',{text:`${kindName(d.base.type)} · wird gelöscht`})));
+        const undo=h('button',{type:'button',class:'osm-icon-button osm-danger','aria-label':`Löschung von ${name} verwerfen`,title:'Löschung verwerfen',innerHTML:iconHTML('icon-close'),on:{click:()=>{
+          if(!canSwitch())return;
+          drafts.splice(index,1);
+          say('Löschung verworfen.'+persist());refresh();el('osmDraftSummary').focus?.();
+        }}});
+        return h('li',{class:'osm-draft osm-draft-deleted'},main,undo);
+      }
       const changeCount=d.base?changes(d.base.tags,d.value.tags).length:0;
       const meta=`${kindName(d.value.type)} · ${d.base?`${changeCount} ${changeCount===1?'Änderung':'Änderungen'}`:'neu'}`;
       const name=label(d.value);
@@ -394,6 +654,12 @@
       syncUI();
       const list=el('osmDrafts');list.replaceChildren();
       drafts.forEach((d,i)=>list.append(draftNode(d,i)));
+      const relationsList=el('osmRelationsList');
+      if(relationsList){
+        relationsList.replaceChildren();
+        drafts.forEach((d,i)=>{if((d.deleted?d.base:d.value).type==='relation')relationsList.append(draftNode(d,i));});
+        const empty=el('osmRelationsEmpty');if(empty)empty.hidden=!!relationsList.children.length;
+      }
       render();
     }
 
@@ -423,27 +689,277 @@
     function render(){
       const point=(coordinates,properties)=>({type:'Feature',properties,geometry:{type:'Point',coordinates}});
       const collection=features=>({type:'FeatureCollection',features});
-      const shape=current?.shape;
+      // Rebuilt from live per-node positions (not the shape snapshot taken at open()) so a
+      // dragged vertex immediately moves the outline too, not just its own point.
+      const wayLine=current&&current.value.type==='way'?current.value.nodes.map((id,i)=>coordsOfNode(id)||current.shape?.coordinates?.[i]||null).filter(Boolean):null;
       let complete=true;
-      complete&=put('osm-selection',collection(shape?[{type:'Feature',properties:{},geometry:shape.closed?{type:'Polygon',coordinates:[shape.coordinates]}:{type:'LineString',coordinates:shape.coordinates}}]:[]),[
+      complete&=put('osm-selection',collection(wayLine&&wayLine.length>=2?[{type:'Feature',properties:{},geometry:current.shape?.closed?{type:'Polygon',coordinates:[wayLine]}:{type:'LineString',coordinates:wayLine}}]:[]),[
         {id:'osm-selection-fill',type:'fill',filter:['==','$type','Polygon'],paint:{'fill-color':'#2563eb','fill-opacity':.16}},
         {id:'osm-selection-line',type:'line',paint:{'line-color':'#2563eb','line-width':4}},
       ]);
       complete&=put('osm-candidates',collection(current?[]:candidates.filter(c=>c.coordinates).map(c=>point(c.coordinates,{active:highlighted===c.type+'/'+c.id}))),[
         {id:'osm-candidates-points',type:'circle',paint:{'circle-radius':['case',['get','active'],10,6],'circle-color':['case',['get','active'],'#2563eb','#60a5fa'],'circle-opacity':.9,'circle-stroke-width':2,'circle-stroke-color':'#fff'}},
       ]);
-      const shown=drafts.filter(d=>!isCurrent(d));if(current)shown.push(current);
+      const shown=drafts.filter(d=>!d.deleted&&!isCurrent(d));if(current)shown.push(current);
       complete&=put('osm-drafts',collection(shown.map(d=>({d,at:d.value.type==='node'?[d.value.lon,d.value.lat]:d.center})).filter(x=>x.at).map(x=>point(x.at,{selected:isCurrent(x.d)}))),[
         {id:'osm-drafts-points',type:'circle',paint:{'circle-radius':['case',['get','selected'],10,7],'circle-color':['case',['get','selected'],'#2563eb','#8b5cf6'],'circle-stroke-width':2,'circle-stroke-color':'#fff'}},
+      ]);
+      const vertices=geometryMode&&current&&current.value.type==='way'?[...new Set(current.value.nodes)]:[];
+      complete&=put('osm-vertices',collection(vertices.map(id=>coordsOfNode(id)).filter(Boolean).map((coord,i)=>point(coord,{dragging:vertices[i]===dragNodeId}))),[
+        {id:'osm-vertices-points',type:'circle',paint:{'circle-radius':['case',['get','dragging'],9,7],'circle-color':'#f59e0b','circle-stroke-width':2,'circle-stroke-color':'#fff'}},
+      ]);
+      const drawLine=drawPoints.length>1?[{type:'Feature',properties:{},geometry:drawKind==='area'&&drawPoints.length>2?{type:'Polygon',coordinates:[closeRing(drawPoints.map(p=>[p.lon,p.lat]))]}:{type:'LineString',coordinates:drawPoints.map(p=>[p.lon,p.lat])}}]:[];
+      const drawVertices=drawPoints.map(p=>point([p.lon,p.lat],{snapped:!!p.nodeId}));
+      complete&=put('osm-draw',collection([...drawLine,...drawVertices]),[
+        {id:'osm-draw-fill',type:'fill',filter:['==','$type','Polygon'],paint:{'fill-color':'#16a34a','fill-opacity':.16}},
+        {id:'osm-draw-line',type:'line',filter:['==','$type','LineString'],paint:{'line-color':'#16a34a','line-width':3,'line-dasharray':[2,1]}},
+        {id:'osm-draw-points',type:'circle',filter:['==','$type','Point'],paint:{'circle-radius':6,'circle-color':['case',['get','snapped'],'#16a34a','#ffffff'],'circle-stroke-width':2,'circle-stroke-color':'#16a34a'}},
       ]);
       if(complete)attempts=0;
       else if(!retry&&attempts++<40)retry=setTimeout(()=>{retry=null;render();},250);
       options.onChange?.();
     }
+    const closeRing=coords=>coords.length>2?[...coords,coords[0]]:coords;
+    // While a vertex is being dragged its live position overrides the saved/base coordinate.
+    function coordsOfNode(id){
+      if(dragPreview.has(id))return dragPreview.get(id);
+      const draft=drafts.find(d=>!d.deleted&&d.value.type==='node'&&d.value.id===id)||current?.pendingNodes?.find(d=>d.value.id===id);
+      if(draft)return [draft.value.lon,draft.value.lat];
+      const base=current?.nodeElements?.get(id);
+      return base?[base.lon,base.lat]:null;
+    }
     function flyToObject(target){
       if(target.shape?.bounds&&map.fitBounds){map.fitBounds(target.shape.bounds,{maxZoom:19,padding:60});return;}
       const at=positionOf(target);
       if(at)map.flyTo({center:at,zoom:Math.max(map.getZoom?.()??0,18)});
+    }
+
+    // ── Geometry: dragging an existing way's vertices, and drawing a brand-new way/area.
+    // Both are opt-in (a toggle button, or an explicit "draw" action) so ordinary tag editing
+    // never risks an accidental geometry change.
+    function toggleGeometryMode(){
+      if(!current||current.value.type!=='way')return;
+      geometryMode=!geometryMode;dragNodeId=null;dragPreview.clear();
+      applyMode();render();
+      const geomToggle=el('osmGeometryToggle');
+      if(geomToggle){geomToggle.setAttribute('aria-pressed',String(geometryMode));geomToggle.textContent=geometryMode?'Punkte bearbeiten beenden':'Punkte bearbeiten';}
+      say(geometryMode?'Punkte bearbeiten aktiv. Ziehe einen Punkt auf der Karte, um ihn zu verschieben.':'Punkte bearbeiten beendet.');
+    }
+    function vertexAt(point){
+      if(!geometryMode||!current||current.value.type!=='way'||!map.project)return null;
+      let best=null,bestDist=14;
+      for(const id of new Set(current.value.nodes)){
+        const coord=coordsOfNode(id);if(!coord)continue;
+        const p=map.project(coord),dist=Math.hypot(p.x-point.x,p.y-point.y);
+        if(dist<bestDist){bestDist=dist;best=id;}
+      }
+      return best;
+    }
+    function mapMouseDown(event){
+      if(event.originalEvent?.target?.closest?.('.maplibregl-marker, .maplibregl-popup'))return;
+      const id=vertexAt(event.point);
+      if(id==null)return;
+      event.preventDefault?.();
+      if(splitMode){performSplit(id);return;}
+      dragNodeId=id;dragPreview.set(id,[normLon(event.lngLat.lng),event.lngLat.lat]);
+      map.dragPan?.disable?.();
+      map.getCanvas().style.cursor='grabbing';
+      render();
+    }
+    function mapMouseMove(event){
+      if(dragNodeId==null){
+        if(geometryMode&&!busy)map.getCanvas().style.cursor=vertexAt(event.point)!=null?'grab':'crosshair';
+        return;
+      }
+      dragPreview.set(dragNodeId,[normLon(event.lngLat.lng),event.lngLat.lat]);
+      render();
+    }
+    function mapMouseUp(){
+      if(dragNodeId==null)return;
+      const id=dragNodeId,coord=dragPreview.get(id);
+      dragNodeId=null;dragPreview.clear();
+      map.dragPan?.enable?.();
+      map.getCanvas().style.cursor=geometryMode?'grab':'';
+      if(!coord){render();return;}
+      return commitNodeMove(id,coord);
+    }
+    async function commitNodeMove(id,[lon,lat]){
+      try{
+        const index=drafts.findIndex(x=>!x.deleted&&x.value.type==='node'&&x.value.id===id);
+        const pendingIndex=current?.pendingNodes?.findIndex(x=>x.value.id===id)??-1;
+        if(index>=0)drafts[index]=validateDraft({...drafts[index],value:{...drafts[index].value,lon,lat}});
+        else if(pendingIndex>=0)current.pendingNodes[pendingIndex]=validateDraft({...current.pendingNodes[pendingIndex],value:{...current.pendingNodes[pendingIndex].value,lon,lat}});
+        else if(id<0)throw Error('Neuer Punkt ohne bekannte Basisdaten kann nicht verschoben werden.');
+        else{
+          let base=current?.nodeElements?.get(id);
+          if(!base){
+            const response=await fetch(`https://api.openstreetmap.org/api/0.6/node/${id}.json`,{signal:AbortSignal.timeout(15000),credentials:'omit'});
+            if(!response.ok)throw Error('Knoten konnte nicht geladen werden.');
+            const body=await response.json();
+            base=element(body.elements?.find(e=>e.type==='node'&&e.id===id));
+          }
+          drafts.push(validateDraft({base,value:{...base,lon,lat}}));
+        }
+        say('Punkt verschoben.'+persist());refresh();
+      }catch(e){say(userError(e));render();}
+    }
+    // Snapping a drawn point onto an already-recorded vertex keeps new ways connected to the
+    // existing network instead of floating disconnected next to a road they should join.
+    async function fetchSnapNodes(){
+      drawSnapNodes=[];
+      if(!map.getBounds)return;
+      const b=map.getBounds();
+      const west=normLon(b.getWest()),east=normLon(b.getEast()),south=Math.max(-90,b.getSouth()),north=Math.min(90,b.getNorth());
+      const area=Math.abs(east-west)*Math.abs(north-south);
+      if(!(area>0)||area>0.25){say('Zum Andocken an das bestehende Netz bitte näher heranzoomen; neue Punkte werden sonst ohne Verbindung angelegt.');return;}
+      try{
+        const response=await fetch(`https://api.openstreetmap.org/api/0.6/map.json?bbox=${west},${south},${east},${north}`,{signal:AbortSignal.timeout(15000),credentials:'omit'});
+        if(!response.ok)throw Error('Kartendaten für das Andocken konnten nicht geladen werden.');
+        const body=await response.json();
+        drawSnapNodes=(body.elements||[]).filter(e=>e.type==='node'&&Number.isFinite(e.lon)&&Number.isFinite(e.lat)).map(n=>({id:n.id,lon:n.lon,lat:n.lat}));
+      }catch(e){say(userError(e)+' Neue Punkte werden ohne Andocken an das bestehende Netz erstellt.');}
+    }
+    function nearestSnapNode(lngLat){
+      if(!drawSnapNodes?.length||!map.project)return null;
+      const p=map.project(lngLat);
+      let best=null,bestDist=12;
+      for(const n of drawSnapNodes){
+        const np=map.project([n.lon,n.lat]),dist=Math.hypot(np.x-p.x,np.y-p.y);
+        if(dist<bestDist){bestDist=dist;best=n;}
+      }
+      return best;
+    }
+    function startDrawing(kind){
+      if(!canSwitch())return;
+      cancel();options.onStart?.();
+      drawing=true;drawKind=kind;drawPoints=[];
+      applyMode();render();
+      say(`Klicke auf die Karte, um Punkte für ${kind==='area'?'die Fläche':'den Weg'} zu setzen. „Fertig“ zum Abschließen, Escape zum Abbrechen.`);
+      return fetchSnapNodes();
+    }
+    function addDrawPoint(lngLat){
+      if(drawPoints.length>=500){say('Maximal 500 Punkte pro Weg.');return;}
+      const snap=nearestSnapNode(lngLat);
+      drawPoints.push(snap?{lon:snap.lon,lat:snap.lat,nodeId:snap.id}:{lon:normLon(lngLat.lng),lat:lngLat.lat,nodeId:null});
+      applyMode();render();
+      say(`${drawPoints.length} Punkt${drawPoints.length===1?'':'e'}${snap?' · an bestehenden Punkt angedockt':''}. „Fertig“ zum Abschließen.`);
+    }
+    function undoDrawPoint(){if(!drawPoints.length)return;drawPoints.pop();applyMode();render();}
+    function finishDraw(){
+      if(!drawing)return;
+      if(drawPoints.length<2){say('Mindestens 2 Punkte nötig, um einen Weg abzuschließen.');return;}
+      try{
+        const pendingNodes=[];
+        const nodeIds=drawPoints.map(p=>{
+          if(p.nodeId)return p.nodeId;
+          const id=nextTempId([...drafts,...pendingNodes],'node');
+          pendingNodes.push(validateDraft({base:null,value:{type:'node',id,lat:p.lat,lon:p.lon,tags:{}}}));
+          return id;
+        });
+        if(drawKind==='area'&&nodeIds.length>2)nodeIds.push(nodeIds[0]);
+        const wayId=nextTempId(drafts,'way');
+        const value=element({type:'way',id:wayId,nodes:nodeIds,tags:{}},true);
+        const lons=drawPoints.map(p=>p.lon),lats=drawPoints.map(p=>p.lat);
+        const center=[lons.reduce((a,b)=>a+b,0)/lons.length,lats.reduce((a,b)=>a+b,0)/lats.length];
+        const bounds=[[Math.min(...lons),Math.min(...lats)],[Math.max(...lons),Math.max(...lats)]];
+        let coordinates=drawPoints.map(p=>[p.lon,p.lat]);
+        const closed=drawKind==='area'&&coordinates.length>2;
+        if(closed)coordinates=[...coordinates,coordinates[0]];
+        drawing=false;drawPoints=[];drawSnapNodes=null;applyMode();
+        open({base:null,value,center,pendingNodes,shape:{bounds,coordinates,closed}});dirty=true;analyze();
+        say((drawKind==='area'?'Fläche':'Weg')+' angelegt. Wähle die Art und ergänze, was du weißt.');
+      }catch(e){say(userError(e));}
+    }
+
+    // Any relation draft that references the way being split gains the new segment right after
+    // it, with the same role — the common case; ring order in a multipolygon may still need a
+    // manual check afterwards.
+    function patchRelationsForSplit(list,originalId,newId){
+      return list.map(d=>{
+        if(d.deleted||d.value.type!=='relation')return d;
+        const members=d.value.members,at=members.findIndex(m=>m.type==='way'&&m.ref===originalId);
+        if(at<0)return d;
+        const patched=[...members.slice(0,at+1),{type:'way',ref:newId,role:members[at].role},...members.slice(at+1)];
+        return validateDraft({...d,value:{...d.value,members:patched}});
+      });
+    }
+    // Any relation draft referencing the removed way is repointed at the kept way instead.
+    function patchRelationsForMerge(list,removedId,keptId){
+      return list.map(d=>{
+        if(d.deleted||d.value.type!=='relation')return d;
+        const members=d.value.members;
+        const patched=members.map(m=>m.type==='way'&&m.ref===removedId?{...m,ref:keptId}:m);
+        return patched.some((m,i)=>m!==members[i])?validateDraft({...d,value:{...d.value,members:patched}}):d;
+      });
+    }
+    function startSplit(){
+      if(!current||current.value.type!=='way'||!current.base)return;
+      if(dirty){say('Speichere oder verwirf offene Änderungen, bevor du den Weg teilst.');return;}
+      if(!geometryMode)toggleGeometryMode();
+      splitMode=true;
+      say('Klicke auf einen inneren Punkt des Wegs, um ihn dort zu teilen. Escape zum Abbrechen.');
+    }
+    function performSplit(nodeId){
+      splitMode=false;
+      try{
+        const nodes=current.value.nodes,index=nodes.indexOf(nodeId);
+        if(index<=0||index>=nodes.length-1)throw Error('An diesem Punkt kann der Weg nicht geteilt werden. Wähle einen inneren Punkt, nicht Anfang oder Ende.');
+        const firstValue={...current.value,nodes:nodes.slice(0,index+1)};
+        const secondValue=element({type:'way',id:nextTempId(drafts,'way'),nodes:nodes.slice(index),tags:{...current.value.tags}},true);
+        const firstDraft=validateDraft({base:current.base,value:firstValue,center:current.center});
+        const secondDraft=validateDraft({base:null,value:secondValue,center:current.center});
+        let next=drafts.slice();
+        const firstIndex=next.findIndex(x=>sameObject(x,firstDraft));
+        if(firstIndex<0)next.push(firstDraft);else next[firstIndex]=firstDraft;
+        next.push(secondDraft);
+        next=patchRelationsForSplit(next,firstValue.id,secondValue.id);
+        const issues=checkReferences(next);
+        if(issues.length)throw Error(issues.join(' '));
+        drafts=next;
+        closeCurrent();say('Weg geteilt. Beide Teile liegen als Entwürfe vor.'+persist());refresh();setTab('drafts');
+      }catch(e){say(userError(e));render();}
+    }
+    async function mergeWith(idInput){
+      if(!current||current.value.type!=='way'||!current.base)return;
+      if(dirty){say('Speichere oder verwirf offene Änderungen, bevor du Wege verbindest.');return;}
+      if(!validID(Number(idInput))){say('Gib die numerische OSM-ID des anderen Wegs ein.');return;}
+      const id=Number(idInput);
+      if(id===current.value.id){say('Wähle einen anderen Weg zum Verbinden.');return;}
+      const existingDraft=drafts.find(d=>!d.deleted&&d.value.type==='way'&&d.value.id===id);
+      setBusy(true);say('Anderen Weg laden …');
+      try{
+        let other=existingDraft?.value;
+        if(!other){
+          const response=await fetch(`https://api.openstreetmap.org/api/0.6/way/${id}/full.json`,{signal:AbortSignal.timeout(15000),credentials:'omit'});
+          if(!response.ok)throw Error(response.status===404||response.status===410?'Dieser Weg ist auf OSM nicht verfügbar.':`Weg konnte nicht geladen werden (HTTP ${response.status}).`);
+          const body=await response.json();
+          other=element(body.elements?.find(e=>e.type==='way'&&e.id===id));
+        }
+        const a=current.value.nodes,b=other.nodes;
+        let merged;
+        if(a.at(-1)===b[0])merged=[...a,...b.slice(1)];
+        else if(a.at(-1)===b.at(-1))merged=[...a,...b.slice(0,-1).reverse()];
+        else if(a[0]===b.at(-1))merged=[...b,...a.slice(1)];
+        else if(a[0]===b[0])merged=[...b.slice().reverse(),...a.slice(1)];
+        else throw Error('Die Wege teilen sich keinen Endpunkt und können nicht verbunden werden.');
+        const conflicts=changes(other.tags,current.value.tags).filter(c=>c.before!==undefined&&c.after!==undefined&&c.before!==c.after);
+        const unionTags=Object.fromEntries([...Object.entries(other.tags),...Object.entries(current.value.tags)]);
+        const keptValue={...current.value,nodes:merged,tags:unionTags};
+        const keptDraft=validateDraft({base:current.base,value:keptValue,center:current.center});
+        const removedDraft=validateDraft({base:existingDraft?existingDraft.base:other,deleted:true});
+        let next=drafts.slice();
+        const keptIndex=next.findIndex(x=>sameObject(x,keptDraft));
+        if(keptIndex<0)next.push(keptDraft);else next[keptIndex]=keptDraft;
+        const removedIndex=next.findIndex(d=>!d.deleted&&d.value.type==='way'&&d.value.id===id);
+        if(removedIndex>=0)next[removedIndex]=removedDraft;else next.push(removedDraft);
+        next=patchRelationsForMerge(next,id,keptValue.id);
+        const issues=checkReferences(next);
+        if(issues.length)throw Error(issues.join(' '));
+        drafts=next;
+        closeCurrent();
+        say(`Wege verbunden.${conflicts.length?' Unterschiedliche Werte für '+conflicts.map(c=>c.key).join(', ')+' wurden zugunsten des geöffneten Wegs übernommen; bitte im verbundenen Weg prüfen.':''}`+persist());
+        refresh();setTab('drafts');
+      }catch(e){say(userError(e));}finally{setBusy(false);}
     }
 
     // A list built around an old map position is misleading once the map has moved on.
@@ -466,6 +982,14 @@
       say(query?`Suche „${query}“ im Umkreis von 5 km …`:'Suche erfasste Orte im Umkreis von 500 m …');
       try{
         candidates=await fetchPois({lat:point.lat,lon:normLon(point.lng),radius_m:query?5000:500,limit:50,...(query?{q:query}:{})});
+        if(!candidates.length&&query){
+          say(`„${query}“ nicht in der lokalen Liste; prüfe direkt bei OpenStreetMap …`);
+          try{
+            const needle=query.toLowerCase();
+            const live=await resolveLiveCandidates(point.lat,normLon(point.lng),5000);
+            candidates=live.filter(c=>(c.label||'').toLowerCase().includes(needle)||(c.category||'').toLowerCase().includes(needle));
+          }catch{/* keep the empty local result; the status message below still explains it */}
+        }
         renderCandidates();
         say(candidates.length?`${candidates.length} ${candidates.length===1?'Ort':'Orte'} gefunden. Wähle einen aus, um ihn zu bearbeiten.`:'Keine erfassten Orte gefunden. Verschiebe die Karte, ändere die Suche oder trage einen neuen Ort ein.');
       }catch(e){say(userError(e));}finally{setBusy(false);}
@@ -473,13 +997,22 @@
     async function pick(lngLat){
       if(busy||!canSwitch())return;
       el('osmPickMiss').hidden=true;
-      const radius=Math.round(pickRadiusMeters(lngLat.lat,map.getZoom?.()??17));
+      const radius=Math.round(pickRadiusMeters(lngLat.lat,map.getZoom?.()??17)),lat=lngLat.lat,lon=normLon(lngLat.lng);
       let hit=null;
       setBusy(true);say('Suche erfassten Ort an dieser Stelle …');
       try{
-        const found=await fetchPois({lat:lngLat.lat,lon:normLon(lngLat.lng),radius_m:radius,limit:10},8000);
-        if(found.length)hit=found[0];
-        else{missPoint=lngLat;el('osmPickMiss').hidden=false;say('Hier ist kein erfasster Ort. Zoome näher heran oder trage einen neuen Ort ein.');}
+        let found=await fetchPois({lat,lon,radius_m:radius,limit:10},8000);
+        if(!found.length){
+          say('Nichts in der lokalen Liste; prüfe direkt bei OpenStreetMap …');
+          try{found=await resolveLiveCandidates(lat,lon,Math.max(radius,15));}catch{/* stays empty; miss message below covers it */}
+        }
+        if(found.length===1)hit=found[0];
+        else if(found.length>1){
+          candidates=found;renderCandidates();
+          say(`${found.length} Objekte an dieser Stelle. Wähle eines aus, um es zu bearbeiten.`);
+        }else{
+          missPoint=lngLat;el('osmPickMiss').hidden=false;say('Hier ist kein Objekt bekannt. Zoome näher heran oder trage einen neuen Ort ein.');
+        }
       }catch(e){say(userError(e));}finally{setBusy(false);}
       if(hit)await load(hit.type,hit.id);
     }
@@ -500,24 +1033,26 @@
     // ── Loading and placing
     async function load(type,id){
       if(!canSwitch())return;
-      if(!['node','way'].includes(type)||!validID(Number(id))){say('Gib die numerische OSM-ID ein, zum Beispiel 123456. Du findest sie auf der Objektseite von OpenStreetMap.');return;}
-      const existing=drafts.find(d=>d.value.type===type&&d.value.id===Number(id));
+      if(!['node','way','relation'].includes(type)||!validID(Number(id))){say('Gib die numerische OSM-ID ein, zum Beispiel 123456. Du findest sie auf der Objektseite von OpenStreetMap.');return;}
+      const existing=drafts.find(d=>!d.deleted&&d.value.type===type&&d.value.id===Number(id));
       if(existing){cancel();open(existing);flyToObject(existing);say('Vorhandenen Entwurf geöffnet. Die Basisversion bleibt erhalten.');return;}
       id=String(Number(id));
       cancel();setBusy(true);say('Aktuellen Stand von api.openstreetmap.org laden …');
       try{
-        const response=await fetch(`https://api.openstreetmap.org/api/0.6/${type}/${id}${type==='way'?'/full':''}.json`,{signal:AbortSignal.timeout(15000),credentials:'omit'});
-        if(!response.ok)throw Error(response.status===404||response.status===410?'Dieser Ort ist auf OSM nicht verfügbar. Prüfe die ID oder wähle einen anderen Ort.':response.status===429?'OSM erhält gerade zu viele Anfragen. Warte kurz und versuche es erneut.':`OSM konnte den Ort nicht laden (HTTP ${response.status}). Bitte erneut versuchen.`);
+        const response=await fetch(`https://api.openstreetmap.org/api/0.6/${type}/${id}${type==='node'?'':'/full'}.json`,{signal:AbortSignal.timeout(15000),credentials:'omit'});
+        if(!response.ok)throw Error(response.status===404||response.status===410?'Dieses Objekt ist auf OSM nicht verfügbar. Prüfe die ID oder wähle ein anderes Objekt.':response.status===429?'OSM erhält gerade zu viele Anfragen. Warte kurz und versuche es erneut.':`OSM konnte das Objekt nicht laden (HTTP ${response.status}). Bitte erneut versuchen.`);
         const body=await response.json(),base=element(body.elements?.find(e=>e.type===type&&e.id===Number(id)));
         if(dirty)throw Error('Offene Änderungen erst speichern oder verwerfen, dann erneut laden.');
         const shape=base.type==='way'?wayShape(body.elements,base.id):null;
-        open({base,value:structuredClone(base),center:shape?shape.center:[base.lon,base.lat],shape});
+        const nodeElements=base.type==='way'?nodeIndex(body.elements):null;
+        const center=shape?shape.center:base.type==='node'?[base.lon,base.lat]:undefined;
+        open({base,value:structuredClone(base),center,shape,nodeElements});
         flyToObject(current);
-        say('Ort geladen. Ändere die Angaben und speichere sie als Entwurf.');
+        say('Objekt geladen. Ändere die Angaben und speichere sie als Entwurf.');
       }catch(e){say(userError(e));}finally{setBusy(false);}
     }
     function place(lngLat){
-      const id=Math.min(0,...drafts.map(d=>d.value.id))-1;
+      const id=nextTempId(drafts,'node');
       try{
         const value=element({type:'node',id,lat:lngLat.lat,lon:normLon(lngLat.lng),tags:{}},true);
         placing=false;applyMode();
@@ -529,6 +1064,7 @@
     function mapClick(event){
       if(event.originalEvent?.target?.closest?.('.maplibregl-marker, .maplibregl-popup'))return;
       const m=mode();
+      if(m==='draw')return addDrawPoint(event.lngLat);
       if(m==='place')return place(event.lngLat);
       if(m==='pick')return pick(event.lngLat);
     }
@@ -537,23 +1073,32 @@
     function save(){
       try{
         if(!current)return;
-        const d=validateDraft({...current,value:{...current.value,tags:tags(trimmed())}});
+        const isRelation=current.value.type==='relation';
+        const d=validateDraft({...current,value:{...current.value,tags:tags(trimmed()),...(isRelation?{members:members.map(m=>({...m}))}:{})}});
+        const pending=current.pendingNodes||[];
+        if(!d.base&&d.value.type==='node'&&!Object.keys(d.value.tags).length)throw Error('Ein neuer Punkt benötigt mindestens einen Tag.');
         const index=drafts.findIndex(x=>sameObject(x,d));
-        if(!d.base&&!Object.keys(d.value.tags).length)throw Error('Ein neuer Punkt benötigt mindestens einen Tag.');
         let message;
-        if(d.base&&!changes(d.base.tags,d.value.tags).length){if(index>=0)drafts.splice(index,1);message='Keine Änderungen; das Objekt ist nicht im Export.';}
+        if(d.base&&!pending.length&&elementUnchanged(d.base,d.value)){if(index>=0)drafts.splice(index,1);message='Keine Änderungen; das Objekt ist nicht im Export.';}
         else{
-          if(index<0){if(drafts.length>=100)throw Error('Maximal 100 Entwürfe.');drafts.push(d);}else drafts[index]=d;
+          const next=drafts.slice();
+          for(const n of pending)next.push(n);
+          if(index<0)next.push(d);else next[index]=d;
+          if(next.length>100)throw Error('Maximal 100 Entwürfe.');
+          const issues=checkReferences(next);
+          if(issues.length)throw Error(issues.join(' '));
+          drafts=next;
           message=`Entwurf gespeichert (${drafts.length} im Arbeitsstand). Wähle den nächsten Ort oder öffne „Entwürfe“ zum Export.`;
         }
-        closeCurrent();say(message+persist());refresh();setTab('find');
+        closeCurrent();say(message+persist());refresh();setTab(isRelation?'relations':'find');
         status.focus?.();
       }catch(e){say(userError(e));}finally{syncUI();}
     }
     function discard(){
-      closeCurrent();setTab('find');
+      const wasRelation=current?.value.type==='relation';
+      closeCurrent();setTab(wasRelation?'relations':'find');
       say('Bearbeitung geschlossen. Gespeicherte Entwürfe bleiben erhalten.');
-      el('osmSearch').focus?.();
+      if(!wasRelation)el('osmSearch').focus?.();
     }
     function download(content,name,type){const url=URL.createObjectURL(new Blob([content],{type})),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 
@@ -566,6 +1111,29 @@
       say('Punktsetzen aktiv. Klicke auf die genaue Position des neuen Ortes.');syncUI();
     });
     el('osmPickPlace').addEventListener('click',()=>{if(missPoint&&canSwitch()){const point=missPoint;missPoint=null;el('osmPickMiss').hidden=true;placing=true;place(point);}});
+    el('osmDrawLine')?.addEventListener('click',()=>startDrawing('line'));
+    el('osmDrawArea')?.addEventListener('click',()=>startDrawing('area'));
+    el('osmDrawUndo')?.addEventListener('click',undoDrawPoint);
+    el('osmDrawFinish')?.addEventListener('click',finishDraw);
+    el('osmDrawCancel')?.addEventListener('click',()=>{cancel();say('Zeichnen abgebrochen.');});
+    el('osmGeometryToggle')?.addEventListener('click',toggleGeometryMode);
+    el('osmSplit')?.addEventListener('click',startSplit);
+    el('osmMergeGo')?.addEventListener('click',()=>mergeWith(el('osmMergeId').value));
+    el('osmNewRelation')?.addEventListener('click',newRelation);
+    el('osmRelationLoad')?.addEventListener('click',()=>load('relation',el('osmRelationId').value));
+    el('osmMemberDraft')?.addEventListener('change',()=>{
+      const value=el('osmMemberDraft').value;if(!value)return;
+      const [type,ref]=value.split('/');addMember(type,Number(ref),'');
+      el('osmMemberDraft').value='';
+    });
+    el('osmMemberAdd')?.addEventListener('click',()=>{
+      try{
+        const type=el('osmMemberType').value,ref=Number(el('osmMemberId').value);
+        if(!validID(ref))throw Error('Gib die numerische OSM-ID des Mitglieds ein.');
+        addMember(type,ref,el('osmMemberRole').value||'');
+        el('osmMemberId').value='';el('osmMemberRole').value='';
+      }catch(e){say(userError(e));}
+    });
     el('osmLoad').addEventListener('click',()=>load(el('osmType').value,el('osmID').value));
     el('osmAddTag').addEventListener('click',()=>{const pair=['',''];working.push(pair);dirty=true;renderTable();analyze();el('osmTags').children[el('osmTags').children.length-1]?.children[0].focus?.();});
     el('osmSave').addEventListener('click',save);
@@ -613,10 +1181,14 @@
     });
     root.addEventListener?.('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue='';}});
     document.addEventListener('keydown',e=>{
-      if(e.key==='Escape'&&placing){cancel();say('Punktsetzen beendet.');}
+      if(e.key==='Escape'&&splitMode){splitMode=false;say('Weg teilen abgebrochen.');}
+      else if(e.key==='Escape'&&(placing||drawing)){const wasDrawing=drawing;cancel();say(wasDrawing?'Zeichnen abgebrochen.':'Punktsetzen beendet.');}
       const view=el('osmEditView');
       if((e.ctrlKey||e.metaKey)&&(e.key||'').toLowerCase()==='s'&&current&&!view.hidden&&view.offsetParent!==null){e.preventDefault();if(!el('osmSave').disabled)save();}
     });
+    map.on?.('mousedown',mapMouseDown);
+    map.on?.('mousemove',mapMouseMove);
+    map.on?.('mouseup',mapMouseUp);
 
     setTab('find');renderForm();refresh();
     const api={
@@ -629,10 +1201,18 @@
       },
       leave(){viewActive=false;placing=false;applyMode();},
       load,cancel,render,setTab,mapClick,addPoint:mapClick,
+      startDrawing,finishDraw,undoDrawPoint,toggleGeometryMode,startSplit,mergeWith,
+      newRelation,loadRelation:id=>load('relation',id),addMember,
+      mapMouseDown,mapMouseMove,mapMouseUp,
       get active(){return mode()!==null;},
       get tab(){return tab;},
+      get drawing(){return drawing;},
+      get drawPointCount(){return drawPoints.length;},
+      get geometryMode(){return geometryMode;},
+      get splitMode(){return splitMode;},
+      get members(){return members;},
     };
     return api;
   }
-  root.OSMEditor={tags,element,changes,validateDraft,osc,restore,checkVersions,wayShape,pickRadiusMeters,formatDistance,create};
+  root.OSMEditor={tags,element,changes,geometryChange,memberChanges,validateDraft,nextTempId,checkReferences,osc,restore,checkVersions,wayShape,nodeIndex,pickRadiusMeters,formatDistance,metersBetween,nearestPointOnSegment,resolveLiveCandidates,create};
 })(typeof window==='undefined'?globalThis:window);

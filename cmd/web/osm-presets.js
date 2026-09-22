@@ -48,6 +48,7 @@
     door:{key:'door',label:'Türtyp',type:'choice',options:[['hinged','Drehtür'],['sliding','Schiebetür'],['revolving','Karussell'],['no','Ohne Tür']]},
     automatic_door:{key:'automatic_door',label:'Automatische Tür',type:'choice',options:yesNo},
     surface:{key:'surface',label:'Untergrund',type:'text',placeholder:'z. B. sand, gravel'},
+    type:{key:'type',label:'Art der Relation',type:'choice',options:[['multipolygon','Multipolygon (Fläche aus mehreren Wegen)'],['route','Route'],['boundary','Grenze'],['restriction','Abbiegebeschränkung'],['associatedStreet','Straße mit Adressen']]},
   });
 
   // Keys that identify what a place is; shown in plain words in the change summary.

@@ -310,6 +310,42 @@ text search also reuses the precomputed way coordinates. Benchmark:
 go test ./cmd -run '^$' -bench '^BenchmarkGeoViewport100k$' -benchmem
 ```
 
+## OSM-Edit (topology-aware draft editor)
+
+The **OSM-Edit** entry in the left rail opens a map-first editor for
+OpenStreetMap nodes, ways and relations. It never uploads anything; drafts
+stay in this browser (`localStorage`) and leave it only as an `.osc`
+changeset file or a `.json` backup for manual review and upload in a real OSM
+editor.
+
+1. **Finden** – click a recorded place on the map, search by name/type, place
+   a new point, or draw a brand-new way/area. Drawing snaps onto
+   already-recorded vertices within the loaded viewport so new ways connect
+   to the existing network instead of floating disconnected next to a road
+   they should join. Clicks and searches use the local POI index
+   (`/api/v1/geo/pois`); opening an object, checking its relation membership,
+   or snapping to the live network fetches from `api.openstreetmap.org`.
+2. **Bearbeiten** – typed fields per place type (café, bench, bus stop, …),
+   hints for common mistakes, a live change summary and an "all tags" table.
+   New places warn about recorded places within 30 m. For ways, **Punkte
+   bearbeiten** lets you drag existing vertices, and **Weg teilen** /
+   **Mit Weg-ID verbinden** split a way at an interior point or merge two
+   ways sharing an endpoint (unioning their tags, flagging real conflicts).
+   `Cmd/Ctrl+S` saves.
+3. **Entwürfe** – review, undo/redo, compare the base versions with OSM and
+   download the change file. A merge that removes a way, or an explicit
+   deletion, appears as its own group in the export; everything else keeps
+   existing geometries and versions unless you deliberately changed them, and
+   objects changed on OSM since the fetch block the export.
+4. **Relationen** – create a relation or load one by ID, reorder members,
+   edit roles, and add members either from your own drafts (including
+   not-yet-uploaded nodes/ways) or by OSM ID. Opening a node or way also
+   shows which relations already contain it, with a shortcut to edit them.
+
+Place types and their fields live in `cmd/web/osm-presets.js`; validation,
+topology and export logic in `cmd/web/osm-editor.js`. Both are covered by
+`cmd/web_test/osm-*.test.cjs` (`node --test cmd/web_test/`).
+
 ## POI search and cache memory
 
 POI text normalization uses a single pass and avoids allocations for text that
