@@ -393,6 +393,9 @@
     // ── Form rendering
     function fieldNode(field){
       const id='osmField-'+field.key.replace(/[^a-z0-9]/gi,'-'),labelId=id+'-label',warnId=id+'-warn';
+      const fieldHint=field.key==='access'&&P.presetKeyForTags(tagsNow())==='defibrillator'
+        ?'Bei AEDs: „Öffentlich zugänglich“ wählen, wenn jede Person das Gerät erreichen kann. Zeitliche Einschränkungen zusätzlich über Öffnungszeiten beschreiben.'
+        :field.hint;
       const wrap=h('div',{class:'osm-field','data-key':field.key});
       const warn=h('p',{id:warnId,class:'osm-field-warn',hidden:true});
       let input,set,control;
@@ -400,7 +403,7 @@
         const options=[...field.options];
         const known=value=>options.some(([raw])=>raw===value);
         const buttons=new Map();
-        control=h('div',{class:'osm-choice',role:'group','aria-labelledby':labelId});
+        control=h('div',{class:'osm-choice',role:'group','aria-labelledby':labelId,'aria-describedby':fieldHint?id+'-hint':undefined});
         const press=raw=>{setValue(field.key,valueOf(field.key)===raw?'':raw);dirty=true;set(valueOf(field.key));renderTable();analyze();};
         const add=(raw,text)=>{const button=h('button',{type:'button',class:'osm-choice-button',text,'aria-pressed':'false',on:{click:()=>press(raw)}});buttons.set(raw,button);control.append(button);};
         options.forEach(([raw,text])=>add(raw,text));
@@ -411,7 +414,7 @@
         input=control;
         wrap.append(h('span',{id:labelId,class:'osm-field-label',text:field.label}),control);
       }else{
-        input=h('input',{id,type:field.type==='hours'?'text':field.type==='number'?'text':field.type,placeholder:field.placeholder||'',class:'setting-input','aria-describedby':warnId+(field.hint?' '+id+'-hint':'')});
+        input=h('input',{id,type:field.type==='hours'?'text':field.type==='number'?'text':field.type,placeholder:field.placeholder||'',class:'setting-input','aria-describedby':warnId+(fieldHint?' '+id+'-hint':'')});
         if(field.type==='number')input.inputMode='numeric';
         if(field.type==='tel')input.setAttribute('autocomplete','off');
         input.addEventListener('input',()=>{setValue(field.key,input.value);dirty=true;renderTable();analyze();});
@@ -424,11 +427,23 @@
           wrap.append(chips);
         }
       }
-      if(field.hint)wrap.append(h('p',{id:id+'-hint',class:'osm-field-hint',text:field.hint}));
+      if(fieldHint)wrap.append(h('p',{id:id+'-hint',class:'osm-field-hint',text:fieldHint}));
       wrap.append(warn);
       set(valueOf(field.key));
       fieldNodes.set(field.key,{field,input,wrap,warn,set});
       return wrap;
+    }
+    function defibrillatorSurveyPrompt(){
+      if(current?.confidentialID)return null;
+      return h('div',{class:'osm-special-guidance'},
+        h('strong',{text:'Vor-Ort-Prüfung dokumentieren'}),
+        h('p',{text:'Nur antippen, wenn du das Gerät und seinen Zugang selbst vor Ort geprüft hast. Osmmini ergänzt das heutige Prüfdatum und source=survey.'}),
+        h('button',{type:'button',class:'btn btn-ghost',text:'Heute vor Ort geprüft',on:{click:()=>{
+          const now=new Date(),today=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+          setValue('check_date',today);setValue('source','survey');dirty=true;
+          fieldNodes.get('check_date')?.set(today);fieldNodes.get('source')?.set('survey');
+          renderTable();analyze();say(`Vor-Ort-Prüfung für heute (${today}) im Entwurf vermerkt.`);
+        }}}));
     }
     function renderFields(){
       const box=el('osmFields');box.replaceChildren();fieldNodes.clear();
@@ -456,12 +471,14 @@
         if(kind==='fire_water_pond'&&current.value.type==='node'){
           box.append(h('div',{class:'osm-special-guidance'},h('strong',{text:'Löschteiche als Fläche erfassen'}),h('p',{text:'Zeichne den Umriss des Teichs auf der Karte. Art und bereits eingetragene Angaben werden übernommen.'}),h('button',{type:'button',class:'btn btn-ghost',text:'Teichfläche auf Karte zeichnen',on:{click:drawSelectedArea}})));
         }
+        if(kind==='defibrillator'&&!current?.confidentialID)box.append(defibrillatorSurveyPrompt());
         return;
       }
       for(const field of fields)box.append(fieldNode(field));
       const details=h('details',{class:'osm-advanced osm-address'},h('summary',{text:'Adresse'}),...address.map(fieldNode));
       details.open=address.some(f=>valueOf(f.key));
       box.append(details);
+      if(kind==='defibrillator'&&!current?.confidentialID)box.append(defibrillatorSurveyPrompt());
     }
     function setCareMode(mode,announce=true){
       if(!current)return;

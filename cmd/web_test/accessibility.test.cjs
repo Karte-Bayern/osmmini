@@ -29,6 +29,7 @@ test('card header forwarding does not intercept the native disclosure button key
 const css=fs.readFileSync(require.resolve('../web/style.css'),'utf8');
 const editorSource=fs.readFileSync(require.resolve('../web/osm-editor.js'),'utf8');
 const ids=new Set([...html.matchAll(/\bid="([^"]+)"/g)].map(m=>m[1]));
+const dynamicIds=new Set([...editorSource.matchAll(/\bid:'(osm[A-Z][A-Za-z]*)'/g)].map(m=>m[1]));
 const railViews=[...html.matchAll(/<button type="button" data-map-view="([a-z]+)" aria-pressed="(?:true|false)">(.*?)<\/button>/g)];
 test('rail lists every view once with a visible label; maps and OSM editing are first-class views',()=>{
  assert.deepEqual(railViews.map(m=>m[1]),['explore','route','assistant','maps','edit','tools']);
@@ -53,7 +54,7 @@ test('map sources live in the Karten view, not in the settings or tools',()=>{
 test('editor ids used by the script exist and the tab pattern is wired both ways',()=>{
  const used=new Set([...editorSource.matchAll(/'(osm[A-Z][A-Za-z]*)'/g)].map(m=>m[1]));
  assert.ok(used.size>40);
- for(const id of used)assert.ok(ids.has(id)||id==='osmField',`missing #${id}`);
+ for(const id of used)assert.ok(ids.has(id)||dynamicIds.has(id)||id==='osmField',`missing #${id}`);
  for(const tab of ['Find','Edit','Drafts']){
   const button=html.match(new RegExp(`<button id="osmTab${tab}"[^>]*>`))[0];
   assert.match(button,/role="tab"/);const panel=button.match(/aria-controls="([^"]+)"/)[1];

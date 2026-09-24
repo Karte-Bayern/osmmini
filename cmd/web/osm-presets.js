@@ -26,8 +26,12 @@
     waste:{key:'waste',label:'Inhalt',type:'choice',options:[['trash','Restmüll'],['dog_excrement','Hundekot']]},
     changing_table:{key:'changing_table',label:'Wickeltisch',type:'choice',options:yesNo},
     indoor:{key:'indoor',label:'Im Gebäude',type:'choice',options:yesNo},
+    access:{key:'access',label:'Zugang',type:'choice',hint:'Beschreibt die Zugangsberechtigung, nicht den Eigentümer. Zeitliche Einschränkungen separat bei den Öffnungszeiten angeben.',options:[['yes','Öffentlich zugänglich'],['permissive','Mit widerruflicher Erlaubnis'],['customers','Nur für Kundschaft'],['private','Nur mit Erlaubnis']]},
     'defibrillator:location':{key:'defibrillator:location',label:'Standort beschreiben',type:'text',placeholder:'z. B. Eingangshalle links'},
-    'fire_hydrant:type':{key:'fire_hydrant:type',label:'Hydrantenart',type:'choice',options:[['underground','Unterflur'],['pillar','Überflur'],['pipe','Saugrohr / Brunnen']]},
+    check_date:{key:'check_date',label:'Zuletzt vor Ort geprüft am',type:'text',placeholder:'JJJJ-MM-TT',hint:'Nur nach eigener Prüfung vor Ort eintragen.'},
+    source:{key:'source',label:'Datenquelle',type:'text',placeholder:'z. B. survey oder konkrete Quelle',hint:'Bei eigener Vor-Ort-Prüfung wird „survey“ verwendet.'},
+    'level:ref':{key:'level:ref',label:'Etage laut Beschilderung',type:'text',placeholder:'z. B. EG oder 1. OG'},
+    'fire_hydrant:type':{key:'fire_hydrant:type',label:'Hydrantenart',type:'choice',options:[['underground','Unterflur'],['pillar','Überflur'],['wall','Wandhydrant'],['pipe','Trockener Hydrant (mit Pumpe)']]},
     'fire_hydrant:diameter':{key:'fire_hydrant:diameter',label:'Nennweite (DN)',type:'text',placeholder:'z. B. 80 vom Hydrantenschild',hint:'Wert vom Hydrantenschild übernehmen; nicht den Anschlussdurchmesser am Hydranten.'},
     'fire_hydrant:position':{key:'fire_hydrant:position',label:'Lage',type:'choice',options:[['sidewalk','Gehweg'],['lane','Fahrbahn'],['parking_lot','Parkplatz'],['green','Grünfläche']]},
     'fire_hydrant:pressure':{key:'fire_hydrant:pressure',label:'Wasserdruck',type:'choice',options:[['yes','Drucknetz'],['suction','Sauganschluss']]},
@@ -88,12 +92,12 @@
     toilets:{label:'Öffentliche Toilette',icon:'🚻',group:'Draußen',tags:{amenity:'toilets'},fields:['fee','wheelchair','changing_table','opening_hours']},
     playground:{label:'Spielplatz',icon:'🎠',group:'Draußen',tags:{leisure:'playground'},fields:['name','surface','wheelchair','opening_hours']},
     shelter:{label:'Unterstand',icon:'⛱️',group:'Draußen',tags:{amenity:'shelter'},fields:['shelter_type','bench','material']},
-    fire_hydrant:{label:'Hydrant',icon:'🚒',group:'Feuerwehr & Erste Hilfe',synonyms:['Hydranten','Löschwasserhydrant'],tags:{emergency:'fire_hydrant'},fields:['name','ref','operator','fire_hydrant:type','fire_hydrant:diameter','fire_hydrant:position','fire_hydrant:pressure','water_source'],basicFields:['fire_hydrant:type','ref']},
-    fire_water_pond:{label:'Löschwasserteich',icon:'🪷',group:'Feuerwehr & Erste Hilfe',synonyms:['Löschweiher','Löschteich','Feuerlöschteich'],tags:{natural:'water',water:'pond',emergency:'fire_water_pond'},fields:['name','operator'],basicFields:[]},
-    suction_point:{label:'Löschwasser-Saugstelle',icon:'💧',group:'Feuerwehr & Erste Hilfe',synonyms:['Saugstelle','Löschwasserentnahmestelle'],tags:{emergency:'suction_point'},fields:['name','water_source','ref','operator'],basicFields:['water_source']},
+    fire_hydrant:{label:'Hydrant',icon:'🚒',group:'Feuerwehr & Erste Hilfe',synonyms:['Hydranten','Löschwasserhydrant'],tags:{emergency:'fire_hydrant'},fields:['name','ref','operator','access','fire_hydrant:type','fire_hydrant:diameter','fire_hydrant:position','fire_hydrant:pressure','water_source'],basicFields:['fire_hydrant:type','ref']},
+    fire_water_pond:{label:'Löschwasserteich',icon:'🪷',group:'Feuerwehr & Erste Hilfe',synonyms:['Löschweiher','Löschteich','Feuerlöschteich'],tags:{natural:'water',water:'pond',emergency:'fire_water_pond'},fields:['name','ref','operator','access'],basicFields:['ref','access']},
+    suction_point:{label:'Löschwasser-Saugstelle',icon:'💧',group:'Feuerwehr & Erste Hilfe',synonyms:['Saugstelle','Löschwasserentnahmestelle'],tags:{emergency:'suction_point'},fields:['name','water_source','ref','operator','access'],basicFields:['water_source','ref','access']},
     water_tank:{label:'Löschwasserbehälter',icon:'🛢️',group:'Feuerwehr & Erste Hilfe',synonyms:['Löschwassertank','Löschwasserzisterne'],tags:{emergency:'water_tank'},fields:['name','water_tank:volume','operator'],basicFields:['water_tank:volume']},
     fire_station:{label:'Feuerwache',icon:'🚒',group:'Feuerwehr & Erste Hilfe',synonyms:['Feuerwehrhaus','Feuerwehrstation'],tags:{amenity:'fire_station'},fields:['name','operator','phone','website','opening_hours'],basicFields:['operator','phone']},
-    defibrillator:{label:'AED / Defibrillator',icon:'❤️',group:'Feuerwehr & Erste Hilfe',synonyms:['AED','Automatisierter externer Defibrillator'],tags:{emergency:'defibrillator'},fields:['defibrillator:location','indoor','opening_hours','phone'],basicFields:['indoor','opening_hours','defibrillator:location']},
+    defibrillator:{label:'AED / Defibrillator',icon:'❤️',group:'Feuerwehr & Erste Hilfe',synonyms:['AED','Automatisierter externer Defibrillator'],tags:{emergency:'defibrillator'},fields:['defibrillator:location','indoor','access','opening_hours','check_date','source','level:ref','phone'],basicFields:['indoor','access','opening_hours','defibrillator:location']},
     barrier_free_entrance:{label:'Barrierefreier Zugang',icon:'♿',group:'Notfall & Zugang',tags:{entrance:'yes',wheelchair:'yes'},fields:['door','automatic_door','wheelchair']},
   });
   const keyLabel=key=>fields[key]?.label||keyLabels[key]||key;
@@ -145,6 +149,14 @@
   function checkValue(field,value){
     const text=String(value||'').trim();
     if(!text||!field)return '';
+    if(field.key==='check_date'){
+      const match=/^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+      if(!match)return 'Datum als JJJJ-MM-TT eingeben.';
+      const [,year,month,day]=match,parsed=new Date(Date.UTC(Number(year),Number(month)-1,Number(day)));
+      if(parsed.getUTCFullYear()!==Number(year)||parsed.getUTCMonth()!==Number(month)-1||parsed.getUTCDate()!==Number(day))return 'Dieses Datum gibt es nicht.';
+      const now=new Date(),today=Date.UTC(now.getFullYear(),now.getMonth(),now.getDate());
+      if(parsed.getTime()>today)return 'Das Prüfdatum darf nicht in der Zukunft liegen.';
+    }
     if(field.type==='url'){
       try{const url=new URL(text);if(!/^https?:$/.test(url.protocol))return 'Die Adresse sollte mit https:// beginnen.';}catch{return 'Vollständige Adresse mit https:// angeben.';}
     }

@@ -15,12 +15,12 @@ GOTAGS ?= sqliteimport
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build run bayern offline maplibre-assets pbf-download offline-prep test test-js test-race vet fmt check check-js clean
+.PHONY: help build run bayern offline maplibre-assets ensure-maplibre-assets pbf-download offline-prep test test-js test-race vet fmt check check-js clean
 
 help: ## Show available commands.
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-12s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-build: ## Build the server into bin/osmmini.
+build: ensure-maplibre-assets ## Build the server into bin/osmmini.
 	@mkdir -p "$(BIN_DIR)"
 	$(GO) build -tags=$(GOTAGS) -o "$(BIN_DIR)/$(APP)" ./cmd
 
@@ -48,6 +48,13 @@ maplibre-assets: ## Refresh the pinned MapLibre 6.7.0 ESM assets (network requir
 	done
 	shasum -a 256 -c cmd/web/static/maplibre/SHA256SUMS
 
+ensure-maplibre-assets: ## Verify local MapLibre assets, downloading them when missing or changed.
+	@if [ -s cmd/web/static/maplibre/maplibre-gl.mjs ] && shasum -a 256 -c cmd/web/static/maplibre/SHA256SUMS >/dev/null 2>&1; then \
+		echo "MapLibre assets are present and checksum-verified."; \
+	else \
+		$(MAKE) maplibre-assets; \
+	fi
+
 pbf-download: ## Download a Geofabrik PBF extract into PBF (set GEOFABRIK_URL to pick a region; skips if PBF already exists, use FORCE=1 to refetch).
 	@if [ -e "$(PBF)" ] && [ "$(FORCE)" != "1" ]; then \
 		echo "$(PBF) already exists, skipping (use FORCE=1 to refetch)."; \
@@ -66,7 +73,7 @@ offline-prep: pbf-download maplibre-assets ## Prepare everything needed for a fu
 	@echo "  make offline ADMIN_TOKEN=<token>"
 	@echo "Then use the 'Offline-Karte (tinyTiles)' source in Einstellungen to build the vector basemap from the loaded PBF."
 
-test: ## Run all unit tests.
+test: ensure-maplibre-assets ## Run all unit tests.
 	$(GO) test -tags=$(GOTAGS) ./...
 
 test-race: ## Run the test suite with Go's race detector.

@@ -262,7 +262,10 @@ Flags
 
 Run `make check` for Go tests, static analysis, a server build, JavaScript
 syntax validation and browser interaction regression tests. This requires Go
-and Node.js; the JavaScript tests use Node's built-in test runner with a small
+and Node.js. The test and build targets verify the pinned local MapLibre assets
+and download them with `make maplibre-assets` when they are missing or have a
+different checksum, so a first `make check` also needs network access. The
+JavaScript tests use Node's built-in test runner with a small
 DOM/network harness, without downloading dependencies or map tiles. They
 cover request ordering, cancellation, repeated searches and waypoint reset.
 Run `make test-race` to check concurrent Go access, or `make test-js` to run

@@ -240,7 +240,7 @@ func TestOfflineMapAssetsAreEmbedded(t *testing.T) {
 	} {
 		asset, err := embedded.ReadFile(path)
 		if err != nil {
-			t.Fatalf("read embedded %s: %v", path, err)
+			t.Fatalf("read embedded %s: %v (run make ensure-maplibre-assets first)", path, err)
 		}
 		if len(asset) < 100 {
 			t.Fatalf("embedded %s is unexpectedly small (%d bytes)", path, len(asset))
