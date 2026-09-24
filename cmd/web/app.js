@@ -1173,31 +1173,58 @@ function hideTileLoadOverlay() {
   if (overlay) overlay.hidden = true;
 }
 
-// Use browser geolocation to set 'from' input and center the map
+function currentPositionError(error) {
+  if (error?.code === 1) return new Error('Standortzugriff verweigert. Erlaube GPS oder gib einen Startpunkt ein.');
+  if (error?.code === 3) return new Error('Standortbestimmung dauerte zu lange. Bitte versuche es erneut oder gib einen Startpunkt ein.');
+  return new Error('GPS-Position gerade nicht verfügbar. Bitte versuche es erneut oder gib einen Startpunkt ein.');
+}
+
+function requestCurrentPosition() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error('Dieser Browser unterstützt keine Standortbestimmung. Bitte gib einen Startpunkt ein.'));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition((position) => {
+      const point = normalizeLatLon(position.coords.latitude, position.coords.longitude);
+      if (!point) {
+        reject(new Error('Die GPS-Position ist ungültig. Bitte gib einen Startpunkt ein.'));
+        return;
+      }
+      resolve(point);
+    }, (error) => reject(currentPositionError(error)), {
+      enableHighAccuracy: true,
+      maximumAge: 15000,
+      timeout: 10000,
+    });
+  });
+}
+
+function showUserLocation(point, { centerMap = false, openPopup = false } = {}) {
+  const coord = normalizeLatLon(point?.lat, point?.lon);
+  if (!coord) return false;
+  userLocation = coord;
+  userLocationMarker?.remove();
+  userLocationMarker = new maplibregl.Marker({ element: dotElement('#2ee6a7'), anchor: 'center' })
+    .setLngLat([coord.lon, coord.lat])
+    .setPopup(new maplibregl.Popup().setText('Ihr Standort'))
+    .addTo(map);
+  if (centerMap) map.jumpTo({ center: [coord.lon, coord.lat], zoom: 14 });
+  if (openPopup) userLocationMarker.togglePopup();
+  return true;
+}
+
+// The explicit location control fills the route start and centers the map.
 document.getElementById('useLocationBtn')?.addEventListener('click', async () => {
   if (!navigator.geolocation) {
     showToast('Geolocation wird von diesem Browser nicht unterstützt', 'error');
     return;
   }
   showToast('Standort wird ermittelt…', 'info', 3000);
-  navigator.geolocation.getCurrentPosition((pos) => {
-    const lat = pos.coords.latitude;
-    const lon = pos.coords.longitude;
-    userLocation = { lat, lon };
-    const fromInput = document.getElementById('from');
-    if (fromInput) {
-      clearResolvedRoutePoint(fromInput);
-      fromInput.value = `${lat.toFixed(6)},${lon.toFixed(6)}`;
-      syncInputClearState('from');
-    }
-    // set user marker
-    if (userLocationMarker) userLocationMarker.remove();
-    userLocationMarker = new maplibregl.Marker({ element: dotElement('#2ee6a7'), anchor: 'center' })
-      .setLngLat([lon, lat])
-      .setPopup(new maplibregl.Popup().setText('Ihr Standort'))
-      .addTo(map);
-    userLocationMarker.togglePopup();
-    map.jumpTo({ center: [lon, lat], zoom: 14 });
+  try {
+    const point = await requestCurrentPosition();
+    setResolvedRoutePoint(document.getElementById('from'), point, 'Mein Standort');
+    showUserLocation(point, { centerMap: true, openPopup: true });
     showToast('Standort gesetzt', 'success', 1500);
   }, (err) => {
     showToast('Standort konnte nicht ermittelt werden: ' + (err.message||''), 'error', 4000);
@@ -1352,6 +1379,7 @@ function preventAutofill() {
     return input;
   }
   
+  fromInput?.setAttribute('aria-describedby', 'routeStartHint');
   const fromInput = createDynamicInput('from-container', 'from', 'Start: Adresse oder Koordinaten');
   const toInput = createDynamicInput('to-container', 'to', 'Ziel: Adresse oder Koordinaten');
 }
@@ -1899,7 +1927,10 @@ async function compute() {
   routeRequest = request;
   const fromEl = document.getElementById('from');
   const toEl = document.getElementById('to');
-  const from = routeLocationForInput(fromEl);
+  let from = routeLocationForInput(fromEl);
+  const hasWaypoints = waypoints.some(wp => wp.input.value.trim() !== '');
+  const hasStops = stops.length > 0;
+  let requestedGPSForStart = false;
   const to = routeLocationForInput(toEl);
   // Sync clear-button visibility for main inputs (covers programmatic value sets)
   syncInputClearState('from');
@@ -1917,8 +1948,28 @@ async function compute() {
   if (actionsEl) actionsEl.style.display = 'none';
 
   try {
-    const hasWaypoints = waypoints.some(wp => wp.input.value.trim() !== '');
-    const hasStops = stops.length > 0;
+    if (!hasWaypoints && !hasStops && !routeLocationHasValue(to)) {
+      document.getElementById('status').textContent = 'Ziel fehlt';
+      showToast('Bitte zuerst ein Ziel eingeben', 'info');
+      toEl?.focus();
+      return;
+    }
+
+    if (!fromEl?.value.trim() && !resolvedRoutePoint(fromEl)) {
+      requestedGPSForStart = true;
+      document.getElementById('status').textContent = 'Standort wird ermittelt…';
+      const point = await requestCurrentPosition();
+      if (routeRequest !== request) return;
+      // Keep a start point the user entered while GPS was being requested.
+      if (!fromEl.value.trim() && !resolvedRoutePoint(fromEl)) {
+        setResolvedRoutePoint(fromEl, point, 'Mein Standort');
+        userLocation = point;
+        userLocationMarker?.remove();
+        userLocationMarker = null;
+      }
+      from = routeLocationForInput(fromEl);
+      document.getElementById('status').textContent = 'Standort ermittelt · Route wird berechnet…';
+    }
     
     if (!hasWaypoints && !hasStops) {
       if (!routeLocationHasValue(from) || !routeLocationHasValue(to)) {
@@ -1976,6 +2027,7 @@ async function compute() {
     }
   } catch (e) {
     if (routeRequest !== request || e?.name === 'AbortError') return;
+    if (requestedGPSForStart && !fromEl?.value.trim()) fromEl?.focus();
     document.getElementById('status').textContent = '❌ Fehler';
     try {
       if (e && e.details && Array.isArray(e.details.suggestions) && e.details.suggestions.length > 0) {

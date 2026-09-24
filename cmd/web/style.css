@@ -2331,6 +2331,7 @@ body.map-welcome-open { overflow: hidden; }
 .maps-place :is(.maps-place-route, .maps-place-ask) { width: 100%; height: 38px; font-size: 12px; font-weight: 550; border-radius: 9px; margin: 0; background: var(--primary-dim); color: var(--primary); }
 .maps-place .maps-place-ask { background: var(--surface); color: var(--text-2); }
 .maps-results[aria-busy="true"] { min-height: 4px; border-radius: 4px; background: var(--primary-dim); }
+.route-start-hint { margin: 2px 0 4px 22px; color: var(--text-2); font-size: 10.5px; line-height: 1.4; }
 .maps-shell .route-input-wrap input { min-height: 44px; font-size: 14px; }
 .maps-shell .btn-primary { box-shadow: none; min-height: 42px; }
 .maps-shell .ai-input-row { grid-template-columns: minmax(0, 1fr) 44px; align-items: end; }
@@ -2597,4 +2598,55 @@ button.section-header .section-header-title { text-align: left; }
   .osm-member-add-row { grid-template-columns: 1fr 1fr; }
   .osm-member-add-row .btn { grid-column: 1 / -1; }
   .osm-draw-actions { grid-template-columns: 1fr; }
+
+/* Keep the map-first workspace compact and easy to scan. */
+.maps-shell .sidebar { border-radius: 12px; }
+.maps-panel-top { padding: 10px; }
+.maps-panel-toolbar { min-height: 36px; }
+.maps-panel-controls button { min-height: 38px; }
+.maps-intro { padding: 18px 12px 12px; }
+.maps-intro h2 { margin: 8px 0; font-size: 22px; line-height: 1.25; letter-spacing: -.4px; }
+.maps-intro p { line-height: 1.55; }
+.maps-local-note { margin: 0 4px 14px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.maps-route-cta { margin-top: 16px; border-radius: 8px; padding: 12px; }
+.maps-place { border-radius: 8px; }
+.maps-rail button { transition: color var(--dur) var(--ease), background-color var(--dur) var(--ease); }
+.maps-rail button[aria-pressed="true"] > span { border-radius: 12px; }
+.maps-categories button { min-height: 42px; border-radius: 10px; padding: 9px 14px; }
+.maps-categories button:focus-visible, .maps-rail button:focus-visible { outline-offset: 2px; }
+
+@media (max-width: 768px) {
+  .maps-shell .sidebar { border-radius: 12px; }
+  .maps-panel-top { padding: 6px 8px 8px; }
+  .maps-intro { padding: 8px 10px 4px; }
+  .maps-intro h2 { margin: 4px 0; font-size: 18px; }
+  .maps-results-heading { margin-top: 6px; }
+  .maps-categories button { min-height: 44px; padding: 8px 12px; }
+}
+
+@media (max-width: 380px) {
+  .maps-rail { justify-content: space-between; padding-right: 3px; padding-left: 3px; }
+  .maps-rail button { flex: 1 1 0; font-size: 8px; }
+  .maps-rail button > span { width: 100%; }
+}
+
+/* OSM care modes keep first-time edits approachable while exposing full tag control. */
+.osm-editor-modes { display: grid; gap: 8px; margin: 0 0 12px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.osm-editor-modes[hidden] { display: none !important; }
+.osm-editor-modes > div:first-child { display: grid; gap: 3px; }
+.osm-editor-modes strong { font-size: 12px; }
+.osm-editor-modes .settings-hint { margin: 0; font-size: 11px; line-height: 1.4; }
+.osm-mode-options { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 3px; border: 1px solid var(--border); border-radius: 8px; background: var(--input-bg); }
+.osm-mode-options button { min-height: 38px; border: 0; border-radius: 6px; background: transparent; color: var(--text-2); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.osm-mode-options button[aria-pressed="true"] { background: var(--card-bg); color: var(--primary); box-shadow: 0 1px 3px #2021242e; }
+.osm-optional-fields { margin: 10px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.osm-optional-fields > summary { cursor: pointer; font-size: 12px; font-weight: 600; }
+.osm-preset-search { min-height: 42px; }
+.osm-preset-picker-hint { margin: 4px 0; color: var(--text-2); font-size: 11px; }
+.osm-preset-more, .osm-preset-other { width: 100%; min-height: 40px; white-space: normal; }
+.osm-preset-results { min-width: 0; }
+.osm-special-guidance { display: grid; gap: 6px; margin: 10px 0; padding: 12px; border: 1px solid var(--border-focus); border-radius: 8px; background: var(--primary-dim); }
+.osm-special-guidance strong { font-size: 12px; }
+.osm-special-guidance p { margin: 0; color: var(--text-2); font-size: 11.5px; line-height: 1.45; }
+.osm-special-guidance .btn { min-height: 42px; white-space: normal; }
 }

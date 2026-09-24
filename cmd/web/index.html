@@ -60,8 +60,7 @@
         <div class="sidebar-primary">
 
         <section class="maps-explore" data-view-only="explore" aria-label="Orte entdecken">
-          <div class="maps-intro"><span class="maps-eyebrow">DEINE KARTE. DEIN WEG.</span><h2>Was liegt vor dir?</h2><p>Finde einen Ort. Entdecke die Umgebung.<br>Und mach dich auf den Weg.</p></div>
-          <div class="maps-local-note"><span aria-hidden="true"><svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-location"/></svg></span><div><strong>In deiner Region unterwegs</strong><p>Adressen und Orte aus deiner geladenen OSM-Region.</p></div></div>
+          <div class="maps-local-note"><span aria-hidden="true"><svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24"><use href="#icon-location"/></svg></span><div><strong>Regionale Suche</strong><p>Adressen und Orte aus deiner OSM-Region.</p></div></div>
           <div class="maps-results-heading"><h3 id="placeResultsTitle">Orte entdecken</h3><button id="clearPlaces" type="button" hidden>Zurücksetzen</button></div>
           <p id="placeSearchStatus" role="status" aria-live="polite">Suche nach einem Ort oder wähle eine Kategorie auf der Karte.</p>
           <div id="placeResults" class="maps-results"></div>
@@ -104,6 +103,7 @@
                 <div id="from-suggest" class="suggest"></div>
                 <div id="from-container"></div>
               </div>
+            <p id="routeStartHint" class="route-start-hint">Start leer lassen: aktuelle GPS-Position wird verwendet.</p>
             </div>
 
             <!-- Connector + swap -->
@@ -425,6 +425,13 @@
             <div id="osmForm" hidden>
               <div class="osm-object">
                 <div class="osm-object-title"><h3 id="osmSelected" tabindex="-1"></h3><span id="osmEditState" class="osm-badge" data-state="clean"></span></div>
+                <div id="osmEditorModes" class="osm-editor-modes" hidden>
+                  <div><strong>Pflegemodus</strong><p id="osmEditorModeHint" class="settings-hint">Art und Name reichen für einen ersten Entwurf.</p></div>
+                  <div class="osm-mode-options" role="group" aria-label="Pflegemodus">
+                    <button id="osmModeBasic" type="button" aria-pressed="true">Einfach</button>
+                    <button id="osmModeProfessional" type="button" aria-pressed="false">Professionell</button>
+                  </div>
+                </div>
                 <p id="osmObjectMeta" class="osm-meta"></p>
                 <div class="osm-object-actions"><button id="osmLocate" class="btn btn-ghost" type="button">Auf Karte zeigen</button><a id="osmOsmLink" class="btn btn-ghost" href="#" target="_blank" rel="noopener noreferrer" hidden>In OSM ansehen ↗</a><button id="osmGeometryToggle" class="btn btn-ghost" type="button" aria-pressed="false" hidden>Punkte bearbeiten</button></div>
                 <div id="osmTopologyTools" class="osm-topology-tools" hidden>

@@ -253,10 +253,10 @@
     const say=text=>{status.textContent=text;};
     const TABS=[['find','osmTabFind','osmPanelFind'],['edit','osmTabEdit','osmPanelEdit'],['drafts','osmTabDrafts','osmPanelDrafts'],['relations','osmTabRelations','osmPanelRelations']];
     let drafts=[],current=null,working=[],members=[],dirty=false,busy=false,viewActive=false,placing=false,tab='find';
-    let candidates=[],highlighted='',nearbyPoint=null,lastSearch=null,missPoint=null,presetOpen=false,customKind=false,renderedKind='';
+    let candidates=[],highlighted='',nearbyPoint=null,lastSearch=null,missPoint=null,presetOpen=false,customKind=false,renderedKind='',careMode='basic',presetSearchTerm='',presetAllOpen=false;
     let undo=[],redo=[],checkedFor='',conflicts=[],validForm=false;
     let geometryMode=false,dragNodeId=null,splitMode=false;const dragPreview=new Map();
-    let drawing=false,drawPoints=[],drawKind='line',drawSnapNodes=null;
+    let drawing=false,drawPoints=[],drawKind='line',drawSnapNodes=null,pendingDrawTags=null;
     const fieldNodes=new Map();
     try{const raw=localStorage.getItem(key);if(raw)drafts=restore(raw);}catch{say('Gespeicherte Entwürfe konnten nicht geladen werden.');}
     let saved=JSON.stringify(drafts);
@@ -306,6 +306,7 @@
     }
     function cancel(){
       const hadDraw=drawing&&drawPoints.length;
+      pendingDrawTags=null;
       placing=false;drawing=false;drawPoints=[];drawSnapNodes=null;
       applyMode();
       if(hadDraw)render();
@@ -336,7 +337,7 @@
       if(dirty){say('Du hast ungespeicherte Änderungen. Speichere sie oder verwirf sie im Reiter „Bearbeiten“.');setTab('edit');el('osmSelected').focus?.();return false;}
       return !busy;
     }
-    function closeCurrent(){current=null;working=[];members=[];dirty=false;presetOpen=false;customKind=false;geometryMode=false;dragNodeId=null;splitMode=false;dragPreview.clear();renderForm();applyMode();render();syncUI();}
+    function closeCurrent(){current=null;working=[];members=[];dirty=false;presetOpen=false;customKind=false;careMode='basic';presetSearchTerm='';presetAllOpen=false;geometryMode=false;dragNodeId=null;splitMode=false;dragPreview.clear();renderForm();applyMode();render();syncUI();}
 
     // ── Analysis of the working tags: validity, diff, hints
     const display=(k,v)=>{
@@ -439,11 +440,35 @@
       const show=!!current&&(current.base||kind||customKind);
       box.hidden=!show;
       if(!show)return;
+      if(careMode==='basic'&&!current.base){
+        const preset=P.presets[kind],basicKeys=new Set(preset?.basicFields||[]);
+        const nameField=fields.find(field=>field.key==='name')||P.fields.name;
+        box.append(fieldNode(nameField));
+        for(const field of fields)if(basicKeys.has(field.key))box.append(fieldNode(field));
+        const optional=fields.filter(field=>field.key!=='name'&&!basicKeys.has(field.key));
+        if(optional.length||address.length){
+          const more=h('details',{class:'osm-optional-fields'},h('summary',{text:`Weitere Angaben (${optional.length+address.length})`}));
+          for(const field of optional)more.append(fieldNode(field));
+          const addressDetails=h('details',{class:'osm-advanced osm-address'},h('summary',{text:'Adresse'}),...address.map(fieldNode));
+          more.append(addressDetails);box.append(more);
+        }
+        if(kind==='fire_water_pond'&&current.value.type==='node'){
+          box.append(h('div',{class:'osm-special-guidance'},h('strong',{text:'Löschteiche als Fläche erfassen'}),h('p',{text:'Zeichne den Umriss des Teichs auf der Karte. Art und bereits eingetragene Angaben werden übernommen.'}),h('button',{type:'button',class:'btn btn-ghost',text:'Teichfläche auf Karte zeichnen',on:{click:drawSelectedArea}})));
+        }
+        return;
+      }
       const {fields,address}=P.fieldsFor(tagsNow());
       for(const field of fields)box.append(fieldNode(field));
       const details=h('details',{class:'osm-advanced osm-address'},h('summary',{text:'Adresse'}),...address.map(fieldNode));
       details.open=address.some(f=>valueOf(f.key));
       box.append(details);
+    function setCareMode(mode,announce=true){
+      if(!current)return;
+      careMode=mode==='professional'?'professional':'basic';
+      if(careMode==='professional')el('osmAdvancedTags').open=true;
+      renderForm();
+      if(announce)say(careMode==='professional'?'Professionelle Ansicht: alle Merkmale, OSM-Tags und passende Geometriewerkzeuge sind verfügbar.':'Einfache Ansicht: Art und Name reichen; weitere Angaben bleiben erhalten und sind optional.');
+    }
     }
     function renderPresets(focusFirst=false){
       const wrap=el('osmPresetChips');wrap.replaceChildren();let first=null;
@@ -454,13 +479,33 @@
         wrap.append(h('div',{class:'osm-preset-current'},h('span',{class:'osm-preset-icon','aria-hidden':'true',text:preset.icon}),h('strong',{text:preset.label}),h('button',{type:'button',class:'btn btn-ghost',text:'Ändern','aria-label':'Art des Ortes ändern',on:{click:()=>{presetOpen=true;renderPresets(true);}}})));
         return;
       }
-      for(const group of [...new Set(Object.values(P.presets).map(p=>p.group))]){
-        const grid=h('div',{class:'osm-preset-grid',role:'group','aria-label':group});
-        for(const [k,p] of Object.entries(P.presets).filter(([,p])=>p.group===group)){const button=h('button',{type:'button',class:'osm-preset','aria-pressed':String(k===kind),on:{click:()=>applyPreset(k)}},h('span',{class:'osm-preset-icon','aria-hidden':'true',text:p.icon}),h('span',{text:p.label}));first??=button;grid.append(button);}
-        wrap.append(h('div',{class:'osm-preset-group'},h('h4',{text:group}),grid));
-      }
-      if(focusFirst)first?.focus?.();
-      wrap.append(h('button',{type:'button',class:'btn btn-ghost osm-preset-other',text:'Andere Art – eigene Eigenschaften',on:{click:()=>{customKind=true;presetOpen=false;renderPresets();renderFields();el('osmAdvancedTags').open=true;el('osmAddTag').click();}}}));
+      const search=h('input',{id:'osmPresetSearch',type:'search',class:'setting-input osm-preset-search',value:presetSearchTerm,placeholder:'z. B. Café, Sitzbank, amenity=bench','aria-label':'Art des neuen Ortes suchen',autocomplete:'off'});
+      const results=h('div',{id:'osmPresetResults',class:'osm-preset-results'});
+      const updateResults=()=>{
+        const query=search.value.trim().normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('de');
+        presetSearchTerm=search.value;
+        results.replaceChildren();
+        const all=Object.entries(P.presets);
+        const searchable=([key,p])=>[key,p.label,p.group,...(p.synonyms||[]),...Object.entries(p.tags).flat()].join(' ').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('de');
+        const matches=query?all.filter(entry=>searchable(entry).includes(query)):all;
+        const quickKeys=['cafe','pharmacy','bus_stop','bench','toilets','drinking_water'];
+        const shown=query||presetAllOpen?matches:all.filter(([key,p])=>quickKeys.includes(key)||p.group==='Feuerwehr & Erste Hilfe');
+        if(query)results.append(h('p',{class:'osm-preset-picker-hint',text:`${matches.length} ${matches.length===1?'passende Art':'passende Arten'}`}));
+        if(!matches.length){results.append(h('p',{class:'osm-empty',text:'Keine passende Art gefunden. Du kannst eigene OSM-Eigenschaften ergänzen.'}));return;}
+        const groups=query||presetAllOpen?[...new Set(shown.map(([,p])=>p.group))]:['Häufige Einträge','Feuerwehr & Erste Hilfe'];
+        for(const group of groups){
+          const entries=shown.filter(([key,p])=>query||presetAllOpen?p.group===group:group==='Häufige Einträge'?quickKeys.includes(key):p.group===group);
+          const grid=h('div',{class:'osm-preset-grid',role:'group','aria-label':group});
+          for(const [k,p] of entries){const button=h('button',{type:'button',class:'osm-preset','aria-pressed':String(k===kind),on:{click:()=>applyPreset(k)}},h('span',{class:'osm-preset-icon','aria-hidden':'true',text:p.icon}),h('span',{text:p.label}));first??=button;grid.append(button);}
+          results.append(h('div',{class:'osm-preset-group'},h('h4',{text:group}),grid));
+        }
+      };
+      search.addEventListener('input',updateResults);
+      wrap.append(h('label',{class:'osm-field-label',for:'osmPresetSearch',text:'Welche Art möchtest du eintragen?'}),search,results);
+      if(!presetSearchTerm&&!presetAllOpen)wrap.append(h('button',{type:'button',class:'btn btn-ghost osm-preset-more',text:`Alle ${Object.keys(P.presets).length} Arten anzeigen`,on:{click:()=>{presetAllOpen=true;renderPresets(true);}}}));
+      updateResults();
+      if(focusFirst)search.focus?.();
+      wrap.append(h('button',{type:'button',class:'btn btn-ghost osm-preset-other',text:'Andere Art – eigene Eigenschaften',on:{click:()=>{customKind=true;presetOpen=false;setCareMode('professional',false);el('osmAddTag').click();}}}));
     }
     function applyPreset(k){
       const preset=P.presets[k];
@@ -468,7 +513,7 @@
       const previous=P.presetForTags(tagsNow());
       if(previous)for(const name of Object.keys(previous.tags))setValue(name,'');
       for(const [name,value] of Object.entries(preset.tags))setValue(name,value);
-      dirty=true;presetOpen=false;
+      dirty=true;presetOpen=false;presetSearchTerm='';presetAllOpen=false;
       renderPresets();renderFields();renderTable();analyze();
       say(preset.label+' gewählt. Ergänze nur Angaben, die du sicher kennst, und speichere den Entwurf.');
       [...fieldNodes.values()][0]?.input.focus?.();
@@ -494,6 +539,9 @@
       el('osmForm').hidden=!current;el('osmEmpty').hidden=!!current;
       if(!current){el('osmDuplicates').hidden=true;return;}
       const {value,base}=current;
+      const modes=el('osmEditorModes');
+      if(modes){modes.hidden=value.type==='relation'||!!current.confidentialID;el('osmModeBasic')?.setAttribute('aria-pressed',String(careMode==='basic'));el('osmModeProfessional')?.setAttribute('aria-pressed',String(careMode==='professional'));el('osmEditorModeHint').textContent=careMode==='professional'?'Alle Merkmale und OSM-Tags bearbeiten; Wege und Relationen fachlich prüfen.':'Art und Name reichen für den ersten Entwurf. Weitere Angaben bleiben optional.';}
+      const advancedTags=el('osmAdvancedTags');if(advancedTags){advancedTags.hidden=careMode!=='professional';if(careMode==='professional')advancedTags.open=true;}
       el('osmObjectMeta').textContent=base?`${kindName(value.type)} · OSM-ID ${value.id} · Version ${value.version}`:value.type==='node'?`Neuer Ort · ${value.lat.toFixed(5)}, ${value.lon.toFixed(5)}`:`Neuer ${kindName(value.type)}`;
       const link=el('osmOsmLink');link.hidden=!base;if(base)link.href=`https://www.openstreetmap.org/${value.type}/${value.id}`;
       const geomToggle=el('osmGeometryToggle');
@@ -514,6 +562,8 @@
       return wayShape([...elements,{type:'way',id:value.id,nodes:value.nodes}],value.id);
     }
     function open(d){
+      careMode=current.base||current.value.type!=='node'?'professional':'basic';
+      presetSearchTerm='';presetAllOpen=false;
       current=structuredClone(d);dirty=false;working=Object.entries(current.value.tags);
       if(current.value.type==='way'&&!current.shape){const shape=localWayShape(current.value);if(shape)current.shape=shape;}
       members=current.value.type==='relation'?current.value.members.map(m=>({...m})):[];
@@ -837,6 +887,13 @@
       say(`Klicke auf die Karte, um Punkte für ${kind==='area'?'die Fläche':'den Weg'} zu setzen. „Fertig“ zum Abschließen, Escape zum Abbrechen.`);
       return fetchSnapNodes();
     }
+    function drawSelectedArea(){
+      if(!current)return;
+      const preservedTags=tags(trimmed());
+      closeCurrent();setTab('find');
+      startDrawing('area');
+      pendingDrawTags=preservedTags;
+    }
     function addDrawPoint(lngLat){
       if(drawPoints.length>=500){say('Maximal 500 Punkte pro Weg.');return;}
       const snap=nearestSnapNode(lngLat);
@@ -847,7 +904,8 @@
     function undoDrawPoint(){if(!drawPoints.length)return;drawPoints.pop();applyMode();render();}
     function finishDraw(){
       if(!drawing)return;
-      if(drawPoints.length<2){say('Mindestens 2 Punkte nötig, um einen Weg abzuschließen.');return;}
+      const minimum=drawKind==='area'?3:2;
+      if(drawPoints.length<minimum){say(`Mindestens ${minimum} Punkte nötig, um ${drawKind==='area'?'eine Fläche':'einen Weg'} abzuschließen.`);return;}
       try{
         const pendingNodes=[];
         const nodeIds=drawPoints.map(p=>{
@@ -858,13 +916,14 @@
         });
         if(drawKind==='area'&&nodeIds.length>2)nodeIds.push(nodeIds[0]);
         const wayId=nextTempId(drafts,'way');
-        const value=element({type:'way',id:wayId,nodes:nodeIds,tags:{}},true);
+        const value=element({type:'way',id:wayId,nodes:nodeIds,tags:pendingDrawTags||{}},true);
         const lons=drawPoints.map(p=>p.lon),lats=drawPoints.map(p=>p.lat);
         const center=[lons.reduce((a,b)=>a+b,0)/lons.length,lats.reduce((a,b)=>a+b,0)/lats.length];
         const bounds=[[Math.min(...lons),Math.min(...lats)],[Math.max(...lons),Math.max(...lats)]];
         let coordinates=drawPoints.map(p=>[p.lon,p.lat]);
         const closed=drawKind==='area'&&coordinates.length>2;
         if(closed)coordinates=[...coordinates,coordinates[0]];
+        pendingDrawTags=null;
         drawing=false;drawPoints=[];drawSnapNodes=null;applyMode();
         open({base:null,value,center,pendingNodes,shape:{bounds,coordinates,closed}});dirty=true;analyze();
         say((drawKind==='area'?'Fläche':'Weg')+' angelegt. Wähle die Art und ergänze, was du weißt.');
@@ -1102,6 +1161,8 @@
     }
     function download(content,name,type){const url=URL.createObjectURL(new Blob([content],{type})),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 
+    el('osmModeBasic')?.addEventListener('click',()=>setCareMode('basic'));
+    el('osmModeProfessional')?.addEventListener('click',()=>setCareMode('professional'));
     // ── Wiring
     el('osmSearchForm').addEventListener('submit',event=>{event.preventDefault?.();return search();});
     el('osmNew').addEventListener('click',()=>{
