@@ -139,11 +139,11 @@ function harness(initial=[],routes={}){
   dragPan:{disabled:false,disable(){this.disabled=true;},enable(){this.disabled=false;}},
  };
  const originalFetch=global.fetch;
- global.fetch=async url=>{
+ global.fetch=async(url,options)=>{
   requests.push(String(url));
   const route=Object.entries(routes).find(([part])=>String(url).includes(part));
   if(!route)return {ok:true,json:async()=>({features:[]})};
-  const value=typeof route[1]==='function'?route[1](String(url)):route[1];
+  const value=typeof route[1]==='function'?route[1](String(url),options):route[1];
   return {ok:value.ok??true,status:value.status??200,json:async()=>value.body};
  };
  const editor=E.create(map);
@@ -545,6 +545,71 @@ test('saving without differences removes a draft instead of exporting an empty c
  const e=h.es;e.osmDrafts.children[0].children[0].click();assert.equal(h.control('name').value,'Neu');
  h.type('name','Alt');e.osmSave.click();assert.equal(h.drafts().length,0);assert.match(e.osmEditorStatus.textContent,/nicht im Export/);
 }));
+
+test('the confidential toggle diverts save() to POST /api/v1/confidential-objects and never touches drafts',withHarness([],{'confidential-objects':(url,options)=>{
+ const method=(options?.method||'GET').toUpperCase();
+ if(method==='POST')return {status:201,body:{id:'co-1',...JSON.parse(options.body),created_at:'now',updated_at:'now'}};
+ return {body:{objects:[]}};
+}},async h=>{
+ const e=h.es;
+ h.editor.startAt({lat:48,lng:12});
+ assert.equal(e.osmConfidentialWrap.hidden,false,'the toggle must be offered for a brand-new point');
+ h.preset('Sitzbank');
+ e.osmConfidentialToggle.checked=true;
+ await e.osmSave.click();
+ const posted=h.requests.filter(u=>u.includes('confidential-objects'));
+ assert.ok(posted.length>=1,'expected a request to /api/v1/confidential-objects');
+ assert.equal(h.drafts().length,0,'a confidential save must never create an OSM draft');
+ assert.equal(E.osc(h.drafts()),'<?xml version="1.0" encoding="UTF-8"?>\n<osmChange version="0.6" generator="OSMmini">\n\n</osmChange>\n','the .osc export must stay empty');
+ assert.match(e.osmEditorStatus.textContent,/nie Teil des OSM-Exports/);
+ assert.equal(e.osmForm.hidden,true,'the edit form closes after a confidential save, like an ordinary save');
+}));
+
+test('an existing confidential object is offered for tag-only editing (PUT, not POST) and hides geometry tools',withHarness([],{'confidential-objects':(url,options)=>{
+ const method=(options?.method||'GET').toUpperCase();
+ if(method==='PUT')return {body:{id:'co-1',...JSON.parse(options.body),created_at:'t0',updated_at:'t1'}};
+ if(method==='DELETE')return {body:{}};
+ return {body:{objects:[{id:'co-1',geometry_type:'Point',coordinates:[12,48],tags:{note:'Zugangscode 1234'},created_at:'t0',updated_at:'t0'}]}};
+}},async h=>{
+ const e=h.es;
+ await h.editor.enter();
+ assert.equal(h.data('osm-confidential').features.length,1);
+ assert.equal(e.osmConfidentialList.children.length,1);
+ assert.equal(e.osmConfidentialEmpty.hidden,true);
+ e.osmConfidentialList.children[0].children[0].click();
+ assert.equal(h.editor.tab,'edit');
+ assert.equal(e.osmConfidentialToggle.checked,true);assert.equal(e.osmConfidentialToggle.disabled,true);
+ assert.equal(e.osmGeometryToggle.hidden,true,'geometry editing is not offered when re-editing a confidential object');
+ // "note" isn't a known preset field, so it only surfaces in the raw tag
+ // table (osmTags), not the friendly-field UI h.type() targets.
+ const row=e.osmTags.children.find(r=>r.children[0].value==='note');
+ assert.ok(row,'expected the existing "note" tag as a raw tag row');
+ row.children[1].value='Zugangscode 5678';row.children[1].listeners.input();
+ await e.osmSave.click();
+ const putRequest=h.requests.find(u=>u.includes('confidential-objects/co-1'));
+ assert.ok(putRequest,'expected a PUT to the object\'s own URL');
+ assert.equal(h.drafts().length,0);
+}));
+
+test('deleting a confidential object from the management list issues DELETE and refreshes the layer',async()=>{
+ let deleted=false;
+ const routes={'confidential-objects':(url,options)=>{
+  const method=(options?.method||'GET').toUpperCase();
+  if(method==='DELETE'){deleted=true;return {status:204,body:{}};}
+  return {body:{objects:deleted?[]:[{id:'co-1',geometry_type:'Point',coordinates:[12,48],tags:{name:'Löschteich'},created_at:'t0',updated_at:'t0'}]}};
+ }};
+ const h=harness([],routes),e=h.es;
+ const originalConfirm=global.confirm;global.confirm=()=>true;
+ try{
+  await h.editor.enter();
+  assert.equal(h.data('osm-confidential').features.length,1);
+  const row=e.osmConfidentialList.children[0];
+  await row.children[2].click();
+  assert.ok(h.requests.some(u=>u.includes('confidential-objects/co-1')));
+  assert.equal(h.data('osm-confidential').features.length,0);
+  assert.equal(e.osmConfidentialEmpty.hidden,false);
+ }finally{global.confirm=originalConfirm;h.restore();}
+});
 
 test('layers wait for a loading style and redraw once it is ready',async()=>{
  const h=harness(),timers=[],original=global.setTimeout;let loaded=false;

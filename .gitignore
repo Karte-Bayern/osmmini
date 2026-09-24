@@ -16,8 +16,12 @@ operations.json
 operators.json
 
 # Local operational data (never for the public repo: real fire-department
-# rosters, internal documents, generated PLZ/POI caches from a loaded PBF).
+# rosters, internal documents, generated PLZ/POI caches from a loaded PBF,
+# imported GIS layers, and confidential OSM-editor objects).
 ffw/
 fire-stations.json
 territories/
 *.poi.json
+imported-layers/
+confidential-objects.json
+geodata-tiles/

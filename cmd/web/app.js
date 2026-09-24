@@ -1216,19 +1216,15 @@ function showUserLocation(point, { centerMap = false, openPopup = false } = {}) 
 
 // The explicit location control fills the route start and centers the map.
 document.getElementById('useLocationBtn')?.addEventListener('click', async () => {
-  if (!navigator.geolocation) {
-    showToast('Geolocation wird von diesem Browser nicht unterstützt', 'error');
-    return;
-  }
   showToast('Standort wird ermittelt…', 'info', 3000);
   try {
     const point = await requestCurrentPosition();
     setResolvedRoutePoint(document.getElementById('from'), point, 'Mein Standort');
     showUserLocation(point, { centerMap: true, openPopup: true });
     showToast('Standort gesetzt', 'success', 1500);
-  }, (err) => {
-    showToast('Standort konnte nicht ermittelt werden: ' + (err.message||''), 'error', 4000);
-  }, { enableHighAccuracy: true, timeout: 10000 });
+  } catch (error) {
+    showToast(error.message || 'Standort konnte nicht ermittelt werden.', 'error', 4000);
+  }
 });
 
 // helper: detect if prompt explicitly refers to the current map view/area
@@ -1379,8 +1375,8 @@ function preventAutofill() {
     return input;
   }
   
-  fromInput?.setAttribute('aria-describedby', 'routeStartHint');
   const fromInput = createDynamicInput('from-container', 'from', 'Start: Adresse oder Koordinaten');
+  fromInput?.setAttribute('aria-describedby', 'routeStartHint');
   const toInput = createDynamicInput('to-container', 'to', 'Ziel: Adresse oder Koordinaten');
 }
 
@@ -1928,10 +1924,10 @@ async function compute() {
   const fromEl = document.getElementById('from');
   const toEl = document.getElementById('to');
   let from = routeLocationForInput(fromEl);
+  const to = routeLocationForInput(toEl);
   const hasWaypoints = waypoints.some(wp => wp.input.value.trim() !== '');
   const hasStops = stops.length > 0;
   let requestedGPSForStart = false;
-  const to = routeLocationForInput(toEl);
   // Sync clear-button visibility for main inputs (covers programmatic value sets)
   syncInputClearState('from');
   syncInputClearState('to');
@@ -1973,7 +1969,7 @@ async function compute() {
     
     if (!hasWaypoints && !hasStops) {
       if (!routeLocationHasValue(from) || !routeLocationHasValue(to)) {
-        document.getElementById('status').textContent = 'Bereit';
+        document.getElementById('status').textContent = 'Start oder Ziel fehlt';
         showToast('Bitte Start und Ziel eingeben', 'info');
         return;
       }
@@ -2027,8 +2023,8 @@ async function compute() {
     }
   } catch (e) {
     if (routeRequest !== request || e?.name === 'AbortError') return;
-    if (requestedGPSForStart && !fromEl?.value.trim()) fromEl?.focus();
     document.getElementById('status').textContent = '❌ Fehler';
+    if (requestedGPSForStart && !fromEl?.value.trim()) fromEl?.focus();
     try {
       if (e && e.details && Array.isArray(e.details.suggestions) && e.details.suggestions.length > 0) {
         renderDisambiguationButtons(e.details);
@@ -3286,7 +3282,10 @@ let settingsUIReady = false;
 let tilePresetAPIReady = false;
 
 function tilePresetCategory(preset) {
-  if (preset?.id === 'tinytiles_local') return 'offline';
+  // geodata_custom is a locally imported MBTiles artifact (cmd/geodata_tiles.go)
+  // -- served from this server, not fetched over the internet, so it belongs
+  // with tinyTiles under "Offline" rather than "Online".
+  if (preset?.id === 'tinytiles_local' || preset?.id === 'geodata_custom') return 'offline';
   if (String(preset?.id || '').startsWith('bayern_') || preset?.id === 'geodaten_bavaria') return 'bayern';
   return 'online';
 }
@@ -4653,6 +4652,236 @@ document.getElementById('territoryBuildPostal')?.addEventListener('click', () =>
 });
 
 loadTerritoryLayers();
+
+// ─── Imported GIS layers (point/line, from /api/v1/geodata/import) ──────
+// Polygon-only imports already appear in the Territories picker above (the
+// backend mirrors them into TerritoryStore, see cmd/geodata_layers.go). This
+// covers the rest: point/line layers, which Territory can't represent.
+// Reuses the same $type-filtered fill/line/point rendering osm-editor.js
+// already uses for its draft-geometry source (osm-draw).
+const GEODATA_SOURCE_ID = 'geodata-imported';
+let geodataLayerVisible = false;
+let geodataLayerCache = {}; // layer name -> parsed FeatureCollection
+
+function ensureGeodataLayer() {
+  if (map.getSource(GEODATA_SOURCE_ID)) return;
+  map.addSource(GEODATA_SOURCE_ID, { type: 'geojson', data: emptyFeatureCollection() });
+  map.addLayer({ id: 'geodata-imported-fill', type: 'fill', source: GEODATA_SOURCE_ID, filter: ['==', '$type', 'Polygon'], paint: { 'fill-color': '#7c3aed', 'fill-opacity': 0.16 } });
+  map.addLayer({ id: 'geodata-imported-line', type: 'line', source: GEODATA_SOURCE_ID, filter: ['==', '$type', 'LineString'], paint: { 'line-color': '#7c3aed', 'line-width': 3 } });
+  map.addLayer({ id: 'geodata-imported-points', type: 'circle', source: GEODATA_SOURCE_ID, filter: ['==', '$type', 'Point'], paint: { 'circle-radius': 6, 'circle-color': '#7c3aed', 'circle-stroke-width': 2, 'circle-stroke-color': '#ffffff' } });
+  map.on('click', 'geodata-imported-points', (e) => {
+    const feature = e.features && e.features[0];
+    if (!feature) return;
+    new maplibregl.Popup().setLngLat(e.lngLat).setHTML(territoryPopupHtml(feature.properties)).addTo(map);
+  });
+}
+registerMapLayerRehydrate(() => {
+  if (!geodataLayerVisible) return;
+  const layerName = document.getElementById('geodataPointLayer')?.value;
+  if (layerName && geodataLayerCache[layerName]) {
+    ensureGeodataLayer();
+    map.getSource(GEODATA_SOURCE_ID).setData(geodataLayerCache[layerName]);
+  }
+});
+
+async function setGeodataLayerVisible(visible) {
+  geodataLayerVisible = visible;
+  if (!visible) {
+    if (map.getSource(GEODATA_SOURCE_ID)) map.getSource(GEODATA_SOURCE_ID).setData(emptyFeatureCollection());
+    return;
+  }
+  const layerName = document.getElementById('geodataPointLayer')?.value;
+  const checkbox = document.getElementById('geodataPointLayerShow');
+  if (!layerName) {
+    showToast('Bitte zuerst eine importierte Ebene wählen', 'info', 2200);
+    if (checkbox) checkbox.checked = false;
+    geodataLayerVisible = false;
+    return;
+  }
+  try {
+    let geojson = geodataLayerCache[layerName];
+    if (!geojson) {
+      const res = await fetch(`/api/v1/geodata/layers/${encodeURIComponent(layerName)}`, { headers: { 'Accept': 'application/json' } });
+      if (!res.ok) throw new Error(`geodata layer ${layerName} fetch failed`);
+      geojson = await res.json();
+      geodataLayerCache[layerName] = geojson;
+    }
+    ensureGeodataLayer();
+    map.getSource(GEODATA_SOURCE_ID).setData(geojson);
+  } catch (e) {
+    console.error('Imported layer overlay failed:', e);
+    showToast('Ebene konnte nicht geladen werden', 'error', 3000);
+    if (checkbox) checkbox.checked = false;
+    geodataLayerVisible = false;
+  }
+}
+
+async function loadGeodataLayers() {
+  const select = document.getElementById('geodataPointLayer');
+  const content = document.getElementById('geodataLayerContent');
+  if (!select) return;
+  let layers = [];
+  try {
+    const res = await fetch('/api/v1/geodata/layers', { headers: { 'Accept': 'application/json' } });
+    if (res.ok) layers = (await res.json()).layers || [];
+  } catch (e) { /* imported layers are optional */ }
+  // Polygon-only layers already have their own entry in the Territories
+  // picker above (territory:true) -- listing them again here would be
+  // redundant, so only genuinely non-polygon-only imports show up.
+  layers = layers.filter(l => !l.territory);
+
+  geodataLayerCache = {};
+  select.innerHTML = '';
+  if (layers.length === 0) {
+    if (content) content.style.display = 'none';
+    return;
+  }
+  if (content) content.style.display = 'block';
+  layers.forEach(l => {
+    const opt = document.createElement('option');
+    opt.value = l.id;
+    opt.textContent = `${l.id} (${l.features})`;
+    select.appendChild(opt);
+  });
+  if (document.getElementById('geodataPointLayerShow')?.checked) void setGeodataLayerVisible(true);
+}
+
+document.getElementById('geodataPointLayer')?.addEventListener('change', () => {
+  geodataLayerCache = {};
+  if (document.getElementById('geodataPointLayerShow')?.checked) setGeodataLayerVisible(true);
+});
+document.getElementById('geodataPointLayerShow')?.addEventListener('change', (e) => {
+  try { e.target.setAttribute('aria-checked', e.target.checked ? 'true' : 'false'); } catch (err) {}
+  setGeodataLayerVisible(e.target.checked);
+});
+
+loadGeodataLayers();
+
+document.getElementById('geodataImportBtn')?.addEventListener('click', async () => {
+  const fileEl = document.getElementById('geodataImportFile');
+  const layerEl = document.getElementById('geodataImportLayer');
+  const formatEl = document.getElementById('geodataImportFormat');
+  const resultEl = document.getElementById('geodataImportResult');
+  const file = fileEl?.files?.[0];
+  const layer = layerEl?.value.trim() || '';
+  if (!file) { showToast('Bitte eine Datei wählen', 'info', 2000); return; }
+  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(layer)) { showToast('Ebenenname: 1-64 Buchstaben, Ziffern, - oder _', 'error', 3000); return; }
+  const btn = document.getElementById('geodataImportBtn');
+  const originalLabel = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Importiere …'; }
+  if (resultEl) resultEl.textContent = '';
+  try {
+    const body = await file.arrayBuffer();
+    const format = formatEl?.value || 'auto';
+    const params = new URLSearchParams({ layer, format, filename: file.name });
+    const res = await fetch(`/api/v1/geodata/import?${params.toString()}`, {
+      method: 'POST',
+      headers: adminAuthHeaders(),
+      body,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || res.statusText);
+    }
+    const summary = await res.json();
+    showToast(`Importiert: ${summary.id} (${summary.features} Objekte)`, 'success', 3000);
+    if (resultEl) resultEl.textContent = `${summary.id}: ${summary.features} Objekte, Typen: ${(summary.geometry_types || []).join(', ')}${summary.territory ? ' — als Gebietsebene nutzbar' : ''}`;
+    if (fileEl) fileEl.value = '';
+    if (layerEl) layerEl.value = '';
+    void loadTerritoryLayers();
+    void loadGeodataLayers();
+  } catch (e) {
+    showToast('Import fehlgeschlagen: ' + (e.message || ''), 'error', 4000);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = originalLabel; }
+  }
+});
+
+// ─── Custom tile source: MBTiles or GeoTIFF ──────────────────────────────
+// A raster/vector .mbtiles file, or a georeferenced GeoTIFF (converted to a
+// tile pyramid server-side, see cmd/geodata_geotiff.go), imported into one
+// shared fixed slot: a later import of either kind replaces the previous
+// one. Both share the same status/remove endpoint (/api/v1/geodata/mbtiles)
+// since they publish into the same slot; only the import endpoint differs.
+// Once loaded it appears automatically in the existing tile-source picker
+// (loadTilePresets() below fetches /api/v1/tile-sources, which the backend
+// extends with a dynamic "Eigene Quelle" entry for a raster source) -- no
+// separate map-rendering logic needed here, only the upload/remove form and
+// refreshing that list.
+async function refreshGeodataMBTilesStatus() {
+  const resultEl = document.getElementById('geodataMBTilesResult');
+  const removeBtn = document.getElementById('geodataMBTilesRemoveBtn');
+  try {
+    const res = await fetch('/api/v1/geodata/mbtiles', { headers: { 'Accept': 'application/json' } });
+    if (!res.ok) throw new Error(`status ${res.status}`);
+    const status = await res.json();
+    if (status.loaded) {
+      const info = status.info || {};
+      if (resultEl) resultEl.textContent = `Geladen: ${info.name || 'ohne Namen'} (${info.format}, Zoom ${info.min_zoom ?? 0}-${info.max_zoom ?? '?'})${info.is_vector ? ' — Vektor, ohne automatischen Stil' : ''}`;
+      if (removeBtn) removeBtn.hidden = false;
+    } else {
+      if (resultEl) resultEl.textContent = '';
+      if (removeBtn) removeBtn.hidden = true;
+    }
+  } catch (e) { /* optional status, fail silently */ }
+}
+refreshGeodataMBTilesStatus();
+
+document.getElementById('geodataMBTilesImportBtn')?.addEventListener('click', async () => {
+  const fileEl = document.getElementById('geodataMBTilesFile');
+  const resultEl = document.getElementById('geodataMBTilesResult');
+  const file = fileEl?.files?.[0];
+  if (!file) { showToast('Bitte eine .mbtiles- oder GeoTIFF-Datei wählen', 'info', 2000); return; }
+  const isGeoTIFF = /\.tiff?$/i.test(file.name);
+  let endpoint = '/api/v1/geodata/mbtiles';
+  if (isGeoTIFF) {
+    const maxZoom = document.getElementById('geodataGeoTIFFMaxZoom')?.value || '18';
+    endpoint = `/api/v1/geodata/geotiff?max_zoom=${encodeURIComponent(maxZoom)}`;
+  } else if (!/\.mbtiles$/i.test(file.name)) {
+    showToast('Dateityp nicht erkannt (.mbtiles, .tif oder .tiff erwartet)', 'error', 3000);
+    return;
+  }
+  const btn = document.getElementById('geodataMBTilesImportBtn');
+  const originalLabel = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Importiere …'; }
+  if (resultEl) resultEl.textContent = '';
+  try {
+    const body = await file.arrayBuffer();
+    const res = await fetch(endpoint, { method: 'POST', headers: adminAuthHeaders(), body });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || res.statusText);
+    }
+    const info = await res.json();
+    showToast(`${isGeoTIFF ? 'GeoTIFF' : 'MBTiles'} importiert: ${info.format}${info.is_vector ? ' (Vektor)' : ''}`, 'success', 3000);
+    if (fileEl) fileEl.value = '';
+    await refreshGeodataMBTilesStatus();
+    void loadTilePresets();
+  } catch (e) {
+    showToast('Import fehlgeschlagen: ' + (e.message || ''), 'error', 4000);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = originalLabel; }
+  }
+});
+
+document.getElementById('geodataMBTilesRemoveBtn')?.addEventListener('click', async () => {
+  const btn = document.getElementById('geodataMBTilesRemoveBtn');
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch('/api/v1/geodata/mbtiles', { method: 'DELETE', headers: adminAuthHeaders() });
+    if (!res.ok && res.status !== 404) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || res.statusText);
+    }
+    showToast('Eigene Kartenquelle entfernt', 'success', 2000);
+    await refreshGeodataMBTilesStatus();
+    void loadTilePresets();
+  } catch (e) {
+    showToast('Entfernen fehlgeschlagen: ' + (e.message || ''), 'error', 3000);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
 
 // ─── Local proof-of-delivery and maintenance log ─────────────────────────
 // Inspired by the barcode logger's focused mode workflow: capture a code,

@@ -2331,8 +2331,8 @@ body.map-welcome-open { overflow: hidden; }
 .maps-place :is(.maps-place-route, .maps-place-ask) { width: 100%; height: 38px; font-size: 12px; font-weight: 550; border-radius: 9px; margin: 0; background: var(--primary-dim); color: var(--primary); }
 .maps-place .maps-place-ask { background: var(--surface); color: var(--text-2); }
 .maps-results[aria-busy="true"] { min-height: 4px; border-radius: 4px; background: var(--primary-dim); }
-.route-start-hint { margin: 2px 0 4px 22px; color: var(--text-2); font-size: 10.5px; line-height: 1.4; }
 .maps-shell .route-input-wrap input { min-height: 44px; font-size: 14px; }
+.route-start-hint { margin: 2px 0 4px 22px; color: var(--text-2); font-size: 10.5px; line-height: 1.4; }
 .maps-shell .btn-primary { box-shadow: none; min-height: 42px; }
 .maps-shell .ai-input-row { grid-template-columns: minmax(0, 1fr) 44px; align-items: end; }
 .ai-input-row textarea { display: block; width: 100%; min-width: 0; min-height: 84px; max-height: 200px; resize: vertical; padding: 11px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--input-bg); color: var(--text); font: inherit; font-size: 14px; line-height: 1.6; }
@@ -2569,6 +2569,8 @@ button.section-header .section-header-title { text-align: left; }
 .osm-draft-overview[data-state="pending"] { background: #d9770614; }
 .osm-draft-overview[data-state="warn"] { background: #dc262614; }
 .osm-history { display: flex; gap: 6px; }
+.osm-confidential-section { margin-top: 18px; padding: 12px; border: 1px dashed var(--border); border-radius: 12px; background: var(--surface); }
+.osm-confidential-section .osm-drafts { margin-bottom: 0; }
 .osm-export-steps { display: grid; gap: 10px; margin: 14px 0; padding: 0; list-style: none; counter-reset: osm-step; }
 .osm-export-steps li { position: relative; padding: 12px 12px 12px 46px; border: 1px solid var(--border); border-radius: 12px; background: var(--card-bg); counter-increment: osm-step; }
 .osm-export-steps li::before { content: counter(osm-step); position: absolute; top: 12px; left: 12px; display: grid; width: 24px; height: 24px; place-items: center; border-radius: 50%; background: var(--primary-dim); color: var(--primary); font-size: 12px; font-weight: 700; }
@@ -2598,6 +2600,7 @@ button.section-header .section-header-title { text-align: left; }
   .osm-member-add-row { grid-template-columns: 1fr 1fr; }
   .osm-member-add-row .btn { grid-column: 1 / -1; }
   .osm-draw-actions { grid-template-columns: 1fr; }
+}
 
 /* Keep the map-first workspace compact and easy to scan. */
 .maps-shell .sidebar { border-radius: 12px; }
@@ -2649,4 +2652,3 @@ button.section-header .section-header-title { text-align: left; }
 .osm-special-guidance strong { font-size: 12px; }
 .osm-special-guidance p { margin: 0; color: var(--text-2); font-size: 11.5px; line-height: 1.45; }
 .osm-special-guidance .btn { min-height: 42px; white-space: normal; }
-}

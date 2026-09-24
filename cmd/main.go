@@ -29,6 +29,7 @@ import (
 
 	tinytiles "github.com/Karte-Bayern/tinyTiles/v2"
 	tinytilesserver "github.com/Karte-Bayern/tinyTiles/v2/server"
+	tiles "github.com/SimonWaldherr/tinySQL/tiles"
 	osmmini "simonwaldherr.de/go/osmmini"
 )
 
@@ -1283,6 +1284,28 @@ type server struct {
 	territoryRaw   map[string][]byte
 	territoriesDir string
 
+	// Imported GIS layers (GeoJSON/Shapefile/KML/KMZ), converted to GeoJSON
+	// at import time and served like territories but without the
+	// polygon-only restriction. importedLayerMirrors tracks which layer
+	// names currently have a polygon-only mirror file written into
+	// territoriesDir, so a layer that stops being polygon-only on
+	// re-import gets its stale mirror removed. See imported_layers.go and
+	// cmd/geodata_layers.go.
+	importedLayersMu     sync.RWMutex
+	importedLayers       *osmmini.ImportedLayerStore
+	importedLayersDir    string
+	importedLayerMirrors map[string]bool
+
+	// customTiles serves a single imported MBTiles artifact (raster or
+	// vector) as an additional map source slot. Importing again atomically
+	// replaces the previous one -- deliberately one slot, not a multi-source
+	// registry (see the approved plan's scope decision). See
+	// cmd/geodata_tiles.go.
+	customTilesMu   sync.RWMutex
+	customTilesDir  string
+	customTiles     tiles.MetadataScanner
+	customTilesInfo customTilesInfo
+
 	// fireStations persists manually-added/CSV-imported vehicle rosters for
 	// the Einsatzmodus "Feuerwehrhäuser" overlay. Never committed — see
 	// fire_stations.go and the gitignored fire-stations.json default path.
@@ -1290,6 +1313,11 @@ type server struct {
 	operations     *OperationsStore
 	deploymentMode string
 	operatorTokens map[string]string
+
+	// confidential persists OSM-editor objects that must never reach OSM or
+	// leave this server (fire-department internals, access data, ...). See
+	// cmd/confidential_objects.go.
+	confidential *ConfidentialObjectStore
 }
 
 type aiMessage struct {
@@ -1311,6 +1339,9 @@ func main() {
 			return
 		case "territory":
 			runTerritoryCLI(os.Args[2:])
+			return
+		case "geodata":
+			runGeodataCLI(os.Args[2:])
 			return
 		case "dispatch":
 			runDispatchCLI(os.Args[2:])
@@ -1339,6 +1370,9 @@ func main() {
 	adminToken := flag.String("admin-token", os.Getenv("OSMMINI_ADMIN_TOKEN"), "Optional bearer token; when set, it is required for settings updates")
 	tinyTilesDir := flag.String("tinytiles-dir", "offline-tiles", "Directory for generated tinyTiles .ttiles artifacts")
 	territoriesDir := flag.String("territories-dir", "territories", "Directory of *.geojson territory layers (file name without extension = layer name); optional")
+	importedLayersDir := flag.String("imported-layers-dir", "imported-layers", "Directory of GeoJSON layers produced by GIS file imports (see /api/v1/geodata/import); optional")
+	customTilesDir := flag.String("geodata-tiles-dir", "geodata-tiles", "Directory for the imported MBTiles custom tile source (see /api/v1/geodata/mbtiles); optional")
+	confidentialObjectsFile := flag.String("confidential-objects-file", "confidential-objects.json", "Local JSON file for OSM-editor objects marked confidential (never exported, requires -admin-token)")
 	tinyTilesMaxMemoryMB := flag.Int64("tinytiles-max-memory-mb", 768, "Maximum memory (MB) tinyTiles may use while importing a .ttiles artifact; raise this for larger PBF regions")
 	tinyTilesReaders := flag.Int("tinytiles-readers", 4, "Concurrent tinyTiles readers for the offline map")
 	tinyTilesReaderMemoryMB := flag.Int64("tinytiles-reader-memory-mb", 32, "Page-cache memory (MB) per tinyTiles reader while serving the offline map")
@@ -1455,8 +1489,11 @@ func main() {
 		pbfPath:                 *pbf,
 		tinyTilesDir:            *tinyTilesDir,
 		territoriesDir:          *territoriesDir,
+		importedLayersDir:       *importedLayersDir,
+		customTilesDir:          *customTilesDir,
 		fireStations:            NewFireStationStore("fire-stations.json"),
 		operations:              NewOperationsStore(*operationsFile),
+		confidential:            NewConfidentialObjectStore(*confidentialObjectsFile),
 		deploymentMode:          deploymentMode,
 		operatorTokens:          operatorTokens,
 		tinyTilesReaders:        *tinyTilesReaders,
@@ -1468,6 +1505,9 @@ func main() {
 	}
 	if err := srv.operations.Load(); err != nil {
 		log.Printf("operations: failed to load %s: %v", *operationsFile, err)
+	}
+	if err := srv.confidential.Load(); err != nil {
+		log.Printf("confidential objects: failed to load %s: %v", *confidentialObjectsFile, err)
 	}
 	if *tinyTilesMaxMemoryMB > 0 {
 		srv.tinyTilesMaxMemory = *tinyTilesMaxMemoryMB << 20
@@ -1495,7 +1535,9 @@ func main() {
 		if err := srv.loadPOIIndex(*pbf); err != nil {
 			log.Printf("warning: POI index failed: %v", err)
 		}
-		srv.loadTerritories(*territoriesDir)
+		srv.loadImportedLayers(*importedLayersDir)
+		srv.syncPolygonLayersToTerritories() // also loads plain -territories-dir layers
+		srv.loadCustomTiles()
 	}()
 	log.Fatal(httpSrv.ListenAndServe())
 }
@@ -1626,6 +1668,14 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("/api/v1/poi/", s.handlePOIInfo)
 	mux.HandleFunc("/api/v1/territories", s.handleTerritoriesList)
 	mux.HandleFunc("/api/v1/territories/", s.handleTerritoriesLayer)
+	mux.HandleFunc("/api/v1/geodata/import", s.handleGeodataImport)
+	mux.HandleFunc("/api/v1/geodata/layers", s.handleGeodataLayers)
+	mux.HandleFunc("/api/v1/geodata/layers/", s.handleGeodataLayerRouter)
+	mux.HandleFunc("/api/v1/geodata/mbtiles", s.handleGeodataMBTiles)
+	mux.HandleFunc("/api/v1/geodata/geotiff", s.handleGeodataGeoTIFF)
+	mux.HandleFunc("/api/v1/geodata/tiles/", s.handleGeodataTile)
+	mux.HandleFunc("/api/v1/confidential-objects", s.handleConfidentialObjects)
+	mux.HandleFunc("/api/v1/confidential-objects/", s.handleConfidentialObjectByID)
 
 	// UI
 	mux.HandleFunc("/", s.handleIndex)
@@ -2811,7 +2861,11 @@ func (s *server) handleTileSources(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	writeJSON(w, http.StatusOK, BuiltinTilePresets)
+	presets := append([]TileSourcePreset(nil), BuiltinTilePresets...)
+	if custom := s.geodataCustomTilePreset(); custom != nil {
+		presets = append(presets, *custom)
+	}
+	writeJSON(w, http.StatusOK, presets)
 }
 
 func (s *server) handleProfiles(w http.ResponseWriter, r *http.Request) {

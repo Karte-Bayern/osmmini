@@ -103,8 +103,8 @@
                 <div id="from-suggest" class="suggest"></div>
                 <div id="from-container"></div>
               </div>
-            <p id="routeStartHint" class="route-start-hint">Start leer lassen: aktuelle GPS-Position wird verwendet.</p>
             </div>
+            <p id="routeStartHint" class="route-start-hint">Start leer lassen: aktuelle GPS-Position wird verwendet.</p>
 
             <!-- Connector + swap -->
             <div class="route-connector-row">
@@ -425,6 +425,7 @@
             <div id="osmForm" hidden>
               <div class="osm-object">
                 <div class="osm-object-title"><h3 id="osmSelected" tabindex="-1"></h3><span id="osmEditState" class="osm-badge" data-state="clean"></span></div>
+                <p id="osmObjectMeta" class="osm-meta"></p>
                 <div id="osmEditorModes" class="osm-editor-modes" hidden>
                   <div><strong>Pflegemodus</strong><p id="osmEditorModeHint" class="settings-hint">Art und Name reichen für einen ersten Entwurf.</p></div>
                   <div class="osm-mode-options" role="group" aria-label="Pflegemodus">
@@ -432,7 +433,6 @@
                     <button id="osmModeProfessional" type="button" aria-pressed="false">Professionell</button>
                   </div>
                 </div>
-                <p id="osmObjectMeta" class="osm-meta"></p>
                 <div class="osm-object-actions"><button id="osmLocate" class="btn btn-ghost" type="button">Auf Karte zeigen</button><a id="osmOsmLink" class="btn btn-ghost" href="#" target="_blank" rel="noopener noreferrer" hidden>In OSM ansehen ↗</a><button id="osmGeometryToggle" class="btn btn-ghost" type="button" aria-pressed="false" hidden>Punkte bearbeiten</button></div>
                 <div id="osmTopologyTools" class="osm-topology-tools" hidden>
                   <button id="osmSplit" class="btn btn-ghost" type="button">Weg teilen</button>
@@ -472,6 +472,10 @@
                 <details class="osm-changes" open><summary id="osmDiffSummary">Änderungen</summary><ul id="osmDiff" class="osm-editor-list"></ul></details>
                 <p id="osmValidation" role="alert" aria-atomic="true"></p>
               </fieldset>
+              <label id="osmConfidentialWrap" class="checkbox switch" hidden title="Bleibt nur auf diesem Server gespeichert und fließt nie zu OSM zurück">
+                <input id="osmConfidentialToggle" type="checkbox" role="switch" aria-checked="false"/>
+                <span>🔒 Als vertrauliches Objekt speichern (nie zu OSM)</span>
+              </label>
               <div class="osm-actionbar"><button id="osmSave" class="btn btn-primary" type="button">Als Entwurf speichern</button><button id="osmDiscard" class="btn btn-ghost" type="button">Schließen</button></div>
             </div>
           </div>
@@ -487,6 +491,12 @@
             </ol>
             <details class="osm-advanced"><summary>Arbeitsstand sichern oder wiederherstellen</summary><p class="settings-hint">JSON-Dateien enthalten deine gespeicherten Entwürfe und lassen sich hier wieder öffnen. Neue Dateien ergänzen den Arbeitsstand; doppelte Objekte werden nicht überschrieben.</p><button id="osmBackup" class="btn btn-ghost" type="button" disabled>Sicherung herunterladen (.json)</button><label for="osmImport">Sicherung ergänzen</label><input id="osmImport" type="file" accept=".json,application/json" class="setting-input"/></details>
             <p class="settings-hint">Bearbeitbar sind Eigenschaften, Positionen, neue oder geänderte Wege/Flächen sowie Relationen. Löschungen erscheinen als eigene Gruppe im Exportformat.</p>
+            <div id="osmConfidentialSection" class="osm-confidential-section">
+              <h4 class="osm-section-title">🔒 Vertrauliche Objekte</h4>
+              <p class="settings-hint">Nur lokal auf diesem Server gespeichert, nie Teil des OSM-Exports. Sichtbar und verwaltbar nur mit gesetztem Admin-Token.</p>
+              <ul id="osmConfidentialList" class="osm-drafts" aria-label="Vertrauliche Objekte"></ul>
+              <p id="osmConfidentialEmpty" class="osm-empty">Keine vertraulichen Objekte (oder kein Admin-Token gesetzt).</p>
+            </div>
           </div>
 
           <div id="osmPanelRelations" role="tabpanel" aria-labelledby="osmTabRelations" hidden>
@@ -633,6 +643,18 @@
                 <span>Gebietswechsel bei Routen anzeigen</span>
               </label>
               <p class="territory-hint">Klick auf ein eingeblendetes Gebiet zeigt dessen Eigenschaften (z.B. Fahrzeug, Depot, Zuständige).</p>
+            </div>
+            <div id="geodataLayerContent" style="display:none;margin-top:10px;">
+              <div class="settings-grid">
+                <div class="setting-item">
+                  <label class="setting-label" for="geodataPointLayer">Importierte Punkt-/Linien-Ebene</label>
+                  <select id="geodataPointLayer" class="setting-select"></select>
+                </div>
+              </div>
+              <label class="checkbox switch" title="Ausgewählte importierte Ebene auf der Karte anzeigen">
+                <input id="geodataPointLayerShow" type="checkbox" role="switch" aria-checked="false"/>
+                <span>Auf Karte anzeigen</span>
+              </label>
             </div>
             <div class="territory-generator">
               <label class="setting-label" for="territoryPostalPrefix">Weitere PLZ-Ebene aus OSM-Grenzen erzeugen</label>
@@ -844,6 +866,51 @@
                 </div>
                 <div id="fireStationImportResult" style="margin-top:6px;"></div>
               </div>
+            </div>
+
+            <div class="settings-section">
+              <div class="section-header"><span class="section-icon" aria-hidden="true">🗺️</span><h3>GIS-Datenimport</h3></div>
+              <p class="territory-hint">GeoJSON, KML, KMZ oder Shapefile (als ZIP) als zusätzliche Kartenebene importieren. Reine Flächen-Layer werden automatisch auch als Gebietsebene nutzbar. Die Daten bleiben lokal auf diesem Server.</p>
+              <div class="setting-item">
+                <label class="setting-label" for="geodataImportFile">Datei</label>
+                <input id="geodataImportFile" type="file" accept=".geojson,.json,.kml,.kmz,.zip,.shp" class="setting-input" style="width:100%;font-size:11px;"/>
+              </div>
+              <div class="settings-grid">
+                <div class="setting-item">
+                  <label class="setting-label" for="geodataImportLayer">Ebenenname</label>
+                  <input id="geodataImportLayer" class="setting-input" placeholder="z.B. loeschteiche" autocomplete="off"/>
+                </div>
+                <div class="setting-item">
+                  <label class="setting-label" for="geodataImportFormat">Format</label>
+                  <select id="geodataImportFormat" class="setting-select">
+                    <option value="auto" selected>Automatisch (aus Dateiname)</option>
+                    <option value="geojson">GeoJSON</option>
+                    <option value="kml">KML</option>
+                    <option value="kmz">KMZ</option>
+                    <option value="shp">Shapefile (ZIP)</option>
+                  </select>
+                </div>
+              </div>
+              <button id="geodataImportBtn" type="button" class="btn btn-sm btn-outline" style="width:100%;">Importieren</button>
+              <div id="geodataImportResult" style="margin-top:6px;font-size:11px;"></div>
+            </div>
+
+            <div class="settings-section">
+              <div class="section-header"><span class="section-icon" aria-hidden="true">🧩</span><h3>Eigene Kartenquelle (MBTiles / GeoTIFF)</h3></div>
+              <p class="territory-hint">Eine <code>.mbtiles</code>-Datei (Raster oder Vektor) oder ein georeferenziertes GeoTIFF (nur EPSG:3857/4326) als zusätzliche Kartenquelle "Eigene Quelle" importieren. Ein erneuter Import ersetzt die vorherige Datei; es gibt nur einen Speicherplatz. Vektor-MBTiles werden gespeichert, aber ohne automatischen Kartenstil.</p>
+              <div class="setting-item">
+                <label class="setting-label" for="geodataMBTilesFile">Datei</label>
+                <input id="geodataMBTilesFile" type="file" accept=".mbtiles,.tif,.tiff" class="setting-input" style="width:100%;font-size:11px;"/>
+              </div>
+              <div class="setting-item">
+                <label class="setting-label" for="geodataGeoTIFFMaxZoom">Max. Zoom <span class="info-icon" title="Nur für GeoTIFF: bis zu diesem Zoom werden Kacheln erzeugt.">ⓘ</span></label>
+                <input id="geodataGeoTIFFMaxZoom" type="number" min="0" max="22" value="18" class="setting-input"/>
+              </div>
+              <div style="display:flex;gap:4px;">
+                <button id="geodataMBTilesImportBtn" type="button" class="btn btn-sm btn-outline" style="flex:1;">Importieren</button>
+                <button id="geodataMBTilesRemoveBtn" type="button" class="btn btn-sm btn-outline" style="flex:1;" hidden>Entfernen</button>
+              </div>
+              <div id="geodataMBTilesResult" style="margin-top:6px;font-size:11px;"></div>
             </div>
 
             <div class="settings-section collapsible" id="highwaySection">

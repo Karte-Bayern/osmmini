@@ -5,6 +5,8 @@ go 1.26.5
 require (
 	github.com/Karte-Bayern/tinyTiles/v2 v2.5.0
 	github.com/SimonWaldherr/tinySQL v0.55.0
+	golang.org/x/image v0.46.0
+	modernc.org/sqlite v1.59.0
 )
 
 require (
@@ -23,5 +25,4 @@ require (
 	modernc.org/libc v1.77.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
-	modernc.org/sqlite v1.59.0 // indirect
 )

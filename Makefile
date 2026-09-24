@@ -8,6 +8,10 @@ LISTEN ?= :8080
 ADMIN_TOKEN ?=
 BAYERN_PBF ?= bayern.osm.pbf
 GEOFABRIK_URL ?= https://download.geofabrik.de/europe/germany/bayern-latest.osm.pbf
+# sqliteimport enables tinySQL's pure-Go (modernc.org/sqlite, no cgo) MBTiles/
+# GeoPackage import (see cmd/geodata_tiles.go). Does not affect cmd/wasm,
+# which is built separately with its own GOOS=js GOARCH=wasm invocation.
+GOTAGS ?= sqliteimport
 
 .DEFAULT_GOAL := help
 
@@ -18,24 +22,24 @@ help: ## Show available commands.
 
 build: ## Build the server into bin/osmmini.
 	@mkdir -p "$(BIN_DIR)"
-	$(GO) build -o "$(BIN_DIR)/$(APP)" ./cmd
+	$(GO) build -tags=$(GOTAGS) -o "$(BIN_DIR)/$(APP)" ./cmd
 
 run: ## Run with PBF, SETTINGS, LISTEN and optional ADMIN_TOKEN overrides.
-	OSMMINI_ADMIN_TOKEN="$(ADMIN_TOKEN)" $(GO) run ./cmd -pbf "$(PBF)" -settings "$(SETTINGS)" -listen "$(LISTEN)"
+	OSMMINI_ADMIN_TOKEN="$(ADMIN_TOKEN)" $(GO) run -tags=$(GOTAGS) ./cmd -pbf "$(PBF)" -settings "$(SETTINGS)" -listen "$(LISTEN)"
 
 bayern: ## Run the Bavaria profile; set ADMIN_TOKEN and optionally BAYERN_PBF.
 	@if [ -z "$(ADMIN_TOKEN)" ]; then \
 		echo "Set ADMIN_TOKEN before starting the Bavaria profile."; \
 		exit 2; \
 	fi
-	OSMMINI_ADMIN_TOKEN="$(ADMIN_TOKEN)" $(GO) run ./cmd -pbf "$(BAYERN_PBF)" -settings settings.bayern.json -listen "$(LISTEN)"
+	OSMMINI_ADMIN_TOKEN="$(ADMIN_TOKEN)" $(GO) run -tags=$(GOTAGS) ./cmd -pbf "$(BAYERN_PBF)" -settings settings.bayern.json -listen "$(LISTEN)"
 
 offline: ## Run the fully local tinyTiles profile; set ADMIN_TOKEN and PBF.
 	@if [ -z "$(ADMIN_TOKEN)" ]; then \
 		echo "Set ADMIN_TOKEN before starting the offline profile."; \
 		exit 2; \
 	fi
-	OSMMINI_ADMIN_TOKEN="$(ADMIN_TOKEN)" $(GO) run ./cmd -pbf "$(PBF)" -settings settings.tinytiles.json -listen "$(LISTEN)"
+	OSMMINI_ADMIN_TOKEN="$(ADMIN_TOKEN)" $(GO) run -tags=$(GOTAGS) ./cmd -pbf "$(PBF)" -settings settings.tinytiles.json -listen "$(LISTEN)"
 
 maplibre-assets: ## Refresh the pinned MapLibre 6.7.0 ESM assets (network required).
 	@mkdir -p cmd/web/static/maplibre
@@ -63,13 +67,13 @@ offline-prep: pbf-download maplibre-assets ## Prepare everything needed for a fu
 	@echo "Then use the 'Offline-Karte (tinyTiles)' source in Einstellungen to build the vector basemap from the loaded PBF."
 
 test: ## Run all unit tests.
-	$(GO) test ./...
+	$(GO) test -tags=$(GOTAGS) ./...
 
 test-race: ## Run the test suite with Go's race detector.
-	$(GO) test -race ./...
+	$(GO) test -tags=$(GOTAGS) -race ./...
 
 vet: ## Run Go static analysis.
-	$(GO) vet ./...
+	$(GO) vet -tags=$(GOTAGS) ./...
 
 fmt: ## Format all Go packages.
 	$(GO) fmt ./...

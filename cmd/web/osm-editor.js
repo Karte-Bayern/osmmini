@@ -306,8 +306,8 @@
     }
     function cancel(){
       const hadDraw=drawing&&drawPoints.length;
-      pendingDrawTags=null;
       placing=false;drawing=false;drawPoints=[];drawSnapNodes=null;
+      pendingDrawTags=null;
       applyMode();
       if(hadDraw)render();
     }
@@ -440,6 +440,7 @@
       const show=!!current&&(current.base||kind||customKind);
       box.hidden=!show;
       if(!show)return;
+      const {fields,address}=P.fieldsFor(tagsNow());
       if(careMode==='basic'&&!current.base){
         const preset=P.presets[kind],basicKeys=new Set(preset?.basicFields||[]);
         const nameField=fields.find(field=>field.key==='name')||P.fields.name;
@@ -457,18 +458,17 @@
         }
         return;
       }
-      const {fields,address}=P.fieldsFor(tagsNow());
       for(const field of fields)box.append(fieldNode(field));
       const details=h('details',{class:'osm-advanced osm-address'},h('summary',{text:'Adresse'}),...address.map(fieldNode));
       details.open=address.some(f=>valueOf(f.key));
       box.append(details);
+    }
     function setCareMode(mode,announce=true){
       if(!current)return;
       careMode=mode==='professional'?'professional':'basic';
       if(careMode==='professional')el('osmAdvancedTags').open=true;
       renderForm();
       if(announce)say(careMode==='professional'?'Professionelle Ansicht: alle Merkmale, OSM-Tags und passende Geometriewerkzeuge sind verfügbar.':'Einfache Ansicht: Art und Name reichen; weitere Angaben bleiben erhalten und sind optional.');
-    }
     }
     function renderPresets(focusFirst=false){
       const wrap=el('osmPresetChips');wrap.replaceChildren();let first=null;
@@ -539,10 +539,10 @@
       el('osmForm').hidden=!current;el('osmEmpty').hidden=!!current;
       if(!current){el('osmDuplicates').hidden=true;return;}
       const {value,base}=current;
+      el('osmObjectMeta').textContent=base?`${kindName(value.type)} · OSM-ID ${value.id} · Version ${value.version}`:value.type==='node'?`Neuer Ort · ${value.lat.toFixed(5)}, ${value.lon.toFixed(5)}`:`Neuer ${kindName(value.type)}`;
       const modes=el('osmEditorModes');
       if(modes){modes.hidden=value.type==='relation'||!!current.confidentialID;el('osmModeBasic')?.setAttribute('aria-pressed',String(careMode==='basic'));el('osmModeProfessional')?.setAttribute('aria-pressed',String(careMode==='professional'));el('osmEditorModeHint').textContent=careMode==='professional'?'Alle Merkmale und OSM-Tags bearbeiten; Wege und Relationen fachlich prüfen.':'Art und Name reichen für den ersten Entwurf. Weitere Angaben bleiben optional.';}
       const advancedTags=el('osmAdvancedTags');if(advancedTags){advancedTags.hidden=careMode!=='professional';if(careMode==='professional')advancedTags.open=true;}
-      el('osmObjectMeta').textContent=base?`${kindName(value.type)} · OSM-ID ${value.id} · Version ${value.version}`:value.type==='node'?`Neuer Ort · ${value.lat.toFixed(5)}, ${value.lon.toFixed(5)}`:`Neuer ${kindName(value.type)}`;
       const link=el('osmOsmLink');link.hidden=!base;if(base)link.href=`https://www.openstreetmap.org/${value.type}/${value.id}`;
       const geomToggle=el('osmGeometryToggle');
       if(geomToggle){geomToggle.hidden=value.type!=='way';geomToggle.setAttribute('aria-pressed',String(geometryMode));geomToggle.textContent=geometryMode?'Punkte bearbeiten beenden':'Punkte bearbeiten';}
@@ -550,6 +550,8 @@
       if(topology)topology.hidden=value.type!=='way'||!base;
       const relationTools=el('osmRelationTools');
       if(relationTools)relationTools.hidden=value.type!=='relation';
+      const confWrap=el('osmConfidentialWrap');
+      if(confWrap)confWrap.hidden=!!current.confidentialID?false:(!!base||value.type==='relation');
       renderPresets();renderFields();renderTable();renderMembers();
     }
     // A saved way draft never carries `shape` (it's transient, UI-only) — rebuild it from our
@@ -562,9 +564,10 @@
       return wayShape([...elements,{type:'way',id:value.id,nodes:value.nodes}],value.id);
     }
     function open(d){
+      current=structuredClone(d);dirty=false;working=Object.entries(current.value.tags);
       careMode=current.base||current.value.type!=='node'?'professional':'basic';
       presetSearchTerm='';presetAllOpen=false;
-      current=structuredClone(d);dirty=false;working=Object.entries(current.value.tags);
+      const confToggle=el('osmConfidentialToggle');if(confToggle){confToggle.checked=false;confToggle.disabled=false;confToggle.setAttribute('aria-checked','false');}
       if(current.value.type==='way'&&!current.shape){const shape=localWayShape(current.value);if(shape)current.shape=shape;}
       members=current.value.type==='relation'?current.value.members.map(m=>({...m})):[];
       presetOpen=!current.base&&current.value.type!=='relation'&&!P.presetKeyForTags(current.value.tags);customKind=false;
@@ -765,6 +768,15 @@
         {id:'osm-draw-line',type:'line',filter:['==','$type','LineString'],paint:{'line-color':'#16a34a','line-width':3,'line-dasharray':[2,1]}},
         {id:'osm-draw-points',type:'circle',filter:['==','$type','Point'],paint:{'circle-radius':6,'circle-color':['case',['get','snapped'],'#16a34a','#ffffff'],'circle-stroke-width':2,'circle-stroke-color':'#16a34a'}},
       ]);
+      // Confidential objects (cmd/confidential_objects.go): a visually distinct, dashed/lock
+      // layer, entirely separate from every OSM-draft source above. See confidentialGeometry()
+      // for why this never shares state with drafts/osc().
+      complete&=put('osm-confidential',collection(confidentialObjects.map(o=>({type:'Feature',properties:{id:o.id},geometry:{type:o.geometry_type,coordinates:o.coordinates}}))),[
+        {id:'osm-confidential-fill',type:'fill',filter:['==','$type','Polygon'],paint:{'fill-color':'#475569','fill-opacity':.14}},
+        {id:'osm-confidential-line',type:'line',filter:['!=','$type','Point'],paint:{'line-color':'#475569','line-width':2.5,'line-dasharray':[3,2]}},
+        {id:'osm-confidential-points',type:'circle',filter:['==','$type','Point'],paint:{'circle-radius':7,'circle-color':'#475569','circle-stroke-width':2,'circle-stroke-color':'#fff'}},
+        {id:'osm-confidential-lock',type:'symbol',filter:['==','$type','Point'],layout:{'text-field':'🔒','text-size':11,'text-offset':[0,-1.3],'text-allow-overlap':true}},
+      ]);
       if(complete)attempts=0;
       else if(!retry&&attempts++<40)retry=setTimeout(()=>{retry=null;render();},250);
       options.onChange?.();
@@ -914,17 +926,17 @@
           pendingNodes.push(validateDraft({base:null,value:{type:'node',id,lat:p.lat,lon:p.lon,tags:{}}}));
           return id;
         });
-        if(drawKind==='area'&&nodeIds.length>2)nodeIds.push(nodeIds[0]);
+        if(drawKind==='area')nodeIds.push(nodeIds[0]);
         const wayId=nextTempId(drafts,'way');
         const value=element({type:'way',id:wayId,nodes:nodeIds,tags:pendingDrawTags||{}},true);
         const lons=drawPoints.map(p=>p.lon),lats=drawPoints.map(p=>p.lat);
         const center=[lons.reduce((a,b)=>a+b,0)/lons.length,lats.reduce((a,b)=>a+b,0)/lats.length];
         const bounds=[[Math.min(...lons),Math.min(...lats)],[Math.max(...lons),Math.max(...lats)]];
         let coordinates=drawPoints.map(p=>[p.lon,p.lat]);
-        const closed=drawKind==='area'&&coordinates.length>2;
+        const closed=drawKind==='area';
         if(closed)coordinates=[...coordinates,coordinates[0]];
-        pendingDrawTags=null;
         drawing=false;drawPoints=[];drawSnapNodes=null;applyMode();
+        pendingDrawTags=null;
         open({base:null,value,center,pendingNodes,shape:{bounds,coordinates,closed}});dirty=true;analyze();
         say((drawKind==='area'?'Fläche':'Weg')+' angelegt. Wähle die Art und ergänze, was du weißt.');
       }catch(e){say(userError(e));}
@@ -1128,10 +1140,116 @@
       if(m==='pick')return pick(event.lngLat);
     }
 
+    // ── Confidential objects: local-only points/lines/areas that never touch `drafts`, `osc()`
+    // or the .osc export (fire-department internals, access data, ... that must never reach OSM;
+    // see cmd/confidential_objects.go). Loaded and managed entirely through their own REST
+    // endpoint and their own map layer, deliberately kept out of every OSM-draft code path above.
+    let confidentialObjects=[];
+    function confidentialAuthHeaders(extra){return typeof root.adminAuthHeaders==='function'?root.adminAuthHeaders(extra):extra||{};}
+    // Coordinates for a way come from the live vertex positions (matches the osm-selection
+    // preview in render()), not the immutable shape snapshot, so any drag before the first save
+    // is reflected; a reopened confidential way has no real node drafts, so every lookup falls
+    // through to shape.coordinates by design (see openConfidential).
+    function confidentialGeometry(){
+      if(!current)return null;
+      const {value}=current;
+      if(value.type==='node')return {type:'Point',coordinates:[value.lon,value.lat]};
+      if(value.type==='way'){
+        const line=value.nodes.map((id,i)=>coordsOfNode(id)||current.shape?.coordinates?.[i]||null).filter(Boolean);
+        if(line.length<2)return null;
+        return current.shape?.closed?{type:'Polygon',coordinates:[line]}:{type:'LineString',coordinates:line};
+      }
+      return null;
+    }
+    async function loadConfidentialObjects(){
+      try{
+        const response=await fetch('/api/v1/confidential-objects',{headers:confidentialAuthHeaders({'Accept':'application/json'})});
+        // No admin token configured (503) or an invalid/missing one (401): the layer and list
+        // stay empty and silent, exactly as the approved plan specifies -- this is not an error
+        // state for users who never use confidential objects.
+        if(!response.ok){confidentialObjects=[];renderConfidentialList();render();return;}
+        const body=await response.json();
+        confidentialObjects=Array.isArray(body.objects)?body.objects:[];
+      }catch{confidentialObjects=[];}
+      renderConfidentialList();render();
+    }
+    function confidentialLabel(obj){
+      const t=obj.tags||{};
+      return t.name||t.notiz||t.note||Object.values(t)[0]||`${obj.geometry_type} · ${obj.id}`;
+    }
+    function flyToConfidential(obj){
+      if(obj.geometry_type==='Point'){if(map.flyTo)map.flyTo({center:obj.coordinates,zoom:Math.max(map.getZoom?.()??0,18)});return;}
+      const ring=obj.geometry_type==='Polygon'?obj.coordinates[0]:obj.coordinates;
+      if(!ring?.length||!map.fitBounds)return;
+      const lons=ring.map(c=>c[0]),lats=ring.map(c=>c[1]);
+      map.fitBounds([[Math.min(...lons),Math.min(...lats)],[Math.max(...lons),Math.max(...lats)]],{maxZoom:19,padding:60});
+    }
+    function openConfidential(obj){
+      if(!canSwitch())return;
+      cancel();
+      const isPoint=obj.geometry_type==='Point';
+      const ring=isPoint?null:obj.geometry_type==='Polygon'?obj.coordinates[0]:obj.coordinates;
+      const value=isPoint
+        ?{type:'node',id:nextTempId(drafts,'node'),lat:obj.coordinates[1],lon:obj.coordinates[0],tags:{...obj.tags}}
+        :{type:'way',id:nextTempId(drafts,'way'),nodes:ring.map((_,i)=>-(i+1)),tags:{...obj.tags}};
+      const shape=isPoint?null:{coordinates:ring,closed:obj.geometry_type==='Polygon',bounds:null};
+      const center=isPoint?obj.coordinates:ring[0];
+      open({base:null,value,center,shape});
+      current.confidentialID=obj.id;
+      renderForm();
+      const toggle=el('osmConfidentialToggle');if(toggle){toggle.checked=true;toggle.disabled=true;}
+      const geomToggle=el('osmGeometryToggle');if(geomToggle)geomToggle.hidden=true;
+      say('Vertrauliches Objekt geladen. Die Geometrie bleibt beim Bearbeiten unverändert; nur Eigenschaften lassen sich anpassen.');
+    }
+    async function deleteConfidential(id){
+      try{
+        const response=await fetch(`/api/v1/confidential-objects/${encodeURIComponent(id)}`,{method:'DELETE',headers:confidentialAuthHeaders()});
+        if(!response.ok&&response.status!==404)throw Error(`Löschen fehlgeschlagen (HTTP ${response.status}).`);
+        if(current?.confidentialID===id)closeCurrent();
+        say('Vertrauliches Objekt entfernt.');
+        await loadConfidentialObjects();
+      }catch(e){say(userError(e));}
+    }
+    function renderConfidentialList(){
+      const list=el('osmConfidentialList');if(!list)return;
+      list.replaceChildren();
+      for(const obj of confidentialObjects){
+        const name=confidentialLabel(obj);
+        const main=h('button',{type:'button',class:'osm-draft-main','aria-label':`${name} bearbeiten`,on:{click:()=>openConfidential(obj)}},h('span',{class:'osm-draft-icon','aria-hidden':'true',text:'🔒'}),h('span',{class:'osm-draft-text'},h('strong',{text:name}),h('small',{text:obj.geometry_type})));
+        const locate=h('button',{type:'button',class:'osm-icon-button','aria-label':`${name} auf der Karte zeigen`,title:'Auf der Karte zeigen',innerHTML:iconHTML('icon-location'),on:{click:()=>flyToConfidential(obj)}});
+        const remove=h('button',{type:'button',class:'osm-icon-button osm-danger','aria-label':`${name} löschen`,title:'Löschen',innerHTML:iconHTML('icon-close'),on:{click:()=>{if(confirm(`„${name}“ endgültig löschen?`))return deleteConfidential(obj.id);}}});
+        list.append(h('li',{class:'osm-draft'},main,locate,remove));
+      }
+      const empty=el('osmConfidentialEmpty');if(empty)empty.hidden=!!confidentialObjects.length;
+    }
+    async function saveConfidential(){
+      try{
+        if(!current)return;
+        const geometry=confidentialGeometry();
+        if(!geometry){say('Für ein vertrauliches Objekt wird ein Punkt oder eine gezeichnete Linie/Fläche mit mindestens 2 Punkten benötigt.');return;}
+        const tagMap=tags(trimmed());
+        if(!Object.keys(tagMap).length)throw Error('Ein vertrauliches Objekt benötigt mindestens eine Eigenschaft.');
+        setBusy(true);
+        const isUpdate=!!current.confidentialID;
+        const response=await fetch(isUpdate?`/api/v1/confidential-objects/${encodeURIComponent(current.confidentialID)}`:'/api/v1/confidential-objects',{
+          method:isUpdate?'PUT':'POST',
+          headers:confidentialAuthHeaders({'Content-Type':'application/json'}),
+          body:JSON.stringify({geometry_type:geometry.type,coordinates:geometry.coordinates,tags:tagMap}),
+        });
+        if(!response.ok){const body=await response.json().catch(()=>({}));throw Error(body.error||`Speichern fehlgeschlagen (HTTP ${response.status}).`);}
+        closeCurrent();
+        say((isUpdate?'Vertrauliches Objekt aktualisiert.':'Vertrauliches Objekt gespeichert.')+' Bleibt nur lokal auf diesem Server, nie Teil des OSM-Exports.');
+        setTab('find');
+        await loadConfidentialObjects();
+      }catch(e){say(userError(e));}
+      finally{setBusy(false);syncUI();}
+    }
+
     // ── Save, discard, export
     function save(){
       try{
         if(!current)return;
+        if(current.confidentialID||(!current.base&&current.value.type!=='relation'&&el('osmConfidentialToggle')?.checked))return saveConfidential();
         const isRelation=current.value.type==='relation';
         const d=validateDraft({...current,value:{...current.value,tags:tags(trimmed()),...(isRelation?{members:members.map(m=>({...m}))}:{})}});
         const pending=current.pendingNodes||[];
@@ -1161,9 +1279,9 @@
     }
     function download(content,name,type){const url=URL.createObjectURL(new Blob([content],{type})),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 
+    // ── Wiring
     el('osmModeBasic')?.addEventListener('click',()=>setCareMode('basic'));
     el('osmModeProfessional')?.addEventListener('click',()=>setCareMode('professional'));
-    // ── Wiring
     el('osmSearchForm').addEventListener('submit',event=>{event.preventDefault?.();return search();});
     el('osmNew').addEventListener('click',()=>{
       if(!canSwitch())return;
@@ -1259,6 +1377,7 @@
         viewActive=true;options.onStart?.();applyMode();
         // Deferred so an action that opens the view (context menu, hover) can claim the editor first.
         setTimeout(()=>{if(viewActive&&tab==='find'&&!busy&&!current&&(!candidates.length||movedAway()))search();},0);
+        return loadConfidentialObjects();
       },
       leave(){viewActive=false;placing=false;applyMode();},
       load,cancel,render,setTab,mapClick,addPoint:mapClick,
