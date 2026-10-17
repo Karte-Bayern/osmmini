@@ -254,31 +254,6 @@ func (o RouteOptions) withDefaults() RouteOptions {
 	return o
 }
 
-// profileAllowedHwySet returns the set of allowed highway types for the given
-// options, or nil if no profile restriction applies.
-func profileAllowedHwySet(opt RouteOptions) map[string]bool {
-	if opt.Profile == "" {
-		return nil
-	}
-	def := profileDefByID(opt.Profile)
-	if def == nil {
-		return nil
-	}
-	return def.allowedSet
-}
-
-// profileSpeedScale returns the speed scale factor for the given options.
-func profileSpeedScale(opt RouteOptions) float64 {
-	if opt.Profile == "" {
-		return 1
-	}
-	def := profileDefByID(opt.Profile)
-	if def == nil || def.SpeedScale <= 0 {
-		return 1
-	}
-	return def.SpeedScale
-}
-
 type Edge struct {
 	To         int64
 	DistM      float64
@@ -428,7 +403,12 @@ func BuildRouterWithAddressesOptions(path string, bo BuildOptions) (*Router, []A
 
 			oneway := parseOneway(w.Tags["oneway"])
 			if oneway == 0 && strings.EqualFold(w.Tags["junction"], "roundabout") {
-				oneway = 1
+				switch strings.ToLower(strings.TrimSpace(w.Tags["oneway"])) {
+				case "no", "false", "0":
+					// Explicit two-way tags override the roundabout default.
+				default:
+					oneway = 1
+				}
 			}
 
 			ids := make([]int64, len(w.NodeIDs))
@@ -1362,6 +1342,7 @@ func (r *Router) chQuery(ctx context.Context, from, to int64, opt RouteOptions) 
 		return nil, 0, ErrRouteEngineNotReady
 	}
 
+	eval := newRouteEvaluator(opt)
 	// forward
 	fdist := map[int64]float64{from: 0}
 	fprev := map[int64]int64{}
@@ -1388,7 +1369,7 @@ func (r *Router) chQuery(ctx context.Context, from, to int64, opt RouteOptions) 
 		// scan upward edges
 		for _, e := range r.ch.up[u] {
 			v := e.To
-			alt := dist[u] + r.edgeCost(e, opt)
+			alt := dist[u] + eval.edgeCost(r, e)
 			if d, ok := dist[v]; !ok || alt < d {
 				dist[v] = alt
 				prev[v] = u
@@ -1496,13 +1477,14 @@ func (r *Router) computeMetrics(path []int64, opt RouteOptions) (distM, durS flo
 	if len(path) < 2 {
 		return 0, 0
 	}
+	eval := newRouteEvaluator(opt)
 	for i := 0; i < len(path)-1; i++ {
 		e, ok := r.edgeBetween(path[i], path[i+1])
 		if !ok {
 			continue
 		}
 		distM += e.DistM
-		durS += edgeTimeSeconds(e, opt)
+		durS += eval.edgeTimeSeconds(e)
 	}
 	return distM, durS
 }
@@ -1560,12 +1542,14 @@ func (r *Router) astar(ctx context.Context, from, to int64, opt RouteOptions, wa
 		came = make(map[turnState]turnState, min(64, r.NodeCount()))
 	}
 
+	eval := newRouteEvaluator(opt)
+	heuristic := newRouteHeuristic(target, opt)
 	start := turnState{prev: 0, cur: from}
 	gScore := make(map[turnState]float64, min(64, r.NodeCount()))
 	gScore[start] = 0
 
 	pq := routeValueHeap{}
-	pq.push(pqItem{s: start, g: 0, f: r.heuristicTo(from, target, opt)})
+	pq.push(pqItem{s: start, g: 0, f: heuristic.estimate(r, from)})
 
 	pops := 0
 	for len(pq) > 0 {
@@ -1589,14 +1573,15 @@ func (r *Router) astar(ctx context.Context, from, to int64, opt RouteOptions, wa
 			return curS, curIt.g, came, nil
 		}
 
+		transition := eval.prepareTransition(r, curS.prev, curS.cur)
 		for it := r.g.edges(curS.cur); it.next(); {
 			e := it.edge()
-			if !edgeAllowed(e, opt) {
+			if !eval.edgeAllowed(e) {
 				continue
 			}
 			next := e.To
-			base := r.edgeCost(e, opt)
-			pen := r.transitionPenalty(curS.prev, curS.cur, next, opt)
+			base := eval.edgeCost(r, e)
+			pen := transition.penalty(r, next)
 			tent := curIt.g + base + pen
 
 			nextS := turnState{prev: curS.cur, cur: next}
@@ -1609,7 +1594,7 @@ func (r *Router) astar(ctx context.Context, from, to int64, opt RouteOptions, wa
 				came[nextS] = curS
 			}
 
-			h := r.heuristicTo(next, target, opt)
+			h := heuristic.estimate(r, next)
 			pq.push(pqItem{s: nextS, g: tent, f: tent + h})
 		}
 	}
@@ -1632,21 +1617,41 @@ func reconstructPathTurnState(goal turnState, came map[turnState]turnState) []in
 	return path
 }
 
-func (r *Router) heuristic(from, to int64, opt RouteOptions) float64 {
-	b, _ := r.g.coord(to)
-	return r.heuristicTo(from, b, opt)
+// A route's target never changes. Reuse its latitude cosine across all
+// estimates while keeping the same great-circle formula and cost units.
+type routeHeuristic struct {
+	target      Coord
+	cosLatitude float64
+	objective   Objective
+	maxSpeedKph float64
+	disabled    bool
 }
 
-func (r *Router) heuristicTo(from int64, target Coord, opt RouteOptions) float64 {
-	if opt.Engine == EngineDijkstra || opt.Engine == EngineDijkstraNode {
+func newRouteHeuristic(target Coord, opt RouteOptions) routeHeuristic {
+	h := routeHeuristic{
+		target: target, objective: opt.Objective, maxSpeedKph: opt.Weights.MaxSpeedKph,
+		disabled: opt.Engine == EngineDijkstra || opt.Engine == EngineDijkstraNode,
+	}
+	if !h.disabled {
+		h.cosLatitude = math.Cos(deg2rad(target.Lat))
+	}
+	return h
+}
+
+func (h *routeHeuristic) estimate(r *Router, from int64) float64 {
+	if h.disabled {
 		return 0
 	}
 	a, _ := r.g.coord(from)
-	d := haversineMeters(a.Lat, a.Lon, target.Lat, target.Lon)
+	dLat := deg2rad(h.target.Lat - a.Lat)
+	dLon := deg2rad(h.target.Lon - a.Lon)
+	sinLat, sinLon := math.Sin(dLat/2), math.Sin(dLon/2)
+	v := sinLat*sinLat + math.Cos(deg2rad(a.Lat))*h.cosLatitude*sinLon*sinLon
+	d := 6371000.0 * (2 * math.Atan2(math.Sqrt(v), math.Sqrt(1-v)))
 
-	switch opt.Objective {
+	switch h.objective {
 	case ObjectiveDuration:
-		return d * 3.6 / opt.Weights.MaxSpeedKph
+		return d * 3.6 / h.maxSpeedKph
 	case ObjectiveEconomy:
 		return d / 1000
 	default:
@@ -1654,40 +1659,69 @@ func (r *Router) heuristicTo(from int64, target Coord, opt RouteOptions) float64
 	}
 }
 
+// routeEvaluator resolves profile settings once per search. Keep it local to
+// the query: callers can use different profiles concurrently on the same graph.
+// The evaluator only borrows the built-in profile's immutable highway set.
+type routeEvaluator struct {
+	options         RouteOptions
+	allowedHighways map[string]bool
+	speedScale      float64
+	crossingPenalty float64
+	turnDirections  bool
+}
+
+func newRouteEvaluator(opt RouteOptions) routeEvaluator {
+	eval := routeEvaluator{options: opt, speedScale: 1}
+	if opt.Profile != "" {
+		if def := profileDefByID(opt.Profile); def != nil {
+			eval.allowedHighways = def.allowedSet
+			if def.SpeedScale > 0 && def.SpeedScale < 1 {
+				eval.speedScale = def.SpeedScale
+			}
+		}
+	}
+	w := &eval.options.Weights
+	if w.Crossing > 0 {
+		eval.crossingPenalty += w.Crossing
+	}
+	if w.TrafficLightPenalty > 0 {
+		eval.crossingPenalty += w.TrafficLightPenalty
+	}
+	eval.turnDirections = w.NoLeftTurn || w.LeftTurn != 0 || w.RightTurn != 0 || w.UTurn != 0
+	return eval
+}
+
 // edgeCost is baseEdgeCost, optionally scaled by opt.TerritoryCost. The
-// scaling is a no-op (factor 1) whenever TerritoryCost is nil, which is the
-// default -- territory boundaries never affect routing unless a caller
-// opts in explicitly.
-func (r *Router) edgeCost(e Edge, opt RouteOptions) float64 {
-	cost := r.baseEdgeCost(e, opt)
-	if opt.TerritoryCost != nil {
+// scaling is a no-op whenever TerritoryCost is nil, the default.
+func (eval *routeEvaluator) edgeCost(r *Router, e Edge) float64 {
+	cost := eval.baseEdgeCost(e)
+	if policy := eval.options.TerritoryCost; policy != nil {
 		if c, ok := r.g.coord(e.To); ok {
-			cost *= opt.TerritoryCost.factorFor(c)
+			cost *= policy.factorFor(c)
 		}
 	}
 	return cost
 }
 
-func (r *Router) baseEdgeCost(e Edge, opt RouteOptions) float64 {
-	if opt.EmergencyMode {
-		// BOS/emergency: minimize time, use higher assumed speeds
+func (eval *routeEvaluator) baseEdgeCost(e Edge) float64 {
+	if eval.options.EmergencyMode {
+		// BOS/emergency: minimize time, use higher assumed speeds.
 		v := e.SpeedKph
 		if v <= 0 {
 			v = 60
 		}
-		// Emergency vehicles can exceed normal speed limits by ~30%
 		v *= 1.3
 		if v < 10 {
 			v = 10
 		}
 		return e.DistM * 3.6 / v
 	}
-	switch opt.Objective {
+	switch eval.options.Objective {
 	case ObjectiveDuration:
-		return edgeTimeSeconds(e, opt)
+		return eval.edgeTimeSeconds(e)
 	case ObjectiveEconomy:
 		km := e.DistM / 1000
-		v := effectiveSpeedKph(e, opt)
+		v := eval.effectiveSpeedKph(e)
 		f := 1.0 + 0.7*math.Pow(v/100.0, 2)
 		return km * f
 	default:
@@ -1695,38 +1729,60 @@ func (r *Router) baseEdgeCost(e Edge, opt RouteOptions) float64 {
 	}
 }
 
-func (r *Router) transitionPenalty(prev, cur, next int64, opt RouteOptions) float64 {
+// All outgoing edges in one expansion share the same incoming bearing and
+// crossing cost. Compute those once, including file-graph coordinate lookups.
+type routeTransition struct {
+	weights         *ProWeights
+	crossing        float64
+	current         Coord
+	incomingBearing float64
+	turnDirections  bool
+}
+
+func (eval *routeEvaluator) prepareTransition(r *Router, prev, cur int64) routeTransition {
+	transition := routeTransition{weights: &eval.options.Weights}
 	if prev == 0 {
-		return 0
+		return transition
 	}
-	pen := 0.0
-	if (opt.Weights.Crossing > 0 || opt.Weights.TrafficLightPenalty > 0) && r.g.degree(cur) > 2 {
-		if opt.Weights.Crossing > 0 {
-			pen += opt.Weights.Crossing
-		}
-		if opt.Weights.TrafficLightPenalty > 0 {
-			pen += opt.Weights.TrafficLightPenalty
-		}
+	if eval.crossingPenalty > 0 && r.g.degree(cur) > 2 {
+		transition.crossing = eval.crossingPenalty
 	}
-	// turnType() does bearing/trig math per call; skip it entirely when no
-	// turn-direction weight is configured (the default for every profile),
-	// since it would only ever add zero. This is called once per edge
-	// relaxation, so on a long route across a large graph it adds up.
-	if !opt.Weights.NoLeftTurn && opt.Weights.LeftTurn == 0 && opt.Weights.RightTurn == 0 && opt.Weights.UTurn == 0 {
+	if !eval.turnDirections {
+		return transition
+	}
+	p, ok1 := r.g.coord(prev)
+	c, ok2 := r.g.coord(cur)
+	if ok1 && ok2 {
+		transition.current = c
+		transition.incomingBearing = bearingDeg(p.Lat, p.Lon, c.Lat, c.Lon)
+		transition.turnDirections = true
+	}
+	return transition
+}
+
+func (transition *routeTransition) penalty(r *Router, next int64) float64 {
+	pen := transition.crossing
+	if !transition.turnDirections {
 		return pen
 	}
-	tt := r.turnType(prev, cur, next)
-	switch tt {
+	n, ok := r.g.coord(next)
+	if !ok {
+		return pen
+	}
+	c := transition.current
+	outgoing := bearingDeg(c.Lat, c.Lon, n.Lat, n.Lon)
+	w := transition.weights
+	switch turnKindForBearings(transition.incomingBearing, outgoing) {
 	case turnLeft:
-		if opt.Weights.NoLeftTurn {
+		if w.NoLeftTurn {
 			pen += noLeftTurnPenalty
 		} else {
-			pen += opt.Weights.LeftTurn
+			pen += w.LeftTurn
 		}
 	case turnRight:
-		pen += opt.Weights.RightTurn
+		pen += w.RightTurn
 	case turnUTurn:
-		pen += opt.Weights.UTurn
+		pen += w.UTurn
 	}
 	return pen
 }
@@ -1753,7 +1809,11 @@ func (r *Router) turnType(prev, cur, next int64) turnKind {
 	}
 	b1 := bearingDeg(p.Lat, p.Lon, c.Lat, c.Lon)
 	b2 := bearingDeg(c.Lat, c.Lon, n.Lat, n.Lon)
-	diff := angleDiffDeg(b2, b1)
+	return turnKindForBearings(b1, b2)
+}
+
+func turnKindForBearings(incoming, outgoing float64) turnKind {
+	diff := angleDiffDeg(outgoing, incoming)
 	ad := math.Abs(diff)
 	if ad > 160 {
 		return turnUTurn
@@ -1783,43 +1843,36 @@ func bearingDeg(lat1, lon1, lat2, lon2 float64) float64 {
 
 func rad2deg(r float64) float64 { return r * 180 / math.Pi }
 
-func effectiveSpeedKph(e Edge, opt RouteOptions) float64 {
+func (eval *routeEvaluator) effectiveSpeedKph(e Edge) float64 {
 	v := e.SpeedKph
 	if v <= 0 {
 		v = 50
 	}
-	// Apply profile speed scale (e.g. cycling at 25% of road speed)
-	if scale := profileSpeedScale(opt); scale > 0 && scale < 1 {
-		v *= scale
+	if eval.speedScale != 1 {
+		v *= eval.speedScale
 	}
-	if opt.Weights.MaxSpeedKph > 0 && v > opt.Weights.MaxSpeedKph {
-		v = opt.Weights.MaxSpeedKph
+	if maxSpeed := eval.options.Weights.MaxSpeedKph; maxSpeed > 0 && v > maxSpeed {
+		v = maxSpeed
 	}
 	if v < 3 {
-		v = 3 // minimum 3 kph (walking pace) to keep heuristics well-behaved
+		v = 3
 	}
 	return v
 }
 
-func edgeTimeSeconds(e Edge, opt RouteOptions) float64 {
-	v := effectiveSpeedKph(e, opt)
-	return e.DistM * 3.6 / v
+func (eval *routeEvaluator) edgeTimeSeconds(e Edge) float64 {
+	return e.DistM * 3.6 / eval.effectiveSpeedKph(e)
 }
 
-func edgeAllowed(e Edge, opt RouteOptions) bool {
-	if opt.Weights.VehicleHeightM > 0 && e.MaxHeightM > 0 && opt.Weights.VehicleHeightM > e.MaxHeightM {
+func (eval *routeEvaluator) edgeAllowed(e Edge) bool {
+	w := &eval.options.Weights
+	if w.VehicleHeightM > 0 && e.MaxHeightM > 0 && w.VehicleHeightM > e.MaxHeightM {
 		return false
 	}
-	if opt.Weights.VehicleWeightT > 0 && e.MaxWeightT > 0 && opt.Weights.VehicleWeightT > e.MaxWeightT {
+	if w.VehicleWeightT > 0 && e.MaxWeightT > 0 && w.VehicleWeightT > e.MaxWeightT {
 		return false
 	}
-	// Check profile highway-type restriction.
-	if allowed := profileAllowedHwySet(opt); allowed != nil && e.HwyType != "" {
-		if !allowed[e.HwyType] {
-			return false
-		}
-	}
-	return true
+	return eval.allowedHighways == nil || e.HwyType == "" || eval.allowedHighways[e.HwyType]
 }
 
 // ---- Nearest node (spatial index) ----

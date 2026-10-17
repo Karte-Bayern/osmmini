@@ -106,10 +106,19 @@ public struct Route: Codable, Sendable {
       ], options: [.sortedKeys])
   }
   public func gpx() -> Data {
-    let points = path.map { "<trkpt lat=\"\($0.lat)\" lon=\"\($0.lon)\"/>" }.joined()
-    return Data(
-      "<?xml version=\"1.0\" encoding=\"UTF-8\"?><gpx version=\"1.1\" creator=\"OSMmini\" xmlns=\"http://www.topografix.com/GPX/1/1\"><trk><name>OSMmini route</name><trkseg>\(points)</trkseg></trk></gpx>"
+    var data = Data()
+    data.reserveCapacity(256 + path.count * 64)
+    data.append(
+      contentsOf:
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><gpx version=\"1.1\" creator=\"OSMmini\" xmlns=\"http://www.topografix.com/GPX/1/1\"><trk><name>OSMmini route</name><trkseg>"
         .utf8)
+    for coordinate in path {
+      data.append(
+        contentsOf:
+          "<trkpt lat=\"\(coordinate.lat)\" lon=\"\(coordinate.lon)\"/>".utf8)
+    }
+    data.append(contentsOf: "</trkseg></trk></gpx>".utf8)
+    return data
   }
 }
 public struct VectorFeature: Codable, Sendable {

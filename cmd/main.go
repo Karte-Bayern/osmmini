@@ -580,16 +580,21 @@ type tileCacheStats struct {
 // Request flow: L1 hit → serve immediately; L2 hit → warm L1, serve;
 // miss → fetch upstream, write to L1+L2, serve.
 type TileCache struct {
-	mu     sync.RWMutex
-	cfg    TileSettings
-	client *http.Client
+	mu             sync.RWMutex
+	cfg            TileSettings
+	source         string
+	directOnly     bool
+	client         *http.Client
+	ownedTransport *http.Transport
 
 	// L1 in-memory cache
-	mem    map[tileCacheKey]*tileMemEntry
-	memMax int
+	mem     map[tileCacheKey]*tileMemEntry
+	memMax  int
+	flights map[tileCacheKey]*tileFlight
 
-	stats tileCacheStats
-	stopC chan struct{} // closed to stop the background eviction goroutine
+	stats    tileCacheStats
+	stopC    chan struct{} // closed to stop the background eviction goroutine
+	stopOnce sync.Once
 }
 
 func NewTileCache(cfg TileSettings) *TileCache {
@@ -597,12 +602,17 @@ func NewTileCache(cfg TileSettings) *TileCache {
 	if memMax <= 0 {
 		memMax = tileMemCacheDefaultMaxItems
 	}
+	client, transport := newTileHTTPClient(http.DefaultTransport)
 	tc := &TileCache{
-		cfg:    cfg,
-		client: &http.Client{Timeout: 25 * time.Second},
-		mem:    make(map[tileCacheKey]*tileMemEntry, memMax),
-		memMax: memMax,
-		stopC:  make(chan struct{}),
+		cfg:            cfg,
+		source:         tileSourceNamespace(cfg),
+		directOnly:     normalizedMapType(cfg.MapType) == "raster-direct" || isOSMStandardTileURL(cfg.Upstream),
+		client:         client,
+		ownedTransport: transport,
+		mem:            make(map[tileCacheKey]*tileMemEntry, memMax),
+		memMax:         memMax,
+		flights:        make(map[tileCacheKey]*tileFlight),
+		stopC:          make(chan struct{}),
 	}
 	// Background L1 eviction: purge expired entries every hour.
 	go func() {
@@ -620,9 +630,21 @@ func NewTileCache(cfg TileSettings) *TileCache {
 	return tc
 }
 
-// Close stops the background eviction goroutine.
+// Close stops background eviction, cancels shared downloads and releases this
+// cache's idle HTTP connections.
+// It is safe to call more than once.
 func (tc *TileCache) Close() {
-	close(tc.stopC)
+	tc.stopOnce.Do(func() {
+		close(tc.stopC)
+		tc.mu.Lock()
+		for _, flight := range tc.flights {
+			flight.cancel()
+		}
+		tc.mu.Unlock()
+		if tc.ownedTransport != nil {
+			tc.ownedTransport.CloseIdleConnections()
+		}
+	})
 }
 
 func (tc *TileCache) Update(cfg TileSettings) {
@@ -630,9 +652,13 @@ func (tc *TileCache) Update(cfg TileSettings) {
 	if newMax <= 0 {
 		newMax = tileMemCacheDefaultMaxItems
 	}
+	source := tileSourceNamespace(cfg)
+	directOnly := normalizedMapType(cfg.MapType) == "raster-direct" || isOSMStandardTileURL(cfg.Upstream)
 	tc.mu.Lock()
-	sourceChanged := tileSourceNamespace(tc.cfg) != tileSourceNamespace(cfg)
+	sourceChanged := tc.source != source
 	tc.cfg = cfg
+	tc.source = source
+	tc.directOnly = directOnly
 	if newMax != tc.memMax || sourceChanged {
 		tc.memMax = newMax
 		// Clear L1 when the source changes as well as when capacity changes.
@@ -643,10 +669,10 @@ func (tc *TileCache) Update(cfg TileSettings) {
 	tc.mu.Unlock()
 }
 
-func (tc *TileCache) cfgCopy() TileSettings {
+func (tc *TileCache) cfgCopy() (TileSettings, string, bool) {
 	tc.mu.RLock()
 	defer tc.mu.RUnlock()
-	return tc.cfg
+	return tc.cfg, tc.source, tc.directOnly
 }
 
 func normalizedMapType(mapType string) string {
@@ -775,14 +801,14 @@ func (tc *TileCache) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// /tiles/{z}/{x}/{y}.png
 	p := strings.TrimPrefix(r.URL.Path, "/tiles/")
-	parts := strings.Split(p, "/")
-	if len(parts) != 3 {
+	zPart, rest, ok := strings.Cut(p, "/")
+	xPart, yPart, xyOK := strings.Cut(rest, "/")
+	if !ok || !xyOK || strings.Contains(yPart, "/") {
 		http.NotFound(w, r)
 		return
 	}
-	z, err1 := strconv.Atoi(parts[0])
-	x, err2 := strconv.Atoi(parts[1])
-	yPart := parts[2]
+	z, err1 := strconv.Atoi(zPart)
+	x, err2 := strconv.Atoi(xPart)
 	if err1 != nil || err2 != nil || z < 0 || z > 20 {
 		http.NotFound(w, r)
 		return
@@ -797,11 +823,11 @@ func (tc *TileCache) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg := tc.cfgCopy()
-	// "raster-direct" is a browser-only source type. Refuse requests to the
-	// proxy endpoint so a direct OSM configuration cannot accidentally be
-	// turned back into server-side tile traffic through a bookmarked /tiles URL.
-	if normalizedMapType(cfg.MapType) == "raster-direct" {
+	cfg, source, directOnly := tc.cfgCopy()
+	// Direct sources, including public OSM tiles used as a vector fallback,
+	// belong in the browser. Check the upstream as well as normalized settings
+	// so legacy configurations cannot enable proxy traffic via /tiles URLs.
+	if directOnly {
 		http.NotFound(w, r)
 		return
 	}
@@ -817,7 +843,6 @@ func (tc *TileCache) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	source := tileSourceNamespace(cfg)
 	key := tileCacheKey{source: source, z: z, x: x, y: y}
 
 	// L1: in-memory
@@ -825,106 +850,16 @@ func (tc *TileCache) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		tc.mu.Lock()
 		tc.stats.memHits++
 		tc.mu.Unlock()
-		serveTile(w, data, contentType)
+		serveTile(w, r, data, contentType)
 		return
 	}
 
-	// L2: disk
-	cachePath := filepath.Join(cfg.CacheDir, source, strconv.Itoa(z), strconv.Itoa(x), fmt.Sprintf("%d.tile", y))
-	if data, contentType, ok := readCachedTile(cachePath); ok {
-		tc.mu.Lock()
-		tc.stats.diskHits++
-		tc.mu.Unlock()
-		tc.setInMem(key, data, contentType) // warm L1
-		serveTile(w, data, contentType)
+	result := tc.loadTile(r.Context(), cfg, key)
+	if result.errorMessage != "" {
+		http.Error(w, result.errorMessage, http.StatusBadGateway)
 		return
 	}
-
-	// Miss: fetch from upstream. Support both tile template upstreams and
-	// WMS endpoints (when cfg.MapType == "wms"). For WMS we compute the
-	// EPSG:3857 bounding box for the tile and perform a GetMap request.
-	var req *http.Request
-	if normalizedMapType(cfg.MapType) == "wms" {
-		// Compute EPSG:3857 bbox for the slippy tile
-		minx, miny, maxx, maxy := tileBBox3857(z, x, y)
-		wmsURL, err := buildWMSGetMapURL(cfg.Upstream, cfg.WMSLayers, minx, miny, maxx, maxy)
-		if err != nil {
-			tc.mu.Lock()
-			tc.stats.errors++
-			tc.mu.Unlock()
-			http.Error(w, "tile upstream error", http.StatusBadGateway)
-			return
-		}
-		req, err = http.NewRequestWithContext(r.Context(), http.MethodGet, wmsURL, nil)
-		if err != nil {
-			tc.mu.Lock()
-			tc.stats.errors++
-			tc.mu.Unlock()
-			http.Error(w, "tile upstream error", http.StatusBadGateway)
-			return
-		}
-	} else {
-		// Template-based upstream (e.g., {z}/{x}/{y}.png)
-		up := cfg.Upstream
-		up = strings.ReplaceAll(up, "{z}", strconv.Itoa(z))
-		up = strings.ReplaceAll(up, "{x}", strconv.Itoa(x))
-		up = strings.ReplaceAll(up, "{y}", strconv.Itoa(y))
-		var err error
-		req, err = http.NewRequestWithContext(r.Context(), http.MethodGet, up, nil)
-		if err != nil {
-			tc.mu.Lock()
-			tc.stats.errors++
-			tc.mu.Unlock()
-			http.Error(w, "tile upstream error", http.StatusBadGateway)
-			return
-		}
-	}
-	if cfg.UserAgent != "" {
-		req.Header.Set("User-Agent", cfg.UserAgent)
-	}
-	resp, err := tc.client.Do(req)
-	if err != nil {
-		tc.mu.Lock()
-		tc.stats.errors++
-		tc.mu.Unlock()
-		http.Error(w, "tile upstream error", http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		tc.mu.Lock()
-		tc.stats.errors++
-		tc.mu.Unlock()
-		http.Error(w, "tile upstream non-200", http.StatusBadGateway)
-		return
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if err != nil || len(data) == 0 {
-		tc.mu.Lock()
-		tc.stats.errors++
-		tc.mu.Unlock()
-		http.Error(w, "tile read error", http.StatusBadGateway)
-		return
-	}
-	contentType, ok := tileImageContentType(data)
-	if !ok {
-		tc.mu.Lock()
-		tc.stats.errors++
-		tc.mu.Unlock()
-		http.Error(w, "tile upstream did not return an image", http.StatusBadGateway)
-		return
-	}
-
-	// Persist to L2 (disk) and warm L1.
-	_ = os.MkdirAll(filepath.Dir(cachePath), 0o755)
-	_ = os.WriteFile(cachePath, data, 0o644)
-	tc.setInMem(key, data, contentType)
-
-	tc.mu.Lock()
-	tc.stats.fetches++
-	tc.mu.Unlock()
-
-	serveTile(w, data, contentType)
+	serveTile(w, r, result.data, result.contentType)
 }
 
 func buildWMSGetMapURL(upstream, layers string, minx, miny, maxx, maxy float64) (string, error) {
@@ -957,30 +892,17 @@ func tileImageContentType(data []byte) (string, bool) {
 	}
 }
 
-func serveTile(w http.ResponseWriter, data []byte, contentType string) {
+func serveTile(w http.ResponseWriter, r *http.Request, data []byte, contentType string) {
 	if contentType == "" {
 		contentType = "image/png"
 	}
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d, stale-while-revalidate=3600", int(tileBrowserMaxAge.Seconds())))
-	_, _ = w.Write(data)
-}
-
-func readCachedTile(path string) ([]byte, string, bool) {
-	info, err := os.Stat(path)
-	if err != nil || time.Since(info.ModTime()) > tileDiskCacheTTL {
-		return nil, "", false
+	w.Header().Set("Cache-Control", tileCacheControl)
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	if r.Method != http.MethodHead {
+		_, _ = w.Write(data)
 	}
-	b, err := os.ReadFile(path)
-	if err != nil || len(b) == 0 {
-		return nil, "", false
-	}
-	contentType, ok := tileImageContentType(b)
-	if !ok {
-		return nil, "", false
-	}
-	return b, contentType, true
 }
 
 func validateTileSettings(tiles *TileSettings) error {
@@ -1726,7 +1648,7 @@ func (s *server) routes() http.Handler {
 	// UI
 	mux.HandleFunc("/", s.handleIndex)
 
-	return withLogging(withCORS(mux))
+	return withLogging(withCORS(withJSONCompression(mux)))
 }
 
 // poiCacheVersion changes whenever the persisted POI representation changes.
@@ -1972,20 +1894,27 @@ func (s *server) fetchWikiSummary(ctx context.Context, lang, title string) strin
 
 	titleEsc := url.PathEscape(title)
 	u := fmt.Sprintf("https://%s.wikipedia.org/api/rest_v1/page/summary/%s", lang, titleEsc)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	client := &http.Client{Timeout: 4 * time.Second}
-	resp, err := client.Do(req)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return ""
+	}
+	resp, err := wikiHTTPClient.Do(req)
 	if err != nil || resp == nil {
 		return ""
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		drainRemoteBody(resp)
+		return ""
+	}
+	body, err := readRemoteBody(resp, 8*1024)
+	if err != nil {
 		return ""
 	}
 	var out struct {
 		Extract string `json:"extract"`
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 8*1024)).Decode(&out); err != nil {
+	if err := json.Unmarshal(body, &out); err != nil {
 		return ""
 	}
 	s.wikiMu.Lock()
@@ -4434,48 +4363,36 @@ type aiQueryResponse struct {
 // probeAIProvider checks if a provider is reachable and fetches available models.
 func probeAIProvider(ctx context.Context, name, baseURL, modelsPath string) aiProvider {
 	p := aiProvider{Name: name, URL: baseURL, Available: false}
-	client := &http.Client{Timeout: 3 * time.Second}
-
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+modelsPath, nil)
 	if err != nil {
 		return p
 	}
-	resp, err := client.Do(req)
+	resp, err := aiProbeHTTPClient.Do(req)
 	if err != nil {
 		return p
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		drainRemoteBody(resp)
 		return p
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAIResponseBytes))
+	body, err := readRemoteBody(resp, maxAIResponseBytes)
 	if err != nil {
 		return p
 	}
 	p.Available = true
 
-	// Parse models - Ollama format: {"models":[{"name":"..."},...]}
-	// LM Studio format (OpenAI-compatible): {"data":[{"id":"..."},...]}
-	var ollamaResp struct {
-		Models []struct {
-			Name string `json:"name"`
-		} `json:"models"`
-	}
-	if err := json.Unmarshal(body, &ollamaResp); err == nil && len(ollamaResp.Models) > 0 {
-		for _, m := range ollamaResp.Models {
-			p.Models = append(p.Models, m.Name)
+	var ollama remoteOllamaModels
+	if json.Unmarshal(body, &ollama) == nil && len(ollama.Models) > 0 {
+		for _, model := range ollama.Models {
+			p.Models = append(p.Models, model.Name)
 		}
 		return p
 	}
-
-	var openaiResp struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &openaiResp); err == nil && len(openaiResp.Data) > 0 {
-		for _, m := range openaiResp.Data {
-			p.Models = append(p.Models, m.ID)
+	var compatible remoteOpenAIModels
+	if json.Unmarshal(body, &compatible) == nil {
+		for _, model := range compatible.Data {
+			p.Models = append(p.Models, model.ID)
 		}
 	}
 	return p
@@ -6053,14 +5970,11 @@ func (s *server) computeRouteFromLocQuery(ctx context.Context, from, to string, 
 
 // queryOllama sends a chat completion request to an Ollama instance.
 func queryOllama(ctx context.Context, baseURL, model, systemPrompt, userPrompt string) (string, error) {
-	payload := map[string]any{
-		"model": model,
-		"messages": []map[string]string{
-			{"role": "system", "content": systemPrompt},
-			{"role": "user", "content": userPrompt},
-		},
-		"stream": false,
-	}
+	payload := struct {
+		Model    string               `json:"model"`
+		Messages [2]remoteChatMessage `json:"messages"`
+		Stream   bool                 `json:"stream"`
+	}{model, remoteChatMessages(systemPrompt, userPrompt), false}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return "", err
@@ -6071,16 +5985,16 @@ func queryOllama(ctx context.Context, baseURL, model, systemPrompt, userPrompt s
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: aiQueryTimeout}
-	resp, err := client.Do(req)
+	resp, err := aiQueryHTTPClient.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		drainRemoteBody(resp)
 		return "", fmt.Errorf("ollama returned %d", resp.StatusCode)
 	}
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxAIResponseBytes))
+	respBody, err := readRemoteBody(resp, maxAIResponseBytes)
 	if err != nil {
 		return "", err
 	}
@@ -6098,14 +6012,11 @@ func queryOllama(ctx context.Context, baseURL, model, systemPrompt, userPrompt s
 // queryOpenAICompatible sends a chat completion request to an OpenAI-compatible
 // API. apiKey may be empty for local providers that don't require authentication.
 func queryOpenAICompatible(ctx context.Context, baseURL, model, systemPrompt, userPrompt, apiKey string) (string, error) {
-	payload := map[string]any{
-		"model": model,
-		"messages": []map[string]string{
-			{"role": "system", "content": systemPrompt},
-			{"role": "user", "content": userPrompt},
-		},
-		"max_tokens": 4096,
-	}
+	payload := struct {
+		Model     string               `json:"model"`
+		Messages  [2]remoteChatMessage `json:"messages"`
+		MaxTokens int                  `json:"max_tokens"`
+	}{model, remoteChatMessages(systemPrompt, userPrompt), 4096}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return "", err
@@ -6119,14 +6030,16 @@ func queryOpenAICompatible(ctx context.Context, baseURL, model, systemPrompt, us
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
-	client := &http.Client{Timeout: aiQueryTimeout}
-	resp, err := client.Do(req)
+	resp, err := aiQueryHTTPClient.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		body2, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		body2, readErr := readRemoteBody(resp, 4096)
+		if readErr != nil {
+			drainRemoteBody(resp)
+		}
 		// Surface the API error message when available.
 		var apiErr struct {
 			Error struct {
@@ -6138,7 +6051,7 @@ func queryOpenAICompatible(ctx context.Context, baseURL, model, systemPrompt, us
 		}
 		return "", fmt.Errorf("API returned status %d", resp.StatusCode)
 	}
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxAIResponseBytes))
+	respBody, err := readRemoteBody(resp, maxAIResponseBytes)
 	if err != nil {
 		return "", err
 	}
@@ -6165,30 +6078,26 @@ func probeOpenAI(ctx context.Context, name, baseURL, apiKey string) aiProvider {
 	if apiKey == "" {
 		return p
 	}
-	client := &http.Client{Timeout: 5 * time.Second}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/v1/models", nil)
 	if err != nil {
 		return p
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
-	resp, err := client.Do(req)
+	resp, err := openAIProbeHTTPClient.Do(req)
 	if err != nil {
 		return p
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		drainRemoteBody(resp)
 		return p
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxAIResponseBytes))
+	body, err := readRemoteBody(resp, maxAIResponseBytes)
 	if err != nil {
 		return p
 	}
 	p.Available = true
-	var openaiResp struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
-	}
+	var openaiResp remoteOpenAIModels
 	if err := json.Unmarshal(body, &openaiResp); err == nil {
 		for _, m := range openaiResp.Data {
 			// Skip non-chat / embedding / utility models for cleaner list.

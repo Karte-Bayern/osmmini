@@ -40,7 +40,7 @@ No dependency versions are upgraded by the build.
 ## Demo workflow
 
 1. Choose a region in the Geofabrik catalog, or select a local `.osm.pbf` file.
-   The catalog is read from `https://download.geofabrik.de/index-v1.json` and
+   The catalog is read from `https://download.geofabrik.de/index-v1-nogeom.json` and
    cached locally. Downloads use HTTPS and show transferred bytes.
 2. Wait for graph, search and local tinyTiles map preparation. Start with a small
    region; no claim is made yet about Bavaria/DACH import limits on an iPhone.
@@ -119,6 +119,54 @@ ABI 1 and the original polling entry point remain available. The repository's
 root README documents the shared Go-core benchmarks and optional server address
 index.
 
+Requests are encoded directly on the worker. Response decoding takes ownership
+of the native UTF-8 buffer, avoiding a temporary Swift string and a second large
+byte buffer. GPX export appends to one output buffer. `OfflineMap` prepares
+tile-local drawing paths on a worker once per loaded tile, then reuses them as
+the viewport moves. Its cache retains only prepared geometry for the current
+viewport (at most 128 tiles), and discards it when the engine changes. Raw
+decoded coordinate arrays are not retained by this cache.
+
+Optional Release microbenchmarks report native buffer transfer and path
+preparation/reuse times without timing assertions:
+
+```sh
+OSMMINI_BENCHMARKS=1 swift test --package-path apple -c release --filter nativeBufferTransferBenchmark
+OSMMINI_MAP_BENCHMARK=1 swift test --package-path apple -c release --filter mapGeometryReplayBenchmark
+```
+
+The map benchmark measures CPU geometry work and CoreGraphics replay; it does
+not measure GPU frame rate or physical-device memory use.
+
+`Geofabrik` retains its decoded catalog in memory after the first load. Overlapping
+catalog refreshes share the result. Concurrent downloads of the same PBF URL
+wait for the active transfer and reuse its completed file, with each caller's
+size limit checked independently. Different URLs can still download concurrently.
+All callers, including those waiting for an existing download, receive progress
+and the final byte count; cancelled callers are removed from that subscription.
+Cancelling a waiting caller leaves the active transfer running; cancelling the
+active transfer saves resume data before the next caller may retry. Downloads
+are staged beside the destination before publication, so partially moved files
+are never mistaken for a completed PBF.
+
+Download progress is normally reported at 100 ms intervals, with the initial,
+final and changed-size values reported immediately. Local URLProtocol tests
+verify request coalescing and cancellation without accessing Geofabrik. The
+optional `catalogWarmCacheBenchmark` compares repeated disk/decode/sort with
+the retained catalog using `OSMMINI_BENCHMARKS=1`.
+The catalog uses Geofabrik's [official properties-only variant](https://download.geofabrik.de/technical.html),
+since the region picker does not use boundary geometries. Existing full-index
+cache files remain readable.
+
+The downloader follows Apple's [file-download lifecycle](https://developer.apple.com/documentation/foundation/downloading-files-from-websites)
+and [resume-data rules](https://developer.apple.com/documentation/foundation/pausing-and-resuming-downloads):
+move temporary files before the download delegate returns, finish from the
+terminal task callback, save available resume data, and invalidate each
+delegate-owning session. Shared catalog requests use a reusable session;
+large PBF transfers keep separate sessions to isolate their delegate and
+cancellation lifecycle. Request coalescing and caching also follow Apple's
+[guidance on reducing networking power usage](https://developer.apple.com/documentation/xcode/reducing-networking-and-bluetooth-power-usage).
+
 ## Prepare on a server or Mac
 
 ```sh
@@ -131,6 +179,11 @@ Copy the entire output directory to the app's readable sandbox and call
 little-endian fields, SHA-256 checksums and a versioned manifest. No PBF parsing
 is performed on reopening. Large desktop builds can increase
 `-max-import-nodes`; the default is 8 million retained source coordinates.
+
+New region directories also include `NOTICE.txt` with OSM attribution and ODbL
+links. Keep it when copying or distributing the package; the map displays a
+visible link to OpenStreetMap's copyright page. Software and map-data licences
+remain separate.
 
 The file-backed graph uses read-only memory mapping on Apple/Unix platforms;
 coordinates, edge records and spatial lookup entries are not expanded to Go
@@ -173,8 +226,11 @@ run and visual interaction review remain necessary.
 The first SDK operates on one region at a time. Cross-package routing,
 hierarchical long-distance acceleration, a fully disk-streamed PBF importer,
 continuous turn-by-turn navigation and automatic map updates are further work.
+Re-import into a new destination to apply changed routing-import rules. Existing
+published regions stay readable; a pending workspace from an older import
+revision is preserved and requires a new destination.
 Routing has the same OSM access/profile/turn-restriction limitations documented
-for the existing core; the new wrapper does not make it a validated emergency
+in the root README's coverage table; the new wrapper does not make it a validated emergency
 navigation system. Address/POI search uses a disk-backed prefix index with AND
 filtering, currently node/way POIs and a small German category alias set;
 relations and the web server's full category catalog are not indexed here yet.

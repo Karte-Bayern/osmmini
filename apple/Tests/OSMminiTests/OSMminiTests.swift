@@ -19,6 +19,10 @@ import Testing
   options.tileMemoryBytes = 64 * 1024 * 1024
   let manifest = try await OfflineEngine.importPBF(options)
   #expect(manifest.nodes == 3)
+  let notice = try String(
+    contentsOf: destination.appendingPathComponent("NOTICE.txt"), encoding: .utf8)
+  #expect(notice.contains("OpenStreetMap contributors"))
+  #expect(notice.contains("https://opendatacommons.org/licenses/odbl/1-0/"))
   try FileManager.default.removeItem(at: source)
   let engine = try await OfflineEngine.open(destination)
   let results = try await engine.search("cafe")

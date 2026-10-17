@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -11,6 +12,34 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestImportRejectsLegacyCheckpointWithoutModifyingIt(t *testing.T) {
+	pbf := fixture(t)
+	destination := filepath.Join(t.TempDir(), "region")
+	stage := destination + ".pending"
+	if err := os.Mkdir(stage, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	hash, err := fileHash(t.Context(), pbf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := fmt.Sprintf("%s:14:14:%d", hash, FormatVersion)
+	source := filepath.Join(stage, "source")
+	if err := os.WriteFile(source, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Import(t.Context(), ImportOptions{PBF: pbf, Destination: destination, MinZoom: 14, MaxZoom: 14}, nil); err == nil || !strings.Contains(err.Error(), "import version") {
+		t.Fatalf("legacy checkpoint was reused: %v", err)
+	}
+	unchanged, err := os.ReadFile(source)
+	if err != nil || string(unchanged) != legacy {
+		t.Fatalf("old workspace changed: %q, %v", unchanged, err)
+	}
+	if _, err := os.Stat(destination); !os.IsNotExist(err) {
+		t.Fatalf("published legacy workspace: %v", err)
+	}
+}
 
 func TestImportReleasesDestinationAfterCancellation(t *testing.T) {
 	o := ImportOptions{PBF: fixture(t), Destination: filepath.Join(t.TempDir(), "region")}
@@ -93,6 +122,10 @@ func TestRegionSurvivesWithoutSourceAndHasLocalMapSearchRoute(t *testing.T) {
 	}
 	if m.Nodes != 3 || m.Edges != 4 {
 		t.Fatalf("manifest: %+v", m)
+	}
+	notice, err := os.ReadFile(filepath.Join(dest, "NOTICE.txt"))
+	if err != nil || !strings.Contains(string(notice), "OpenStreetMap contributors") || !strings.Contains(string(notice), "https://opendatacommons.org/licenses/odbl/1-0/") {
+		t.Fatalf("portable region lost its attribution/data licence: %q, %v", notice, err)
 	}
 	if err = os.Remove(pbf); err != nil {
 		t.Fatal(err)

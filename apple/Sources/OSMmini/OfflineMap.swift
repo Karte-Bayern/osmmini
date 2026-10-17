@@ -33,10 +33,13 @@ public struct OfflineMap: View {
   public var focus: Coordinate?
   @State private var center: Coordinate
   @State private var zoom: Int
-  @State private var tiles: [TileKey: VectorTile] = [:]
+  @State private var tiles = PreparedMapTileCache()
   @State private var error: String?
   @GestureState private var drag = CGSize.zero
-  private struct TileKey: Hashable, Sendable { let z: Int, x: Int, y: Int }
+  private struct TileRequest: Equatable {
+    let owner: ObjectIdentifier
+    let keys: [MapTileKey]
+  }
   public init(
     engine: OfflineEngine, route: Route? = nil, center: Coordinate? = nil,
     markers: [Coordinate] = [], focus: Coordinate? = nil, onSelect: ((Coordinate) -> Void)? = nil
@@ -53,63 +56,49 @@ public struct OfflineMap: View {
     GeometryReader { geometry in
       let size = geometry.size
       let keys = visibleTiles(size)
+      let request = TileRequest(owner: ObjectIdentifier(engine), keys: keys)
       Canvas { context, canvasSize in
         context.fill(
           Path(CGRect(origin: .zero, size: canvasSize)),
           with: .color(Color(red: 0.96, green: 0.95, blue: 0.92)))
         let origin = world(center)
         for key in keys {
-          guard let tile = tiles[key] else { continue }
+          guard let tile = tiles.tile(for: key, owner: request.owner) else { continue }
           let offset = CGPoint(
             x: Double(key.x) * 256 - origin.x + canvasSize.width / 2 + drag.width,
             y: Double(key.y) * 256 - origin.y + canvasSize.height / 2 + drag.height)
           var tileContext = context
-          tileContext.clip(to: Path(CGRect(x: offset.x, y: offset.y, width: 256, height: 256)))
+          tileContext.translateBy(x: offset.x, y: offset.y)
+          tileContext.clip(to: Path(CGRect(x: 0, y: 0, width: 256, height: 256)))
           for feature in tile.features {
-            var path = Path()
-            for ring in feature.paths {
-              for (i, point) in ring.enumerated() where point.count >= 2 {
-                let p = CGPoint(
-                  x: offset.x + Double(point[0]) / Double(feature.extent) * 256,
-                  y: offset.y + Double(point[1]) / Double(feature.extent) * 256)
-                if i == 0 { path.move(to: p) } else { path.addLine(to: p) }
-              }
-              if feature.kind == 3 { path.closeSubpath() }
-            }
-            switch feature.layer {
-            case "water":
+            switch feature.style {
+            case .water:
               tileContext.fill(
-                path, with: .color(Color(red: 0.66, green: 0.82, blue: 0.88)),
+                feature.path, with: .color(Color(red: 0.66, green: 0.82, blue: 0.88)),
                 style: FillStyle(eoFill: true))
-            case "landcover":
+            case .forest, .landcover:
               tileContext.fill(
-                path,
+                feature.path,
                 with: .color(
-                  feature.class == "forest"
+                  feature.style == .forest
                     ? Color(red: 0.77, green: 0.85, blue: 0.72)
                     : Color(red: 0.89, green: 0.90, blue: 0.79)), style: FillStyle(eoFill: true))
-            case "building":
+            case .building:
               tileContext.fill(
-                path, with: .color(Color(red: 0.83, green: 0.79, blue: 0.75)),
+                feature.path, with: .color(Color(red: 0.83, green: 0.79, blue: 0.75)),
                 style: FillStyle(eoFill: true))
-            case "transportation":
-              let major = ["motorway", "trunk", "primary"].contains(feature.class ?? "")
+            case .road(let major):
               let width = major ? 3.5 : 1.8
               tileContext.stroke(
-                path, with: .color(.gray.opacity(0.45)),
+                feature.path, with: .color(.gray.opacity(0.45)),
                 style: StrokeStyle(lineWidth: width + 1, lineCap: .round, lineJoin: .round))
               tileContext.stroke(
-                path, with: .color(major ? Color(red: 0.96, green: 0.79, blue: 0.51) : .white),
+                feature.path,
+                with: .color(major ? Color(red: 0.96, green: 0.79, blue: 0.51) : .white),
                 style: StrokeStyle(lineWidth: width, lineCap: .round, lineJoin: .round))
-              if zoom >= 13, let name = feature.name, let point = feature.paths.first?.first,
-                point.count >= 2
-              {
-                let p = CGPoint(
-                  x: offset.x + Double(point[0]) / Double(feature.extent) * 256,
-                  y: offset.y + Double(point[1]) / Double(feature.extent) * 256)
+              if zoom >= 13, let name = feature.name, let p = feature.labelPoint {
                 tileContext.draw(Text(name).font(.system(size: 10)).foregroundColor(.black), at: p)
               }
-            default: break
             }
           }
         }
@@ -176,10 +165,13 @@ public struct OfflineMap: View {
       .overlay(alignment: .bottomLeading) {
         VStack(alignment: .leading) {
           if let error { Text(error).foregroundStyle(.red) }
-          Text("© OpenStreetMap contributors · ODbL").font(.caption2)
+          Link(
+            "© OpenStreetMap contributors · ODbL",
+            destination: URL(string: "https://www.openstreetmap.org/copyright")!
+          ).font(.caption2)
         }.padding(6).background(.regularMaterial)
       }
-      .task(id: keys) { await load(keys) }
+      .task(id: request) { await load(request) }
       .onChange(of: focus) { _, coordinate in if let coordinate { center = coordinate } }
       .accessibilityLabel(
         "Offline-Karte von \(engine.manifest.name). Mit Plus und Minus zoomen; zwei Punkte für eine Route auswählen."
@@ -199,7 +191,7 @@ public struct OfflineMap: View {
       x: p.x - origin.x + size.width / 2 + drag.width,
       y: p.y - origin.y + size.height / 2 + drag.height)
   }
-  private func visibleTiles(_ size: CGSize) -> [TileKey] {
+  private func visibleTiles(_ size: CGSize) -> [MapTileKey] {
     let p = world(center)
     let count = Int(exp2(Double(zoom)))
     let minX = max(0, Int(floor((p.x - size.width / 2) / 256)))
@@ -207,24 +199,29 @@ public struct OfflineMap: View {
     let minY = max(0, Int(floor((p.y - size.height / 2) / 256)))
     let maxY = min(count - 1, Int(floor((p.y + size.height / 2) / 256)))
     guard minX <= maxX, minY <= maxY else { return [] }
-    var keys: [TileKey] = []
+    var keys: [MapTileKey] = []
     for y in minY...maxY {
-      for x in minX...maxX { if keys.count < 128 { keys.append(TileKey(z: zoom, x: x, y: y)) } }
+      for x in minX...maxX {
+        if keys.count < PreparedMapTileCache.capacity {
+          keys.append(MapTileKey(z: zoom, x: x, y: y))
+        }
+      }
     }
     return keys
   }
-  @MainActor private func load(_ keys: [TileKey]) async {
-    let needed = Set(keys)
-    tiles = tiles.filter { needed.contains($0.key) }
+  @MainActor private func load(_ request: TileRequest) async {
+    guard !Task.isCancelled else { return }
+    tiles.updateViewport(owner: request.owner, keys: request.keys)
     error = nil
-    // Bound in-flight work and the decoded tile cache to the viewport.
-    for key in keys where tiles[key] == nil {
+    // Bound in-flight work and the prepared geometry cache to the viewport.
+    for key in request.keys where tiles.tile(for: key, owner: request.owner) == nil {
       if Task.isCancelled { return }
       do {
-        let tile = try await engine.tile(z: key.z, x: key.x, y: key.y)
+        let tile = try await PreparedMapTile.prepare(engine.tile(z: key.z, x: key.x, y: key.y))
         try Task.checkCancellation()
-        tiles[key] = tile
+        tiles.insert(tile, for: key, owner: request.owner)
       } catch is CancellationError { return } catch {
+        guard !Task.isCancelled else { return }
         self.error = error.localizedDescription
         return
       }

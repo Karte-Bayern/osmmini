@@ -486,6 +486,10 @@ Without transition penalties, A*/Dijkstra keep one search state per node;
 configured turn/crossing penalties retain the turn-aware search. Both paths
 use value heaps, and short queries start with small search maps. File-backed
 graphs retain format `OSMMGR01`; existing offline regions remain readable.
+Profile restrictions, speed scaling and the target latitude cosine are resolved
+once per query. Turn-aware searches also reuse the incoming bearing and crossing
+cost for all outgoing edges of a search state. These changes apply to both
+in-memory and file-backed graphs.
 
 The reusable `osmmini.NewAddressIndex(entries)` prepares search fields once
 and supports concurrent `Search`/`FindBest` queries. The HTTP server enables
@@ -501,16 +505,102 @@ Allocation comparisons on an M2 Max, using the included synthetic benchmarks:
 | Decode 8,000 untagged DenseNodes | 1,439,872 B | 0 B |
 | Mobile multiword search, 20,000 POIs | 100,368 allocations | 8 allocations |
 | Repeated address search, 50,000 entries | 100,004 allocations | 4 allocations with AddressIndex |
+| Decode vector tile, 264 synthetic features | 1,659,310 B / 4,748 allocations | 307,488 B / 540 allocations |
+| Decode Monaco vector tile, 3,304 features | 4,814,446 B / 35,742 allocations | 1,114,097 B / 7,312 allocations |
 
 These are allocated bytes/counts **per call**, not process RSS or peak import
 memory. AddressIndex construction additionally allocated about 4.91 MB for the
 50,000-entry fixture. CPU timings were affected by substantial simulator load;
 physical-iPhone and large-region measurements remain separate validation work.
 
+The vector decoder reads protobuf fields without intermediate field/value
+slices and allocates exact-sized coordinate storage after validation. The Monaco
+tile produced byte-identical JSON before and after this change. On a synthetic
+10,000-node grid, five-run routing medians improved by 10–32% depending on the
+profile and graph storage; allocations and route costs were unchanged. These
+microbenchmarks do not measure end-to-end app performance.
+
 ```sh
 go test -run '^$' -bench 'Benchmark(Route|ShortRoute|DenseNodes|PBFWay|AddressIndex|SearchAddresses|FileGraph)' -benchmem .
 go test -run '^$' -bench 'BenchmarkMobile(Search|Normalize)' -benchmem ./mobile
+go test -run '^$' -bench '^BenchmarkRouteProfiles$' -benchmem -count=5 .
+go test -run '^$' -bench '^BenchmarkDecodeVectorTile$' -benchmem ./mobile
+# Optional: benchmark the center tile of a locally prepared region.
+OSMMINI_BENCH_REGION=/path/to/region go test -run '^$' -bench '^BenchmarkDecodeVectorTileRegion$' -benchmem ./mobile
 ```
+
+Large JSON and GeoJSON API responses use pooled, best-speed gzip when the
+client accepts it. Responses below 1 KiB normally stay uncompressed; only that small
+prefix is buffered. Binary tiles, range/HEAD responses, existing encodings,
+ETags, declared trailers and `Cache-Control: no-transform` keep their original
+representation. Encoding negotiation preserves `Vary` and handler headers.
+An explicit preference for identity is respected; when identity is forbidden,
+eligible JSON uses gzip even below the threshold. If neither available
+representation is acceptable, the API returns an empty 406 response.
+The included 2,000-feature GeoJSON fixture goes from 232,773 to 11,614 wire
+bytes; compression adds CPU work and this is not a network-latency benchmark.
+
+The raster/WMS proxy combines simultaneous misses for the same source and
+z/x/y into one disk read or upstream fetch. Each caller can cancel independently;
+the last cancellation stops the shared download. Cache files are published by
+atomic rename. Responses with Content-Length allocate one body buffer; both
+declared and actual sizes must fit the 8 MiB tile limit. A 24-caller test verifies
+one upstream fetch. Warm in-memory hits decreased from 376 B / 11 allocations
+to 64 B / 4; a 64-KiB disk read from 74,440 B / 7 to 65,944 B / 5.
+
+The proxy owns a cloned transport with at least 32 idle connections per host,
+preserving the configured proxy, TLS, dialer and HTTP/2 settings. `Close` releases
+its idle connections. This idle-pool size does not limit active requests.
+
+Remote AI requests use typed payloads and reuse clients with the existing
+timeouts and shared transport. Known-length responses avoid `ReadAll`'s growing
+buffers; oversized replies are rejected rather than truncated. Small HTTP error
+responses are drained to permit connection reuse. AI/Wikipedia error draining
+has byte and time limits. In the synthetic 35-KiB AI-response benchmark,
+allocations decreased from 87 to 44 for Ollama and 91 to 48 for OpenAI-compatible
+requests; this does not include provider processing or real network traffic.
+
+These choices follow Go's [Client/Transport reuse and timeout contracts](https://pkg.go.dev/net/http#Client),
+HTTP [encoding negotiation and Vary](https://www.rfc-editor.org/rfc/rfc9110.html#section-12.5.3),
+and [no-transform](https://www.rfc-editor.org/rfc/rfc9111.html#section-5.2.2.6).
+AI POSTs keep a single application-level attempt, consistent with
+[HTTP's retry rules](https://www.rfc-editor.org/rfc/rfc9110.html#section-9.2.2).
+Tests cover failure, cancellation, connection reuse and two concurrent tile
+bursts. Modern Go transports can also drain small bodies automatically on close;
+the explicit error-body helper sets a controlled byte/time budget and is not
+evidence that every older error path opened a new TCP connection.
+
+```sh
+go test ./cmd -run '^$' -bench 'Benchmark(TileProxyMemoryHit|TileDiskCacheRead|RemoteAIRequests|JSONResponseCompression)$' -benchmem
+```
+
+Offline OSM data is prepared from regional PBF extracts and local tinyTiles,
+following the [OSM data-download guidance](https://wiki.openstreetmap.org/wiki/Downloading_data).
+Public `tile.openstreetmap.org` tiles remain browser-direct; the proxy rejects
+that host regardless of map type, including cached responses. Offline/prefetch
+downloads from that service are prohibited by its [Tile Usage Policy](https://operations.osmfoundation.org/policies/tiles/).
+New region directories include `NOTICE.txt` with map-data attribution and ODbL
+links so the notice travels with the database, as described by the
+[OSMF attribution guidelines](https://osmfoundation.org/wiki/Attribution_Guidelines).
+
+The current routing importer has these limits; the performance changes do not
+add full OSM routing semantics:
+
+| Area | Current coverage and remaining work |
+| --- | --- |
+| Access and modes | A shared road graph applies coarse `access`, `vehicle`, `motor_vehicle` and `hgv` exclusions at import. Specific foot/bicycle/motorcar overrides, conditional access and many foot/cycle paths require a mode-aware import model. |
+| Direction and turns | Explicit one-way values and implicit roundabouts are supported. Mode-specific one-way exceptions and OSM `no_*`/`only_*` restriction relations are not imported; angle penalties do not enforce those relations. |
+| Extract boundaries | Missing endpoint references are skipped, and routing stays inside one package. Import diagnostics and cross-package graph links remain work. |
+
+The relevant source semantics are [access precedence](https://wiki.openstreetmap.org/wiki/Computing_access_restrictions),
+[oneway](https://wiki.openstreetmap.org/wiki/Key:oneway) and
+[turn restrictions](https://wiki.openstreetmap.org/wiki/Restriction_type).
+Prepared graphs retain their imported directions. Import into a new destination
+to apply changed import rules; old published packages remain readable. Pending
+imports carry a separate import revision so old completed phases cannot silently
+override a corrected graph-building rule.
+`created_at` records import time, not OSM data freshness; `source_sha256` identifies
+the input snapshot. Automatic replication/diff updates are not implemented.
 
 ## Development
 

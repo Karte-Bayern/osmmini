@@ -23,6 +23,23 @@ import (
 
 const FormatVersion = 1
 
+// Import semantics may change without changing the readable region format.
+// Never mix checkpoints from different graph-building rules.
+const importRevision = 2
+
+const regionDataNotice = `Map data © OpenStreetMap contributors.
+
+The OpenStreetMap data in this offline region is available under the
+Open Database License (ODbL) 1.0:
+https://www.openstreetmap.org/copyright
+https://opendatacommons.org/licenses/odbl/1-0/
+
+This region contains graph, search and map data derived from the supplied
+OpenStreetMap extract. Its source SHA-256 and import time are in manifest.json.
+Keep this notice when copying or distributing the region directory.
+Software licensing is separate from this map-data notice.
+`
+
 type Manifest struct {
 	Format       int               `json:"format"`
 	Name         string            `json:"name"`
@@ -130,10 +147,10 @@ func Import(ctx context.Context, o ImportOptions, progress func(Progress)) (Mani
 	if err = os.MkdirAll(stage, 0o700); err != nil {
 		return manifest, err
 	}
-	signature := fmt.Sprintf("%s:%d:%d:%d", sourceHash, o.MinZoom, o.MaxZoom, FormatVersion)
+	signature := fmt.Sprintf("%s:%d:%d:%d:%d", sourceHash, o.MinZoom, o.MaxZoom, FormatVersion, importRevision)
 	signaturePath := filepath.Join(stage, "source")
 	if b, e := os.ReadFile(signaturePath); e == nil && string(b) != signature {
-		return manifest, errors.New("pending import belongs to another source/options; select a new destination")
+		return manifest, errors.New("pending import belongs to another source/options/import version; select a new destination")
 	}
 	if err = os.WriteFile(signaturePath, []byte(signature), 0o600); err != nil {
 		return manifest, err
@@ -202,6 +219,11 @@ func Import(ctx context.Context, o ImportOptions, progress func(Progress)) (Mani
 	}
 	if currentHash != sourceHash {
 		return manifest, errors.New("PBF changed during import; choose a new workspace")
+	}
+	// The data directory can be copied independently of the SDK or demo. Keep
+	// attribution and the data licence with that portable database as well.
+	if err = writeSynced(filepath.Join(stage, "NOTICE.txt"), []byte(regionDataNotice)); err != nil {
+		return manifest, err
 	}
 	b, _ := json.MarshalIndent(manifest, "", "  ")
 	if err = writeSynced(filepath.Join(stage, "manifest.json"), b); err != nil {

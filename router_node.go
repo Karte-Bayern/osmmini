@@ -30,6 +30,8 @@ func (r *Router) nodeSearch(ctx context.Context, from, to int64, opt RouteOption
 	if opt.Engine != EngineDijkstraNode && r.g.degree(from) == 0 {
 		return nil, 0, ErrRouteStartUnreachable
 	}
+	eval := newRouteEvaluator(opt)
+	heuristic := newRouteHeuristic(target, opt)
 	dist := make(map[int64]float64, min(64, r.NodeCount()))
 	var prev map[int64]int64
 	if wantPath {
@@ -37,7 +39,7 @@ func (r *Router) nodeSearch(ctx context.Context, from, to int64, opt RouteOption
 	}
 	dist[from] = 0
 	pq := nodeValueHeap{}
-	pq.push(nodeCandidate{id: from, dist: 0, priority: r.heuristicTo(from, target, opt)})
+	pq.push(nodeCandidate{id: from, dist: 0, priority: heuristic.estimate(r, from)})
 	for pops := 0; len(pq) > 0; pops++ {
 		if ctx != nil && pops%256 == 0 {
 			if err := ctx.Err(); err != nil {
@@ -64,10 +66,10 @@ func (r *Router) nodeSearch(ctx context.Context, from, to int64, opt RouteOption
 		}
 		for it := r.g.edges(current.id); it.next(); {
 			edge := it.edge()
-			if !edgeAllowed(edge, opt) {
+			if !eval.edgeAllowed(edge) {
 				continue
 			}
-			cost := current.dist + r.edgeCost(edge, opt)
+			cost := current.dist + eval.edgeCost(r, edge)
 			if old, exists := dist[edge.To]; exists && cost >= old {
 				continue
 			}
@@ -75,7 +77,7 @@ func (r *Router) nodeSearch(ctx context.Context, from, to int64, opt RouteOption
 			if wantPath {
 				prev[edge.To] = current.id
 			}
-			pq.push(nodeCandidate{id: edge.To, dist: cost, priority: cost + r.heuristicTo(edge.To, target, opt)})
+			pq.push(nodeCandidate{id: edge.To, dist: cost, priority: cost + heuristic.estimate(r, edge.To)})
 		}
 	}
 	return nil, 0, ErrRouteNoPath

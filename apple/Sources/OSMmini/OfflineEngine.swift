@@ -30,16 +30,11 @@ private enum Native {
   struct Envelope<T: Decodable>: Decodable {
     let state: String?, error: String?, progress: ImportProgress?, result: T?
   }
-  static func data(_ pointer: UnsafeMutablePointer<CChar>?) throws -> Data {
-    guard let pointer else { throw OSMminiError.invalidResponse }
-    defer { OSMminiFree(pointer) }
-    return Data(String(cString: pointer).utf8)
-  }
   // Blocking native calls and JSON decoding use a GCD worker, never Swift's
   // main actor or cooperative executor. Cancellation drains the Go job before
   // releasing it, including cancellation that races with successful opening.
   static func perform<T: Decodable & Sendable>(
-    _ request: Data, takingEngine: Bool = false,
+    _ request: NativeRequest, takingEngine: Bool = false,
     progress: (@Sendable (ImportProgress) -> Void)? = nil
   ) async throws -> (T, UInt64) {
     guard OSMminiABIVersion() == 1 else { throw OSMminiError.incompatibleABI }
@@ -50,10 +45,13 @@ private enum Native {
         DispatchQueue.global(qos: .userInitiated).async {
           do {
             let decoder = JSONDecoder()
-            let input = String(decoding: request, as: UTF8.self)
-            let started = try input.withCString { ptr in
-              try decoder.decode(
-                Start.self, from: data(OSMminiStart(UnsafeMutablePointer(mutating: ptr))))
+            var input = try JSONEncoder().encode(request)
+            input.append(0)
+            let started = try input.withUnsafeMutableBytes { bytes in
+              guard let base = bytes.baseAddress else { throw OSMminiError.invalidResponse }
+              return try decoder.decode(
+                Start.self,
+                from: NativeJSONBuffer.take(OSMminiStart(base.assumingMemoryBound(to: CChar.self))))
             }
             guard let id = started.operation else {
               throw OSMminiError.native(started.error ?? "Could not start native job")
@@ -62,7 +60,8 @@ private enum Native {
             defer { OSMminiRelease(id) }
             var previousProgress: ImportProgress?
             while true {
-              let envelope = try decoder.decode(Envelope<T>.self, from: data(OSMminiWait(id, 100)))
+              let envelope = try decoder.decode(
+                Envelope<T>.self, from: NativeJSONBuffer.take(OSMminiWait(id, 100)))
               guard let state = envelope.state, ["running", "failed", "complete"].contains(state)
               else { throw OSMminiError.native(envelope.error ?? "Unknown native operation state") }
               if let p = envelope.progress, p != previousProgress {
@@ -88,12 +87,6 @@ private enum Native {
       cancellation.cancel()
     }
   }
-  static func request(_ values: [String: Any]) throws -> Data {
-    try JSONSerialization.data(withJSONObject: values)
-  }
-  static func object<T: Encodable>(_ value: T) throws -> Any {
-    try JSONSerialization.jsonObject(with: JSONEncoder().encode(value))
-  }
 }
 
 /// Independent region instance. Native handles are protected by Go; queries may
@@ -115,12 +108,12 @@ public final class OfflineEngine: Sendable {
     progress: (@Sendable (ImportProgress) -> Void)? = nil
   ) async throws -> RegionManifest {
     let (result, _): (RegionManifest, UInt64) = try await Native.perform(
-      Native.request(["action": "import", "import": Native.object(options)]), progress: progress)
+      NativeRequest(action: "import", importOptions: options), progress: progress)
     return result
   }
   public static func open(_ directory: URL) async throws -> OfflineEngine {
     let (manifest, handle): (RegionManifest, UInt64) = try await Native.perform(
-      Native.request(["action": "open", "path": directory.path]), takingEngine: true)
+      NativeRequest(action: "open", path: directory.path), takingEngine: true)
     guard handle != 0 else { throw OSMminiError.invalidResponse }
     if Task.isCancelled {
       OSMminiClose(handle)
@@ -130,17 +123,17 @@ public final class OfflineEngine: Sendable {
   }
   public func search(_ query: String, limit: Int = 20) async throws -> [SearchResult] {
     let (value, _): ([SearchResult], UInt64) = try await Native.perform(
-      Native.request(["action": "search", "engine": handle, "query": query, "limit": limit]))
+      NativeRequest(action: "search", engine: handle, query: query, limit: limit))
     return value
   }
   public func route(_ request: RouteRequest) async throws -> Route {
     let (value, _): (Route, UInt64) = try await Native.perform(
-      Native.request(["action": "route", "engine": handle, "route": Native.object(request)]))
+      NativeRequest(action: "route", engine: handle, route: request))
     return value
   }
   public func tile(z: Int, x: Int, y: Int) async throws -> VectorTile {
     let (value, _): (VectorTile, UInt64) = try await Native.perform(
-      Native.request(["action": "tile", "engine": handle, "z": z, "x": x, "y": y]))
+      NativeRequest(action: "tile", engine: handle, z: z, x: x, y: y))
     return value
   }
   public func close() async {
