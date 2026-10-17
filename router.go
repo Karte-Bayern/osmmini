@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -288,6 +289,7 @@ type Edge struct {
 }
 
 type Graph struct {
+	store  *diskGraph
 	coords map[int64]Coord
 	adj    map[int64][]Edge
 }
@@ -327,6 +329,11 @@ type mapLabelCandidate struct {
 
 // BuildOptions controls router graph extraction.
 type BuildOptions struct {
+	// SkipAddresses is useful for importers that build a separate disk search index.
+	SkipAddresses bool
+	// MaxNodes limits coordinates retained during import; zero is unlimited.
+	MaxNodes      int
+	Context       context.Context
 	Window        *CoordWindow
 	WindowBufferM float64
 }
@@ -347,12 +354,17 @@ func BuildRouterWithAddressesOptions(path string, bo BuildOptions) (*Router, []A
 		filterWin = &w
 	}
 
-	coordsAll := make(map[int64]Coord, 1<<20)
+	initialNodes := 1 << 20
+	if bo.MaxNodes > 0 {
+		initialNodes = min(1<<16, bo.MaxNodes)
+	}
+	coordsAll := make(map[int64]Coord, initialNodes)
 	addrs := make([]AddressEntry, 0, 1<<16)
 	highways := make([]highwayWay, 0, 1<<18)
 	streets := make(map[string]streetEntry, 1<<18)
 
 	opts := Options{
+		Context:             bo.Context,
 		EmitWayNodeIDs:      true,
 		EmitRelationMembers: false,
 		KeepTag: func(k string) bool {
@@ -376,6 +388,9 @@ func BuildRouterWithAddressesOptions(path string, bo BuildOptions) (*Router, []A
 			c := Coord{Lat: lat, Lon: lon}
 			if filterWin != nil && !filterWin.Contains(c) {
 				return nil
+			}
+			if bo.MaxNodes > 0 && len(coordsAll) >= bo.MaxNodes {
+				return fmt.Errorf("graph import exceeds %d nodes; choose a smaller region or increase MaxNodes", bo.MaxNodes)
 			}
 			coordsAll[id] = c
 			return nil
@@ -440,6 +455,9 @@ func BuildRouterWithAddressesOptions(path string, bo BuildOptions) (*Router, []A
 		},
 	}
 
+	if bo.SkipAddresses {
+		cb.AddressNode = nil
+	}
 	if err := ExtractFile(path, opts, cb); err != nil {
 		return nil, nil, err
 	}
@@ -456,7 +474,12 @@ func BuildRouterWithAddressesOptions(path string, bo BuildOptions) (*Router, []A
 		})
 	}
 
-	for _, hw := range highways {
+	for wi, hw := range highways {
+		if wi%4096 == 0 && bo.Context != nil {
+			if err := bo.Context.Err(); err != nil {
+				return nil, nil, err
+			}
+		}
 		ids := hw.nodes
 		for i := 0; i < len(ids)-1; i++ {
 			aID := ids[i]
@@ -484,9 +507,14 @@ func BuildRouterWithAddressesOptions(path string, bo BuildOptions) (*Router, []A
 
 	// prune coords to nodes that actually have edges
 	coords := make(map[int64]Coord, len(adj))
-	for id := range adj {
-		if c, ok := coordsAll[id]; ok && len(adj[id]) > 0 {
+	for id, edges := range adj {
+		if c, ok := coordsAll[id]; ok {
 			coords[id] = c
+		}
+		for _, edge := range edges {
+			if c, ok := coordsAll[edge.To]; ok {
+				coords[edge.To] = c
+			}
 		}
 	}
 
@@ -574,6 +602,9 @@ func NewRouterFromGraph(coords map[int64]Coord, adj map[int64][]Edge) *Router {
 // WebAssembly clients). The returned maps are references into the
 // router's internal graph; callers should not modify them.
 func (r *Router) ExportGraph() (map[int64]Coord, map[int64][]Edge) {
+	if r.g.store != nil {
+		return r.g.store.export()
+	}
 	return r.g.coords, r.g.adj
 }
 
@@ -584,9 +615,17 @@ func (r *Router) Bounds() (CoordWindow, bool) {
 	return *r.bounds, true
 }
 
-func (r *Router) NodeCount() int { return len(r.g.coords) }
+func (r *Router) NodeCount() int {
+	if r.g.store != nil {
+		return r.g.store.nodes
+	}
+	return len(r.g.coords)
+}
 
 func (r *Router) EdgeCount() int {
+	if r.g.store != nil {
+		return r.g.store.edgeCount
+	}
 	n := 0
 	for _, es := range r.g.adj {
 		n += len(es)
@@ -595,14 +634,14 @@ func (r *Router) EdgeCount() int {
 }
 
 func (r *Router) Coord(id int64) (Coord, bool) {
-	c, ok := r.g.coords[id]
+	c, ok := r.g.coord(id)
 	return c, ok
 }
 
 func (r *Router) CoordsForPath(path []int64) []Coord {
 	coords := make([]Coord, 0, len(path))
 	for _, id := range path {
-		if c, ok := r.g.coords[id]; ok {
+		if c, ok := r.g.coord(id); ok {
 			coords = append(coords, c)
 		}
 	}
@@ -616,7 +655,7 @@ func (r *Router) StreetNode(street string) (int64, bool) {
 	}
 	if se, ok := r.streets[key]; ok {
 		for _, id := range se.NodeIDs {
-			if _, ok := r.g.coords[id]; ok {
+			if _, ok := r.g.coord(id); ok {
 				return id, true
 			}
 		}
@@ -664,7 +703,7 @@ func (r *Router) StreetLabels(window CoordWindow, limit int) []MapLabel {
 	for x := minX; x <= maxX; x++ {
 		for y := minY; y <= maxY; y++ {
 			for _, ref := range r.streetLabelCells[cellKey(x, y)] {
-				coord, ok := r.g.coords[ref.nodeID]
+				coord, ok := r.g.coord(ref.nodeID)
 				if !ok || !window.Contains(coord) {
 					continue
 				}
@@ -693,7 +732,7 @@ func (r *Router) streetLabelsScan(window CoordWindow, center Coord, limit int) [
 		var best Coord
 		bestDist := math.Inf(1)
 		for _, id := range entry.NodeIDs {
-			coord, ok := r.g.coords[id]
+			coord, ok := r.g.coord(id)
 			if !ok || !window.Contains(coord) {
 				continue
 			}
@@ -807,7 +846,7 @@ func (r *Router) SearchStreets(q string, limit int) []StreetMatch {
 	out := make([]StreetMatch, 0, len(sc))
 	for _, m := range sc {
 		for _, id := range m.e.NodeIDs {
-			if c, ok := r.g.coords[id]; ok {
+			if c, ok := r.g.coord(id); ok {
 				out = append(out, StreetMatch{Name: m.e.Display, NodeID: id, Coord: c})
 				break
 			}
@@ -855,7 +894,7 @@ func ParseAddressGuess(raw string) AddressQuery {
 		q.Street = strings.TrimSpace(parts[0])
 		q.City = strings.TrimSpace(parts[1])
 	}
-	fields := strings.Fields(strings.NewReplacer(",", " ", ";", " ").Replace(raw))
+	fields := strings.Fields(addressSeparators.Replace(raw))
 	for _, f := range fields {
 		if len(f) == 5 && allDigits(f) {
 			q.Postcode = f
@@ -950,94 +989,7 @@ func normalizeAddressQuery(q AddressQuery) normalizedAddressQuery {
 }
 
 func matchScoreNormalized(e AddressEntry, q normalizedAddressQuery) int {
-	// Normalize each relevant address field at most once. The former scorer
-	// repeatedly normalized the same query and tag values for every comparison,
-	// which dominated type-ahead latency on regional address datasets.
-	street := normalize(e.Tags["addr:street"])
-	house := normalize(e.Tags["addr:housenumber"])
-	postcode := normalize(e.Tags["addr:postcode"])
-	city := normalize(e.Tags["addr:city"])
-	place := normalize(e.Tags["addr:place"])
-	name := normalize(e.Tags["name"])
-	brand := normalize(e.Tags["brand"])
-	operator := normalize(e.Tags["operator"])
-	shop := normalize(e.Tags["shop"])
-	office := normalize(e.Tags["office"])
-	amenity := normalize(e.Tags["amenity"])
-	tourism := normalize(e.Tags["tourism"])
-	leisure := normalize(e.Tags["leisure"])
-	equal := func(value, query string) bool { return query != "" && value == query }
-	contains := func(value, query string) bool { return value != "" && query != "" && strings.Contains(value, query) }
-
-	score := 0
-	if equal(street, q.street) {
-		score += 3
-	}
-	if equal(house, q.housenumber) {
-		score += 4
-	}
-	if equal(postcode, q.postcode) {
-		score += 2
-	}
-	if q.city != "" {
-		if equal(city, q.city) || equal(place, q.city) {
-			score += 1
-		}
-	}
-	if q.raw != "" {
-		switch {
-		case equal(name, q.raw):
-			score += 6
-		case contains(name, q.raw):
-			score += 3
-		}
-		switch {
-		case equal(brand, q.raw), equal(operator, q.raw):
-			score += 4
-		case contains(brand, q.raw), contains(operator, q.raw):
-			score += 2
-		}
-		switch {
-		case equal(shop, q.raw), equal(office, q.raw), equal(amenity, q.raw), equal(tourism, q.raw), equal(leisure, q.raw):
-			score += 3
-		case contains(shop, q.raw), contains(office, q.raw), contains(amenity, q.raw), contains(tourism, q.raw), contains(leisure, q.raw):
-			score += 1
-		}
-		if equal(street, q.raw) {
-			score += 4
-		} else if contains(street, q.raw) {
-			score += 1
-		}
-		if equal(city, q.raw) || equal(place, q.raw) {
-			score += 3
-		}
-	}
-	// If street/address matching didn't produce a high score, also try matching
-	// common POI/company tags so users can search by firm/shop names.
-	if q.street != "" {
-		// exact name match (high relevance)
-		if equal(name, q.street) {
-			score += 5
-		} else if contains(name, q.street) {
-			score += 2
-		}
-		// other common business tags
-		if equal(brand, q.street) || equal(operator, q.street) {
-			score += 3
-		} else if contains(brand, q.street) || contains(operator, q.street) {
-			score += 1
-		}
-		if equal(shop, q.street) || equal(office, q.street) || equal(amenity, q.street) {
-			score += 2
-		} else if contains(shop, q.street) || contains(office, q.street) || contains(amenity, q.street) {
-			score += 1
-		}
-		// fallback: partial street match as before
-		if score == 0 && contains(street, q.street) {
-			score += 1
-		}
-	}
-	return score
+	return normalizedAddressFieldsFromTags(e.Tags, q).score(q)
 }
 
 func equalNorm(a, b string) bool { return normalize(a) == normalize(b) }
@@ -1049,6 +1001,10 @@ func containsNorm(haystack, needle string) bool {
 }
 
 func SearchAddresses(entries []AddressEntry, q AddressQuery, limit int) []AddressEntry {
+	return searchAddressEntries(entries, normalizeAddressQuery(q), limit, func(i int, q normalizedAddressQuery) int { return matchScoreNormalized(entries[i], q) })
+}
+
+func searchAddressEntries(entries []AddressEntry, query normalizedAddressQuery, limit int, score func(int, normalizedAddressQuery) int) []AddressEntry {
 	type scored struct {
 		e AddressEntry
 		s int
@@ -1065,12 +1021,11 @@ func SearchAddresses(entries []AddressEntry, q AddressQuery, limit int) []Addres
 	// the work for a large regional address index.
 	sc := make([]scored, 0, limit)
 	allResults := limit == len(entries)
-	query := normalizeAddressQuery(q)
 	better := func(a, b scored) bool {
 		return a.s > b.s || (a.s == b.s && a.e.ID < b.e.ID)
 	}
-	for _, e := range entries {
-		s := matchScoreNormalized(e, query)
+	for i, e := range entries {
+		s := score(i, query)
 		if s <= 0 {
 			continue
 		}
@@ -1154,8 +1109,8 @@ func (r *Router) RouteCostWithOptions(ctx context.Context, from, to int64, opt R
 		return 0, ErrRouteEngineUnsupported
 	}
 	opt = opt.withDefaults()
-	if opt.Engine == EngineDijkstraNode {
-		_, cost, err := r.dijkstraNodeSearch(ctx, from, to, opt, false)
+	if opt.Engine == EngineDijkstraNode || !needsTurnState(opt) {
+		_, cost, err := r.nodeSearch(ctx, from, to, opt, false)
 		return cost, err
 	}
 	_, cost, _, err := r.astar(ctx, from, to, opt, false)
@@ -1172,8 +1127,8 @@ func (r *Router) RouteWithOptions(ctx context.Context, from, to int64, opt Route
 		return RouteResult{}, ErrRouteEngineUnsupported
 	}
 	opt = opt.withDefaults()
-	if opt.Engine == EngineDijkstraNode {
-		path, cost, err := r.dijkstraNode(ctx, from, to, opt)
+	if opt.Engine == EngineDijkstraNode || !needsTurnState(opt) {
+		path, cost, err := r.nodeSearch(ctx, from, to, opt, true)
 		if err != nil {
 			return RouteResult{}, err
 		}
@@ -1358,6 +1313,9 @@ type chData struct {
 // Deprecated: RouteWithOptions rejects EngineCH because this graph lacks the
 // shortcuts needed for correct shortest paths.
 func (r *Router) BuildCH() {
+	if r.g.store != nil {
+		return
+	}
 	ndeg := make(map[int64]int32, len(r.g.adj))
 	for id, es := range r.g.adj {
 		ndeg[id] = int32(len(es))
@@ -1524,121 +1482,14 @@ func (r *Router) dijkstraNode(ctx context.Context, from, to int64, opt RouteOpti
 }
 
 func (r *Router) dijkstraNodeSearch(ctx context.Context, from, to int64, opt RouteOptions, wantPath bool) ([]int64, float64, error) {
-	if from == to {
-		return []int64{from}, 0, nil
-	}
-	if _, ok := r.g.coords[from]; !ok {
-		return nil, 0, ErrRouteStartUnreachable
-	}
-	if _, ok := r.g.coords[to]; !ok {
-		return nil, 0, ErrRouteTargetUnreachable
-	}
-
-	// use a small slice-backed priority queue for nodes
-	pq := make([]*dijkstraItem, 0)
-	push := func(it *dijkstraItem) {
-		heap.Push(&pqWrapper{&pq}, it)
-	}
-	pop := func() *dijkstraItem {
-		if len(pq) == 0 {
-			return nil
-		}
-		it := heap.Pop(&pqWrapper{&pq}).(*dijkstraItem)
-		return it
-	}
-
-	// dist/prev are populated lazily (absent == infinity/unvisited) instead
-	// of pre-filling every node in the loaded graph up front -- with a
-	// region-sized graph (millions of nodes) that upfront pass dwarfed the
-	// actual search, since a typical route only ever touches a small
-	// fraction of the graph. Same lazy convention the turn-aware A* already
-	// uses for its gScore map.
-	dist := make(map[int64]float64, min(1024, len(r.g.coords)))
-	var prev map[int64]int64
-	if wantPath {
-		prev = make(map[int64]int64, min(1024, len(r.g.coords)))
-	}
-	dist[from] = 0
-	push(&dijkstraItem{id: from, dist: 0})
-
-	for len(pq) > 0 {
-		if ctx != nil {
-			select {
-			case <-ctx.Done():
-				return nil, 0, ctx.Err()
-			default:
-			}
-		}
-		it := pop()
-		if it == nil {
-			break
-		}
-		u := it.id
-		if d, ok := dist[u]; !ok || it.dist != d {
-			continue // stale
-		}
-		if u == to {
-			break
-		}
-		for _, e := range r.g.adj[u] {
-			if !edgeAllowed(e, opt) {
-				continue
-			}
-			v := e.To
-			alt := dist[u] + r.edgeCost(e, opt)
-			if d, ok := dist[v]; !ok || alt < d {
-				dist[v] = alt
-				if wantPath {
-					prev[v] = u
-				}
-				push(&dijkstraItem{id: v, dist: alt})
-			}
-		}
-	}
-
-	if _, ok := dist[to]; !ok {
-		return nil, 0, ErrRouteNoPath
-	}
-	if !wantPath {
-		return nil, dist[to], nil
-	}
-	// reconstruct path
-	path := make([]int64, 0)
-	for cur := to; ; {
-		path = append(path, cur)
-		if cur == from {
-			break
-		}
-		p, ok := prev[cur]
-		if !ok {
-			return nil, 0, ErrRouteNoPath
-		}
-		cur = p
-	}
-	// reverse
-	slices.Reverse(path)
-	return path, dist[to], nil
+	opt.Engine = EngineDijkstraNode
+	return r.nodeSearch(ctx, from, to, opt, wantPath)
 }
 
 // dijkstraItem is a small heap entry used by the node-Dijkstra implementation.
 type dijkstraItem struct {
 	id   int64
 	dist float64
-}
-
-// pqWrapper adapts a []*dijkstraItem slice to heap.Interface for dijkstraNode.
-type pqWrapper struct{ s *[]*dijkstraItem }
-
-func (w pqWrapper) Len() int           { return len(*w.s) }
-func (w pqWrapper) Less(i, j int) bool { return (*w.s)[i].dist < (*w.s)[j].dist }
-func (w pqWrapper) Swap(i, j int)      { (*w.s)[i], (*w.s)[j] = (*w.s)[j], (*w.s)[i] }
-func (w *pqWrapper) Push(x any)        { *w.s = append(*w.s, x.(*dijkstraItem)) }
-func (w *pqWrapper) Pop() any {
-	old := *w.s
-	n := len(old)
-	it := old[n-1]
-	*w.s = old[:n-1]
-	return it
 }
 
 func (r *Router) computeMetrics(path []int64, opt RouteOptions) (distM, durS float64) {
@@ -1657,11 +1508,11 @@ func (r *Router) computeMetrics(path []int64, opt RouteOptions) (distM, durS flo
 }
 
 func (r *Router) edgeBetween(from, to int64) (Edge, bool) {
-	es := r.g.adj[from]
 	best := Edge{}
 	found := false
 	bestD := math.MaxFloat64
-	for _, e := range es {
+	for it := r.g.edges(from); it.next(); {
+		e := it.edge()
 		if e.To != to {
 			continue
 		}
@@ -1682,32 +1533,9 @@ type turnState struct {
 }
 
 type pqItem struct {
-	s   turnState
-	f   float64
-	g   float64
-	idx int
-}
-
-type priorityQueue []*pqItem
-
-func (pq priorityQueue) Len() int           { return len(pq) }
-func (pq priorityQueue) Less(i, j int) bool { return pq[i].f < pq[j].f }
-func (pq priorityQueue) Swap(i, j int) {
-	pq[i], pq[j] = pq[j], pq[i]
-	pq[i].idx = i
-	pq[j].idx = j
-}
-func (pq *priorityQueue) Push(x any) {
-	it := x.(*pqItem)
-	it.idx = len(*pq)
-	*pq = append(*pq, it)
-}
-func (pq *priorityQueue) Pop() any {
-	old := *pq
-	n := len(old)
-	it := old[n-1]
-	*pq = old[:n-1]
-	return it
+	s turnState
+	f float64
+	g float64
 }
 
 func (r *Router) astar(ctx context.Context, from, to int64, opt RouteOptions, wantPath bool) (goal turnState, goalCost float64, came map[turnState]turnState, err error) {
@@ -1717,29 +1545,30 @@ func (r *Router) astar(ctx context.Context, from, to int64, opt RouteOptions, wa
 		}
 		return turnState{prev: 0, cur: from}, 0, came, nil
 	}
-	if _, ok := r.g.coords[from]; !ok {
+	if _, ok := r.g.coord(from); !ok {
 		return turnState{}, 0, nil, ErrRouteStartUnreachable
 	}
-	if _, ok := r.g.coords[to]; !ok {
+	target, ok := r.g.coord(to)
+	if !ok {
 		return turnState{}, 0, nil, ErrRouteTargetUnreachable
 	}
-	if len(r.g.adj[from]) == 0 {
+	if r.g.degree(from) == 0 {
 		return turnState{}, 0, nil, ErrRouteStartUnreachable
 	}
 
 	if wantPath {
-		came = make(map[turnState]turnState, min(1024, len(r.g.coords)))
+		came = make(map[turnState]turnState, min(64, r.NodeCount()))
 	}
 
 	start := turnState{prev: 0, cur: from}
-	gScore := make(map[turnState]float64, min(1024, len(r.g.coords)))
+	gScore := make(map[turnState]float64, min(64, r.NodeCount()))
 	gScore[start] = 0
 
-	pq := priorityQueue{}
-	heap.Push(&pq, &pqItem{s: start, g: 0, f: r.heuristic(from, to, opt)})
+	pq := routeValueHeap{}
+	pq.push(pqItem{s: start, g: 0, f: r.heuristicTo(from, target, opt)})
 
 	pops := 0
-	for pq.Len() > 0 {
+	for len(pq) > 0 {
 		pops++
 		if ctx != nil && pops%1024 == 0 {
 			select {
@@ -1749,7 +1578,7 @@ func (r *Router) astar(ctx context.Context, from, to int64, opt RouteOptions, wa
 			}
 		}
 
-		curIt := heap.Pop(&pq).(*pqItem)
+		curIt := pq.pop()
 		curS := curIt.s
 
 		if best, ok := gScore[curS]; ok && curIt.g > best {
@@ -1760,7 +1589,8 @@ func (r *Router) astar(ctx context.Context, from, to int64, opt RouteOptions, wa
 			return curS, curIt.g, came, nil
 		}
 
-		for _, e := range r.g.adj[curS.cur] {
+		for it := r.g.edges(curS.cur); it.next(); {
+			e := it.edge()
 			if !edgeAllowed(e, opt) {
 				continue
 			}
@@ -1779,8 +1609,8 @@ func (r *Router) astar(ctx context.Context, from, to int64, opt RouteOptions, wa
 				came[nextS] = curS
 			}
 
-			h := r.heuristic(next, to, opt)
-			heap.Push(&pq, &pqItem{s: nextS, g: tent, f: tent + h})
+			h := r.heuristicTo(next, target, opt)
+			pq.push(pqItem{s: nextS, g: tent, f: tent + h})
 		}
 	}
 
@@ -1803,12 +1633,16 @@ func reconstructPathTurnState(goal turnState, came map[turnState]turnState) []in
 }
 
 func (r *Router) heuristic(from, to int64, opt RouteOptions) float64 {
-	if opt.Engine == EngineDijkstra {
+	b, _ := r.g.coord(to)
+	return r.heuristicTo(from, b, opt)
+}
+
+func (r *Router) heuristicTo(from int64, target Coord, opt RouteOptions) float64 {
+	if opt.Engine == EngineDijkstra || opt.Engine == EngineDijkstraNode {
 		return 0
 	}
-	a := r.g.coords[from]
-	b := r.g.coords[to]
-	d := haversineMeters(a.Lat, a.Lon, b.Lat, b.Lon)
+	a, _ := r.g.coord(from)
+	d := haversineMeters(a.Lat, a.Lon, target.Lat, target.Lon)
 
 	switch opt.Objective {
 	case ObjectiveDuration:
@@ -1827,7 +1661,7 @@ func (r *Router) heuristic(from, to int64, opt RouteOptions) float64 {
 func (r *Router) edgeCost(e Edge, opt RouteOptions) float64 {
 	cost := r.baseEdgeCost(e, opt)
 	if opt.TerritoryCost != nil {
-		if c, ok := r.g.coords[e.To]; ok {
+		if c, ok := r.g.coord(e.To); ok {
 			cost *= opt.TerritoryCost.factorFor(c)
 		}
 	}
@@ -1866,7 +1700,7 @@ func (r *Router) transitionPenalty(prev, cur, next int64, opt RouteOptions) floa
 		return 0
 	}
 	pen := 0.0
-	if (opt.Weights.Crossing > 0 || opt.Weights.TrafficLightPenalty > 0) && len(r.g.adj[cur]) > 2 {
+	if (opt.Weights.Crossing > 0 || opt.Weights.TrafficLightPenalty > 0) && r.g.degree(cur) > 2 {
 		if opt.Weights.Crossing > 0 {
 			pen += opt.Weights.Crossing
 		}
@@ -1911,9 +1745,9 @@ const (
 const noLeftTurnPenalty = 1e6
 
 func (r *Router) turnType(prev, cur, next int64) turnKind {
-	p, ok1 := r.g.coords[prev]
-	c, ok2 := r.g.coords[cur]
-	n, ok3 := r.g.coords[next]
+	p, ok1 := r.g.coord(prev)
+	c, ok2 := r.g.coord(cur)
+	n, ok3 := r.g.coord(next)
 	if !ok1 || !ok2 || !ok3 {
 		return turnStraight
 	}
@@ -2122,14 +1956,22 @@ func (r *Router) NearestNode(lat, lon float64) (int64, float64, bool) {
 	best := math.MaxFloat64
 
 	scanCell := func(ix, iy int32) {
-		ids := r.idx.cells[cellKey(ix, iy)]
-		for _, id := range ids {
-			c := r.g.coords[id]
+		visit := func(id int64) {
+			c, _ := r.g.coord(id)
 			d := haversineMeters(lat, lon, c.Lat, c.Lon)
 			if d < best {
 				best = d
 				bestID = id
 			}
+		}
+		if r.g.store != nil {
+			for it := r.g.store.cellNodesIter(cellKey(ix, iy)); it.next(); {
+				visit(it.nodeID())
+			}
+			return
+		}
+		for _, id := range r.idx.cells[cellKey(ix, iy)] {
+			visit(id)
 		}
 	}
 
@@ -2150,14 +1992,18 @@ func (r *Router) NearestNode(lat, lon float64) (int64, float64, bool) {
 			}
 		}
 		if bestID != 0 {
-			metersPerDeg := 111320.0 * math.Abs(math.Cos(deg2rad(lat)))
-			if metersPerDeg > 0 {
-				minPossible := float64(radius+1) * r.idx.cellSize * metersPerDeg
+			// Use the actual query's distance to the searched rectangle. The
+			// nearest node can lie across a cell boundary even when the current
+			// cell already contains a point less than one cell-width away.
+			latGap := math.Min(lat-(r.idx.minLat+float64(ix0-radius)*r.idx.cellSize), r.idx.minLat+float64(ix0+radius+1)*r.idx.cellSize-lat)
+			lonGap := math.Min(lon-(r.idx.minLon+float64(iy0-radius)*r.idx.cellSize), r.idx.minLon+float64(iy0+radius+1)*r.idx.cellSize-lon)
+			if latGap > 0 && lonGap > 0 {
+				const earthRadius = 6371000.0
+				toMeridian := math.Asin(math.Min(1, math.Abs(math.Cos(deg2rad(lat))*math.Sin(deg2rad(lonGap))))) * earthRadius
+				minPossible := math.Min(deg2rad(latGap)*earthRadius, toMeridian)
 				if minPossible > best {
 					break
 				}
-			} else if radius >= 8 {
-				break
 			}
 		}
 	}
@@ -2171,16 +2017,13 @@ func (r *Router) NearestNode(lat, lon float64) (int64, float64, bool) {
 func (r *Router) nearestNodeBrute(lat, lon float64) (int64, float64, bool) {
 	var bestID int64
 	best := math.MaxFloat64
-	for id, c := range r.g.coords {
-		if len(r.g.adj[id]) == 0 {
-			continue
-		}
+	r.g.eachRoutableNode(func(id int64, c Coord) {
 		d := haversineMeters(lat, lon, c.Lat, c.Lon)
 		if d < best {
 			best = d
 			bestID = id
 		}
-	}
+	})
 	if best == math.MaxFloat64 {
 		return 0, 0, false
 	}
@@ -2464,10 +2307,25 @@ func haversineMeters(lat1, lon1, lat2, lon2 float64) float64 {
 	const R = 6371000.0
 	dLat := deg2rad(lat2 - lat1)
 	dLon := deg2rad(lon2 - lon1)
-	a := math.Sin(dLat/2)*math.Sin(dLat/2) +
-		math.Cos(deg2rad(lat1))*math.Cos(deg2rad(lat2))*math.Sin(dLon/2)*math.Sin(dLon/2)
+	sinLat, sinLon := math.Sin(dLat/2), math.Sin(dLon/2)
+	a := sinLat*sinLat + math.Cos(deg2rad(lat1))*math.Cos(deg2rad(lat2))*sinLon*sinLon
 	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
 	return R * c
 }
 
 func deg2rad(d float64) float64 { return d * math.Pi / 180 }
+
+// AllStreets returns one representative per named street for offline indexing.
+func (r *Router) AllStreets() []StreetMatch {
+	out := make([]StreetMatch, 0, len(r.streets))
+	for _, e := range r.streets {
+		for _, id := range e.NodeIDs {
+			if c, ok := r.Coord(id); ok {
+				out = append(out, StreetMatch{Name: e.Display, NodeID: id, Coord: c})
+				break
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}

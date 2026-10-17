@@ -1234,6 +1234,7 @@ func (c *aiProbeCache) invalidate() {
 type server struct {
 	router        *osmmini.Router
 	addrs         []osmmini.AddressEntry
+	addressIndex  *osmmini.AddressIndex
 	startedAt     time.Time
 	settings      *SettingsStore
 	tiles         *TileCache
@@ -1377,6 +1378,7 @@ func main() {
 	// build the routing graph (e.g. a regional extract). If the file
 	// is missing the server will fail to build the router.
 	pbf := flag.String("pbf", "region.osm.pbf", "Path to OSM PBF")
+	addressIndex := flag.Bool("address-index", false, "Pre-normalize address search fields for repeated queries (uses additional memory)")
 	listen := flag.String("listen", ":8080", "HTTP listen address")
 	settingsPath := flag.String("settings", "settings.json", "Settings JSON file")
 	tilesDir := flag.String("tiles-dir", "tiles-cache", "Tile cache directory")
@@ -1483,6 +1485,10 @@ func main() {
 		log.Printf("Graph bounds: lat[%.6f..%.6f] lon[%.6f..%.6f]", b.MinLat, b.MaxLat, b.MinLon, b.MaxLon)
 	}
 	log.Printf("Graph ready: nodes=%d edges=%d addresses=%d", r.NodeCount(), r.EdgeCount(), len(addrs))
+	var preparedAddresses *osmmini.AddressIndex
+	if *addressIndex {
+		preparedAddresses = osmmini.NewAddressIndex(addrs)
+	}
 
 	tileCache := NewTileCache(store.Get().Tiles)
 	rCache := newRouteCache(5*time.Minute, routeCacheDefaultMaxItems)
@@ -1494,6 +1500,7 @@ func main() {
 	srv := &server{
 		router:                  r,
 		addrs:                   addrs,
+		addressIndex:            preparedAddresses,
 		startedAt:               time.Now(),
 		settings:                store,
 		tiles:                   tileCache,
@@ -2454,7 +2461,7 @@ func (s *server) handleAgentQuery(w http.ResponseWriter, r *http.Request) {
 		// search addresses using existing helpers
 		matches := []osmmini.AddressEntry{}
 		aq := osmmini.ParseAddressGuess(place)
-		matches = osmmini.SearchAddresses(s.addrs, aq, 200)
+		matches = s.searchAddresses(aq, 200)
 
 		// fuzzy fallback over address names/brands
 		if len(matches) == 0 {
@@ -3105,7 +3112,7 @@ func (s *server) searchLocationResults(raw string, limit int) []apiSearchResult 
 	out := make([]apiSearchResult, 0, limit)
 	seen := make(map[searchResultKey]struct{}, limit)
 
-	addrMatches := osmmini.SearchAddresses(s.addrs, aq, min(limit*2, 50))
+	addrMatches := s.searchAddresses(aq, min(limit*2, 50))
 	for _, m := range addrMatches {
 		if s.window != nil && !s.window.Contains(m.Coord) {
 			continue
@@ -4154,7 +4161,7 @@ func (s *server) resolveLocation(loc Location) (osmmini.Coord, string, string, e
 	lookup := locationSearchQuery(raw)
 	q := osmmini.ParseAddressGuess(lookup)
 	if airportHint(raw) && munichHint(raw) {
-		airportCandidates := osmmini.SearchAddresses(s.addrs, q, 20)
+		airportCandidates := s.searchAddresses(q, 20)
 		munichCandidates := make([]osmmini.AddressEntry, 0, len(airportCandidates))
 		for _, c := range airportCandidates {
 			if containsMunichInTags(c.Tags) {
@@ -4188,7 +4195,7 @@ func (s *server) resolveLocation(loc Location) (osmmini.Coord, string, string, e
 			Suggestions: s.buildLocationSuggestions(raw, 6),
 		}
 	}
-	if addr, ok := osmmini.FindBestAddress(s.addrs, q); ok {
+	if addr, ok := s.findBestAddress(q); ok {
 		if s.enforceWindow && s.window != nil && !s.window.Contains(addr.Coord) {
 			return osmmini.Coord{}, "", "", errors.New("outside configured window")
 		}
@@ -4781,7 +4788,7 @@ func (s *server) handleAIQuery(w http.ResponseWriter, r *http.Request) {
 		// If we didn't handle a POI keyword specifically, fall back to structured address search
 		if !isPOIHandled {
 			aq := osmmini.ParseAddressGuess(place)
-			matches = osmmini.SearchAddresses(s.addrs, aq, 50)
+			matches = s.searchAddresses(aq, 50)
 		}
 
 		// If no structured matches, try fuzzy name/brand scan over addresses

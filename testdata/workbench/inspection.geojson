@@ -1,0 +1,8 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {"type": "Feature", "id": "A", "properties": {"code": "001", "name": "Wartung Nord", "zone": "north", "minutes": 45, "checked": false}, "geometry": {"type": "Point", "coordinates": [13.455, 48.577]}},
+    {"type": "Feature", "id": "B", "properties": {"code": "002", "name": "Wartung Süd", "zone": "south", "minutes": 60, "checked": true}, "geometry": {"type": "Point", "coordinates": [13.456, 48.567]}},
+    {"type": "Feature", "id": "C", "properties": {"code": "003", "name": "Kontrollstrecke", "zone": "north", "minutes": 30, "checked": false}, "geometry": {"type": "LineString", "coordinates": [[13.453, 48.574], [13.454, 48.57401], [13.455, 48.574], [13.456, 48.575]]}}
+  ]
+}

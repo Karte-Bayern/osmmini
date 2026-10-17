@@ -110,5 +110,20 @@ check-js: ## Validate the browser JavaScript syntax (requires Node.js).
 	node --check cmd/web/map-renderer.js
 	node --check cmd/web/offline-style.js
 
+.PHONY: build-apple build-apple-macos test-apple check-mobile
+build-apple: ## Build the Swift XCFramework for iPhone, Simulator and Mac (requires Xcode).
+	bash bindings/apple/build-xcframework.sh all
+
+build-apple-macos: ## Build a macOS-only Swift XCFramework for development.
+	bash bindings/apple/build-xcframework.sh macos
+
+test-apple: build-apple-macos ## Run the native Swift integration tests on macOS.
+	swift test --package-path apple
+
+check-mobile: ## Test the offline Go library without SQLite or cgo.
+	CGO_ENABLED=0 $(GO) test . ./mobile
+	@mkdir -p "$(BIN_DIR)"
+	CGO_ENABLED=0 $(GO) build -o "$(BIN_DIR)/prepare-region" ./cmd/prepare-region
+
 clean: ## Remove locally built binaries.
 	rm -rf "$(BIN_DIR)"

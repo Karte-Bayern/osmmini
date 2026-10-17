@@ -20,7 +20,7 @@ func BenchmarkSearchAddressesTopK(b *testing.B) {
 	for _, i := range []int{17, 12_345, 36_789} {
 		entries[i].Tags["addr:street"] = "Hauptstraße"
 	}
-	query := ParseAddressGuess("Hauptstraße Musterstadt")
+	query := AddressQuery{Street: "Hauptstraße", City: "Musterstadt"}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

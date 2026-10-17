@@ -27,3 +27,14 @@ confidential-objects.json
 geodata-tiles/
 ROADMAP.md
 .claude
+
+# Apple SDK build products. Keep generated native binaries out of source control.
+apple/COSMmini.xcframework/
+apple/.build/
+apple/.swiftpm/
+.build/
+.swiftpm/
+bindings/apple/build/
+*.xcuserstate
+xcuserdata/
+!apple/Tests/OSMminiTests/Fixtures/region.osm.pbf

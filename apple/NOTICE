@@ -1,0 +1,18 @@
+The new OSMmini mobile, C bridge and Apple SDK/demo components are distributed
+under AGPL-3.0-only, matching their tinySQL/tinyTiles dependencies. The full
+license is in apple/LICENSE. This notice does not relicense pre-existing files
+elsewhere in the repository.
+
+Dependencies are resolved from the repository's pinned go.mod/go.sum. The Apple
+build omits the sqliteimport tag and does not link modernc.org/sqlite. Pure Go
+does not mean dependency-free: tinySQL/tinyTiles and their selected Go packages
+still have licenses and notices. Preserve applicable upstream notices when
+redistributing native archives. The Go runtime is included in the archive.
+
+Map data © OpenStreetMap contributors, available under ODbL 1.0:
+https://www.openstreetmap.org/copyright
+Downloads are obtained from Geofabrik's public OSM extract service:
+https://download.geofabrik.de/
+
+This project is not affiliated with or endorsed by Apple, OpenStreetMap or
+Geofabrik. The demo displays OSM attribution with its local map.

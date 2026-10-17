@@ -1,0 +1,4 @@
+module COSMmini {
+    header "osmmini.h"
+    export *
+}

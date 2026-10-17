@@ -1,0 +1,28 @@
+// !$*UTF8*$!
+{
+ archiveVersion = 1;
+ classes = {};
+ objectVersion = 60;
+ objects = {
+  A00000000000000000000001 = {isa = PBXBuildFile; fileRef = A00000000000000000000002; };
+  A00000000000000000000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OSMminiDemo.swift; sourceTree = "<group>"; };
+  A00000000000000000000003 = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OSMminiDemo.app; sourceTree = BUILT_PRODUCTS_DIR; };
+  A00000000000000000000004 = {isa = PBXBuildFile; productRef = A00000000000000000000005; };
+  A00000000000000000000005 = {isa = XCSwiftPackageProductDependency; package = A00000000000000000000006; productName = OSMmini; };
+  A00000000000000000000006 = {isa = XCLocalSwiftPackageReference; relativePath = ..; };
+  A00000000000000000000007 = {isa = PBXGroup; children = (A00000000000000000000002, A00000000000000000000008); sourceTree = "<group>"; };
+  A00000000000000000000008 = {isa = PBXGroup; children = (A00000000000000000000003); name = Products; sourceTree = "<group>"; };
+  A00000000000000000000009 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000001); runOnlyForDeploymentPostprocessing = 0; };
+  A0000000000000000000000A = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (A00000000000000000000004); runOnlyForDeploymentPostprocessing = 0; };
+  A0000000000000000000000B = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+  A0000000000000000000000C = {isa = PBXNativeTarget; buildConfigurationList = A0000000000000000000000D; buildPhases = (A00000000000000000000009, A0000000000000000000000A, A0000000000000000000000B); buildRules = (); dependencies = (); name = OSMminiDemo; packageProductDependencies = (A00000000000000000000005); productName = OSMminiDemo; productReference = A00000000000000000000003; productType = "com.apple.product-type.application"; };
+  A0000000000000000000000D = {isa = XCConfigurationList; buildConfigurations = (A0000000000000000000000E, A0000000000000000000000F); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+  A0000000000000000000000E = {isa = XCBuildConfiguration; buildSettings = { CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 17.0; MACOSX_DEPLOYMENT_TARGET = 14.0; PRODUCT_BUNDLE_IDENTIFIER = de.simonwaldherr.osmmini.demo; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = auto; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx"; SWIFT_VERSION = 6.0; TARGETED_DEVICE_FAMILY = "1,2"; ENABLE_APP_SANDBOX = YES; ENABLE_USER_SELECTED_FILES = readwrite; ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES; }; name = Debug; };
+  A0000000000000000000000F = {isa = XCBuildConfiguration; buildSettings = { CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = Info.plist; IPHONEOS_DEPLOYMENT_TARGET = 17.0; MACOSX_DEPLOYMENT_TARGET = 14.0; PRODUCT_BUNDLE_IDENTIFIER = de.simonwaldherr.osmmini.demo; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = auto; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx"; SWIFT_VERSION = 6.0; SWIFT_OPTIMIZATION_LEVEL = "-O"; TARGETED_DEVICE_FAMILY = "1,2"; ENABLE_APP_SANDBOX = YES; ENABLE_USER_SELECTED_FILES = readwrite; ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES; }; name = Release; };
+  A00000000000000000000010 = {isa = PBXProject; attributes = { BuildIndependentTargetsInParallel = YES; LastUpgradeCheck = 1600; }; buildConfigurationList = A00000000000000000000011; compatibilityVersion = "Xcode 15.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, de, Base); mainGroup = A00000000000000000000007; packageReferences = (A00000000000000000000006); productRefGroup = A00000000000000000000008; projectDirPath = ""; projectRoot = ""; targets = (A0000000000000000000000C); };
+  A00000000000000000000011 = {isa = XCConfigurationList; buildConfigurations = (A00000000000000000000012, A00000000000000000000013); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+  A00000000000000000000012 = {isa = XCBuildConfiguration; buildSettings = { CLANG_ENABLE_MODULES = YES; ONLY_ACTIVE_ARCH = YES; SWIFT_VERSION = 6.0; }; name = Debug; };
+  A00000000000000000000013 = {isa = XCBuildConfiguration; buildSettings = { CLANG_ENABLE_MODULES = YES; SWIFT_VERSION = 6.0; }; name = Release; };
+ };
+ rootObject = A00000000000000000000010;
+}

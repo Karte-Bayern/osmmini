@@ -1,0 +1,11 @@
+{
+  "resources": [
+    {"id": "electrical-team", "location": {"lat": 48.57, "lon": 13.46}, "capacity": 240, "max_jobs": 6, "skills": ["electrician", "inspection"]},
+    {"id": "water-team", "location": {"lat": 48.58, "lon": 13.45}, "capacity": 180, "max_jobs": 4, "skills": ["water", "inspection"]}
+  ],
+  "jobs": [
+    {"id": "electrical-repair", "location": {"lat": 48.575, "lon": 13.465}, "demand": 90, "priority": 10, "required_skills": ["electrician"]},
+    {"id": "water-inspection", "location": {"lat": 48.585, "lon": 13.455}, "demand": 45, "required_skills": ["water", "inspection"]},
+    {"id": "roof-inspection", "location": {"lat": 48.59, "lon": 13.46}, "demand": 60, "required_skills": ["roofing"]}
+  ]
+}

@@ -28,6 +28,10 @@ service.
   distance or duration, with turn-by-turn directions
 - Trip solver for up to 60 stops with dependencies ("A before B") and vehicle
   capacity; up to 16 stops are solved exactly
+- Multi-resource work planning for deliveries, maintenance teams and municipal
+  services: priority, cumulative capacity, required skills and territory rules;
+  available through `dispatch plan`, Go and `POST /api/v1/dispatch/plan`
+  ([examples and Fleetbase lessons](docs/work-planning.md))
 - **Route export as GPX** (for sat navs and GPS apps) **or GeoJSON** (for GIS
   tools), available in the UI, through the API and on the command line
 
@@ -44,6 +48,9 @@ service.
 - POI export (viewport or radius) as GeoJSON and distance measurement
 - Import of GeoJSON, KML/KMZ and Shapefile layers; territory layers with lookup
   and CSV assignment
+- Browser-local **GIS workbench** with an attribute table, typed attribute edits,
+  filters, CSV joins, line simplification, undo and GeoJSON/CSV export
+  ([guide and sample files](docs/gis-workbench.md))
 - OSM-Edit: a draft editor for nodes, ways and relations that exports `.osc`
   change files and never uploads anything itself
 - Delivery-proof, maintenance and status log with barcode scanning and CSV
@@ -458,6 +465,51 @@ User=osmmini
 
 [Install]
 WantedBy=multi-user.target
+```
+
+## Native Apple SDK and offline demo
+
+The same Go core can be embedded in iPhone, iPad and macOS applications through
+an importable Swift 6 package. The native demo includes Geofabrik region downloads,
+local PBF import, persistent offline maps/search/routing, and GPX/GeoJSON export.
+Build with `make build-apple`, then open
+`apple/Demo/OSMminiDemo.xcodeproj`. See [Apple SDK setup, integration and current
+limits](apple/README.md). No SQLite driver is linked by this build.
+
+`CGO_ENABLED=0 go run ./cmd/prepare-region -pbf region.osm.pbf -output regions/local`
+prepares the same portable region format on a server or Mac.
+
+### Shared Go core performance
+
+Server and Swift use the same optimized PBF decoder and routing algorithms.
+Without transition penalties, A*/Dijkstra keep one search state per node;
+configured turn/crossing penalties retain the turn-aware search. Both paths
+use value heaps, and short queries start with small search maps. File-backed
+graphs retain format `OSMMGR01`; existing offline regions remain readable.
+
+The reusable `osmmini.NewAddressIndex(entries)` prepares search fields once
+and supports concurrent `Search`/`FindBest` queries. The HTTP server enables
+it with `-address-index`. It is opt-in because it retains additional RAM;
+input tag maps must remain read-only until the index is discarded.
+
+Allocation comparisons on an M2 Max, using the included synthetic benchmarks:
+
+| Operation | Before | After |
+| --- | ---: | ---: |
+| A* cost, 40,000-node grid | 14,009,616 B | 2,387,232 B |
+| A* cost, adjacent nodes | 54,736 B | 2,416 B |
+| Decode 8,000 untagged DenseNodes | 1,439,872 B | 0 B |
+| Mobile multiword search, 20,000 POIs | 100,368 allocations | 8 allocations |
+| Repeated address search, 50,000 entries | 100,004 allocations | 4 allocations with AddressIndex |
+
+These are allocated bytes/counts **per call**, not process RSS or peak import
+memory. AddressIndex construction additionally allocated about 4.91 MB for the
+50,000-entry fixture. CPU timings were affected by substantial simulator load;
+physical-iPhone and large-region measurements remain separate validation work.
+
+```sh
+go test -run '^$' -bench 'Benchmark(Route|ShortRoute|DenseNodes|PBFWay|AddressIndex|SearchAddresses|FileGraph)' -benchmem .
+go test -run '^$' -bench 'BenchmarkMobile(Search|Normalize)' -benchmem ./mobile
 ```
 
 ## Development

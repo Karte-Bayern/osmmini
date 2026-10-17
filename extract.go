@@ -46,6 +46,11 @@ func Extract(r io.Reader, opts Options, cb Callbacks) error {
 	br := bufio.NewReaderSize(r, 1<<20)
 
 	for {
+		if opts.Context != nil {
+			if err := opts.Context.Err(); err != nil {
+				return err
+			}
+		}
 		typ, raw, err := readNextBlock(br)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
@@ -296,7 +301,8 @@ func processOSMData(raw []byte, wantHighway, wantNode, wantAddrWay, wantTaggedWa
 		lonOffset:   0,
 	}
 
-	var groups [][]byte
+	var groupBuf [1][]byte
+	groups := groupBuf[:0]
 
 	i := 0
 	for i < len(raw) {
@@ -425,6 +431,11 @@ func parseStringTable(raw []byte) ([]string, error) {
 func processPrimitiveGroup(raw []byte, ctx blockCtx, wantHighway, wantNode, wantAddrWay, wantTaggedWay, wantAddrRel, wantTaggedRel bool, opts Options, cb Callbacks) error {
 	i := 0
 	for i < len(raw) {
+		if opts.Context != nil {
+			if err := opts.Context.Err(); err != nil {
+				return err
+			}
+		}
 		tag, err := readUvarint(raw, &i)
 		if err != nil {
 			return err
@@ -508,8 +519,8 @@ func processNode(raw []byte, ctx blockCtx, opts Options, cb Callbacks) error {
 	// }
 	var id int64
 	var lat, lon int64
-	var keysSegs [][]byte
-	var valsSegs [][]byte
+	var keysBuf, valsBuf [1][]byte
+	keysSegs, valsSegs := keysBuf[:0], valsBuf[:0]
 
 	i := 0
 	for i < len(raw) {
@@ -636,83 +647,38 @@ func processNode(raw []byte, ctx blockCtx, opts Options, cb Callbacks) error {
 }
 
 func processDenseNodes(raw []byte, ctx blockCtx, opts Options, cb Callbacks) error {
-	// message DenseNodes {
-	//   repeated sint64 id = 1 [packed=true]; // DELTA
-	//   repeated sint64 lat = 8 [packed=true]; // DELTA
-	//   repeated sint64 lon = 9 [packed=true]; // DELTA
-	//   repeated int32 keys_vals = 10 [packed=true];
-	// }
-	var idDeltas []int64
-	var latDeltas []int64
-	var lonDeltas []int64
-	var keysVals []int32
-
+	// Keep packed data in the immutable block and decode each delta directly.
+	// Most files have one packed field per stream; the inline buffers avoid
+	// allocating even the segment directory in that common case.
+	var idBuf, latBuf, lonBuf, kvBuf [1][]byte
+	idSegs, latSegs, lonSegs, kvSegs := idBuf[:0], latBuf[:0], lonBuf[:0], kvBuf[:0]
+	wantTags := cb.AddressNode != nil || cb.TaggedNode != nil
 	i := 0
 	for i < len(raw) {
 		tag, err := readUvarint(raw, &i)
 		if err != nil {
 			return err
 		}
-		field := int(tag >> 3)
-		wire := int(tag & 7)
-
+		field, wire := int(tag>>3), int(tag&7)
 		switch field {
-		case 1: // id deltas
+		case 1, 8, 9, 10:
 			if wire != 2 {
-				return fmt.Errorf("DenseNodes.id: wrong wire=%d", wire)
+				return fmt.Errorf("DenseNodes field %d: wrong wire=%d", field, wire)
 			}
 			b, err := readBytes(raw, &i)
 			if err != nil {
 				return err
 			}
-			vals, err := decodePackedSint64(b)
-			if err != nil {
-				return err
+			switch field {
+			case 1:
+				idSegs = append(idSegs, b)
+			case 8:
+				latSegs = append(latSegs, b)
+			case 9:
+				lonSegs = append(lonSegs, b)
+			case 10:
+				kvSegs = append(kvSegs, b)
 			}
-			idDeltas = append(idDeltas, vals...)
-
-		case 8: // lat deltas
-			if wire != 2 {
-				return fmt.Errorf("DenseNodes.lat: wrong wire=%d", wire)
-			}
-			b, err := readBytes(raw, &i)
-			if err != nil {
-				return err
-			}
-			vals, err := decodePackedSint64(b)
-			if err != nil {
-				return err
-			}
-			latDeltas = append(latDeltas, vals...)
-
-		case 9: // lon deltas
-			if wire != 2 {
-				return fmt.Errorf("DenseNodes.lon: wrong wire=%d", wire)
-			}
-			b, err := readBytes(raw, &i)
-			if err != nil {
-				return err
-			}
-			vals, err := decodePackedSint64(b)
-			if err != nil {
-				return err
-			}
-			lonDeltas = append(lonDeltas, vals...)
-
-		case 10: // keys_vals
-			if wire != 2 {
-				return fmt.Errorf("DenseNodes.keys_vals: wrong wire=%d", wire)
-			}
-			b, err := readBytes(raw, &i)
-			if err != nil {
-				return err
-			}
-			vals, err := decodePackedInt32(b)
-			if err != nil {
-				return err
-			}
-			keysVals = append(keysVals, vals...)
-
 		default:
 			if err := skipField(wire, raw, &i); err != nil {
 				return err
@@ -720,110 +686,122 @@ func processDenseNodes(raw []byte, ctx blockCtx, opts Options, cb Callbacks) err
 		}
 	}
 
-	n := len(idDeltas)
+	// Validate coordinates before invoking callbacks, as the materialized
+	// decoder did. Counting requires no decoded arrays and no retained memory.
+	n, err := packedValueCount(idSegs)
+	if err != nil {
+		return err
+	}
+	latCount, err := packedValueCount(latSegs)
+	if err != nil {
+		return err
+	}
+	lonCount, err := packedValueCount(lonSegs)
+	if err != nil {
+		return err
+	}
+	if _, err := packedValueCount(kvSegs); err != nil {
+		return err
+	}
 	if n == 0 {
 		return nil
 	}
-	if len(latDeltas) != n || len(lonDeltas) != n {
-		return fmt.Errorf("DenseNodes length mismatch: ids=%d lat=%d lon=%d", n, len(latDeltas), len(lonDeltas))
+	if latCount != n || lonCount != n {
+		return fmt.Errorf("DenseNodes length mismatch: ids=%d lat=%d lon=%d", n, latCount, lonCount)
 	}
 
-	kvIdx := 0
+	ids, lats, lons := packedCursor{segs: idSegs}, packedCursor{segs: latSegs}, packedCursor{segs: lonSegs}
+	kv := packedCursor{segs: kvSegs}
 	var idAcc, latAcc, lonAcc int64
-
 	for idx := 0; idx < n; idx++ {
-		idAcc += idDeltas[idx]
-		latAcc += latDeltas[idx]
-		lonAcc += lonDeltas[idx]
-
+		if idx&1023 == 0 && opts.Context != nil {
+			if err := opts.Context.Err(); err != nil {
+				return err
+			}
+		}
+		id, _, _ := ids.next() // Coordinate streams were validated above.
+		lat, _, _ := lats.next()
+		lon, _, _ := lons.next()
+		idAcc += zigzagDecode64(id)
+		latAcc += zigzagDecode64(lat)
+		lonAcc += zigzagDecode64(lon)
 		latDeg, lonDeg := decodeCoord(latAcc, lonAcc, ctx)
-
-		// Node callback is independent of AddressNode.
 		if cb.Node != nil {
 			if err := cb.Node(idAcc, latDeg, lonDeg); err != nil {
 				return err
 			}
 		}
-
-		if cb.AddressNode == nil && cb.TaggedNode == nil {
-			continue
-		}
-		if kvIdx >= len(keysVals) {
+		if !wantTags {
 			continue
 		}
 
-		if keysVals[kvIdx] == 0 {
-			kvIdx++
-			continue
-		}
-
-		pairs := make([][2]int32, 0, 8)
+		// Scan tags once for callback selection. Replaying the compact cursor
+		// below avoids allocating a temporary slice of every key/value pair.
+		tagStart := kv
+		pairCount := 0
 		isAddr := false
 		taggedCandidate := cb.TaggedNode != nil && opts.TaggedNodeKey == nil
-
 		for {
-			if kvIdx >= len(keysVals) {
-				return fmt.Errorf("DenseNodes.keys_vals: unexpected end")
+			key, ok, err := kv.next()
+			if err != nil {
+				return err
 			}
-			k := keysVals[kvIdx]
-			kvIdx++
+			if !ok {
+				if pairCount != 0 {
+					return fmt.Errorf("DenseNodes.keys_vals: unexpected end")
+				}
+				break // An omitted keys_vals stream means no tags.
+			}
+			k := int32(key)
 			if k == 0 {
 				break
 			}
-			if kvIdx >= len(keysVals) {
+			if _, ok, err = kv.next(); err != nil {
+				return err
+			} else if !ok {
 				return fmt.Errorf("DenseNodes.keys_vals: unexpected end after key")
 			}
-			v := keysVals[kvIdx]
-			kvIdx++
-
-			pairs = append(pairs, [2]int32{k, v})
-
-			if cb.AddressNode != nil && !isAddr && int(k) >= 0 && int(k) < len(ctx.st) {
-				if strings.HasPrefix(ctx.st[k], "addr:") {
-					isAddr = true
-				}
+			pairCount++
+			if k < 0 || int(k) >= len(ctx.st) {
+				continue
 			}
-			if cb.TaggedNode != nil && !taggedCandidate && opts.TaggedNodeKey != nil && int(k) >= 0 && int(k) < len(ctx.st) && opts.TaggedNodeKey(ctx.st[k]) {
+			keyName := ctx.st[k]
+			if cb.AddressNode != nil && !isAddr && strings.HasPrefix(keyName, "addr:") {
+				isAddr = true
+			}
+			if cb.TaggedNode != nil && !taggedCandidate && opts.TaggedNodeKey != nil && opts.TaggedNodeKey(keyName) {
 				taggedCandidate = true
 			}
 		}
-
-		if !isAddr && !taggedCandidate {
+		if pairCount == 0 || (!isAddr && !taggedCandidate) {
 			continue
 		}
 
-		tags := make(Tags, len(pairs))
-		for _, kv := range pairs {
-			ki := int(kv[0])
-			vi := int(kv[1])
-			if ki < 0 || ki >= len(ctx.st) || vi < 0 || vi >= len(ctx.st) {
+		tags := make(Tags, pairCount)
+		for pair := 0; pair < pairCount; pair++ {
+			key, _, _ := tagStart.next()
+			val, _, _ := tagStart.next()
+			ki, vi := int32(key), int32(val)
+			if ki < 0 || int(ki) >= len(ctx.st) || vi < 0 || int(vi) >= len(ctx.st) {
 				continue
 			}
 			k := ctx.st[ki]
-			if opts.KeepTag != nil && !opts.KeepTag(k) {
-				continue
+			if opts.KeepTag == nil || opts.KeepTag(k) {
+				tags[k] = ctx.st[vi]
 			}
-			tags[k] = ctx.st[vi]
 		}
-
-		n := Node{
-			ID:   idAcc,
-			Lat:  latDeg,
-			Lon:  lonDeg,
-			Tags: tags,
-		}
+		node := Node{ID: idAcc, Lat: latDeg, Lon: lonDeg, Tags: tags}
 		if isAddr && cb.AddressNode != nil {
-			if err := cb.AddressNode(n); err != nil {
+			if err := cb.AddressNode(node); err != nil {
 				return err
 			}
 		}
 		if taggedCandidate && len(tags) > 0 {
-			if err := cb.TaggedNode(n); err != nil {
+			if err := cb.TaggedNode(node); err != nil {
 				return err
 			}
 		}
 	}
-
 	return nil
 }
 
@@ -835,9 +813,8 @@ func processWay(raw []byte, ctx blockCtx, wantHighway, wantAddrWay bool, opts Op
 	//   repeated sint64 refs = 8 [packed=true]; // DELTA
 	// }
 	var id int64
-	var keysSegs [][]byte
-	var valsSegs [][]byte
-	var refsSegs [][]byte
+	var keysBuf, valsBuf, refsBuf [1][]byte
+	keysSegs, valsSegs, refsSegs := keysBuf[:0], valsBuf[:0], refsBuf[:0]
 
 	i := 0
 	for i < len(raw) {
@@ -968,11 +945,9 @@ func processRelation(raw []byte, ctx blockCtx, opts Options, cb Callbacks) error
 	//   repeated MemberType types = 10 [packed=true];
 	// }
 	var id int64
-	var keysSegs [][]byte
-	var valsSegs [][]byte
-	var rolesSegs [][]byte
-	var memidsSegs [][]byte
-	var typesSegs [][]byte
+	var keysBuf, valsBuf, rolesBuf, memidsBuf, typesBuf [1][]byte
+	keysSegs, valsSegs := keysBuf[:0], valsBuf[:0]
+	rolesSegs, memidsSegs, typesSegs := rolesBuf[:0], memidsBuf[:0], typesBuf[:0]
 
 	i := 0
 	for i < len(raw) {
@@ -1212,48 +1187,110 @@ func scanWayKeys(keysSegs [][]byte, st []string, wantHighway, wantAddr bool) (hi
 }
 
 func buildTags(keysSegs, valsSegs [][]byte, st []string, keep func(string) bool) (Tags, error) {
-	keys, err := decodePackedU32Segments(keysSegs)
-	if err != nil {
-		return nil, err
-	}
-	vals, err := decodePackedU32Segments(valsSegs)
-	if err != nil {
-		return nil, err
-	}
-
-	n := len(keys)
-	if len(vals) < n {
-		n = len(vals)
-	}
-	tags := make(Tags, n)
-
-	for i := 0; i < n; i++ {
-		ki := int(keys[i])
-		vi := int(vals[i])
+	keys, vals := packedCursor{segs: keysSegs}, packedCursor{segs: valsSegs}
+	tags := make(Tags)
+	for {
+		key, keyOK, err := keys.next()
+		if err != nil {
+			return nil, err
+		}
+		val, valOK, err := vals.next()
+		if err != nil {
+			return nil, err
+		}
+		if !keyOK || !valOK {
+			// Preserve validation of unmatched trailing keys and values.
+			for _, cursor := range []*packedCursor{&keys, &vals} {
+				for {
+					_, ok, err := cursor.next()
+					if err != nil {
+						return nil, err
+					}
+					if !ok {
+						break
+					}
+				}
+			}
+			return tags, nil
+		}
+		ki, vi := int(uint32(key)), int(uint32(val))
 		if ki < 0 || ki >= len(st) || vi < 0 || vi >= len(st) {
 			continue
 		}
 		k := st[ki]
-		if keep != nil && !keep(k) {
-			continue
+		if keep == nil || keep(k) {
+			tags[k] = st[vi]
 		}
-		tags[k] = st[vi]
 	}
-	return tags, nil
 }
 
 // ---- Refs / packed decoding ----
 
+// packedCursor walks repeated packed protobuf fields without materializing
+// their integer values. Copies are independent cursors into immutable input.
+// Varints must finish within their own packed field, including on replay.
+type packedCursor struct {
+	segs [][]byte
+	seg  int
+	pos  int
+}
+
+func (c *packedCursor) next() (uint64, bool, error) {
+	for c.seg < len(c.segs) {
+		seg := c.segs[c.seg]
+		if c.pos == len(seg) {
+			c.seg++
+			c.pos = 0
+			continue
+		}
+		if v := seg[c.pos]; v < 0x80 {
+			c.pos++
+			return uint64(v), true, nil
+		}
+		v, err := readUvarint(seg, &c.pos)
+		return v, err == nil, err
+	}
+	return 0, false, nil
+}
+
+func packedValueCount(segs [][]byte) (int, error) {
+	n := 0
+	for _, seg := range segs {
+		var shift uint
+		for _, c := range seg {
+			if c < 0x80 {
+				if shift == 63 && c > 1 {
+					return 0, fmt.Errorf("varint overflow")
+				}
+				n++
+				shift = 0
+				continue
+			}
+			shift += 7
+			if shift >= 64 {
+				return 0, fmt.Errorf("varint overflow")
+			}
+		}
+		if shift != 0 {
+			return 0, io.ErrUnexpectedEOF
+		}
+	}
+	return n, nil
+}
+
 func decodeWayRefs(refsSegs [][]byte) ([]int64, error) {
-	deltas, err := decodePackedSint64Segments(refsSegs)
+	n, err := packedValueCount(refsSegs)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]int64, 0, len(deltas))
+	out := make([]int64, 0, n)
 	var acc int64
-	for _, d := range deltas {
-		acc += d
-		out = append(out, acc)
+	for _, seg := range refsSegs {
+		for i := 0; i < len(seg); {
+			v, _ := readUvarint(seg, &i) // Validated while sizing the result.
+			acc += zigzagDecode64(v)
+			out = append(out, acc)
+		}
 	}
 	return out, nil
 }
@@ -1291,37 +1328,13 @@ func decodePackedInt32Segments(segs [][]byte) ([]int32, error) {
 func decodePackedSint64Segments(segs [][]byte) ([]int64, error) {
 	out := make([]int64, 0, 128)
 	for _, seg := range segs {
-		vals, err := decodePackedSint64(seg)
-		if err != nil {
-			return nil, err
+		for j := 0; j < len(seg); {
+			v, err := readUvarint(seg, &j)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, zigzagDecode64(v))
 		}
-		out = append(out, vals...)
-	}
-	return out, nil
-}
-
-func decodePackedSint64(seg []byte) ([]int64, error) {
-	out := make([]int64, 0, 128)
-	j := 0
-	for j < len(seg) {
-		v, err := readUvarint(seg, &j)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, zigzagDecode64(v))
-	}
-	return out, nil
-}
-
-func decodePackedInt32(seg []byte) ([]int32, error) {
-	out := make([]int32, 0, 128)
-	j := 0
-	for j < len(seg) {
-		v, err := readUvarint(seg, &j)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, int32(v))
 	}
 	return out, nil
 }
@@ -1346,7 +1359,7 @@ func readUvarint(b []byte, i *int) (uint64, error) {
 		c := b[*i]
 		*i++
 		if c < 0x80 {
-			if s >= 64 {
+			if s >= 64 || (s == 63 && c > 1) {
 				return 0, fmt.Errorf("varint overflow")
 			}
 			return x | uint64(c)<<s, nil

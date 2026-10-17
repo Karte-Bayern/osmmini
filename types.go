@@ -1,6 +1,9 @@
 package osmmini
 
-import "math"
+import (
+	"context"
+	"math"
+)
 
 // Tags represents OSM tags as a simple string map.
 type Tags map[string]string
@@ -104,6 +107,9 @@ type Relation struct {
 
 // Options configures Extract behaviour.
 type Options struct {
+	// Context cancels extraction between PBF blocks/entities and dense-node
+	// batches. Nil means no cancellation.
+	Context             context.Context
 	KeepTag             func(string) bool
 	EmitWayNodeIDs      bool
 	EmitRelationMembers bool

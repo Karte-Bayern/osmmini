@@ -1,0 +1,33 @@
+name: Apple SDK
+on:
+  pull_request:
+    paths: ['apple/**', 'bindings/**', 'mobile/**', '*.go', 'cmd/prepare-region/**', 'scripts/**', 'Package.swift', 'Makefile', 'go.mod', 'go.sum', '.github/workflows/apple.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  apple:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.2'
+          cache: true
+      - name: Toolchain versions
+        run: |
+          go version
+          xcodebuild -version
+          swift --version
+      - name: SQLite-free Go tests
+        run: make check-mobile
+      - name: Native job and handle race tests
+        run: go test -race ./bindings/c
+      - name: Build all Apple framework slices
+        run: make build-apple
+      - name: Swift integration tests
+        run: swift test --package-path apple
+      - name: iOS application build
+        run: xcodebuild -project apple/Demo/OSMminiDemo.xcodeproj -scheme OSMminiDemo -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build
+      - name: macOS application build
+        run: xcodebuild -project apple/Demo/OSMminiDemo.xcodeproj -scheme OSMminiDemo -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO build

@@ -1,0 +1,131 @@
+import Foundation
+
+public struct Coordinate: Codable, Sendable, Hashable {
+  public var lat: Double
+  public var lon: Double
+  public init(lat: Double, lon: Double) {
+    self.lat = lat
+    self.lon = lon
+  }
+}
+public struct RegionBounds: Codable, Sendable {
+  public let minLat: Double, maxLat: Double, minLon: Double, maxLon: Double
+  enum CodingKeys: String, CodingKey {
+    case minLat = "min_lat"
+    case maxLat = "max_lat"
+    case minLon = "min_lon"
+    case maxLon = "max_lon"
+  }
+  public var center: Coordinate {
+    Coordinate(lat: (minLat + maxLat) / 2, lon: (minLon + maxLon) / 2)
+  }
+}
+public struct RegionManifest: Codable, Sendable {
+  public let format: Int, name: String, nodes: Int, edges: Int
+  public let bounds: RegionBounds
+  public let minZoom: Int, maxZoom: Int
+  public let sourceSHA256: String
+  enum CodingKeys: String, CodingKey {
+    case format, name, nodes, edges, bounds
+    case minZoom = "min_zoom"
+    case maxZoom = "max_zoom"
+    case sourceSHA256 = "source_sha256"
+  }
+}
+public struct ImportProgress: Codable, Sendable, Equatable {
+  public let phase: String
+  public let fraction: Double
+}
+public struct ImportOptions: Codable, Sendable {
+  public var pbf: String, destination: String, name: String
+  public var minZoom = 5, maxZoom = 14, maxImportNodes = 8_000_000
+  public var tileMemoryBytes: Int64 = 256 * 1024 * 1024
+  public init(pbf: URL, destination: URL, name: String) {
+    self.pbf = pbf.path
+    self.destination = destination.path
+    self.name = name
+  }
+  enum CodingKeys: String, CodingKey {
+    case pbf, destination, name
+    case minZoom = "min_zoom"
+    case maxZoom = "max_zoom"
+    case maxImportNodes = "max_import_nodes"
+    case tileMemoryBytes = "tile_memory_bytes"
+  }
+}
+public struct SearchResult: Codable, Sendable, Identifiable {
+  public let id: Int64
+  public let kind: String, label: String
+  public let coordinate: Coordinate
+  public let category: String?
+  public var identity: String { "\(kind)/\(id)" }
+}
+public enum RoutingEngine: String, Codable, Sendable {
+  case astar, dijkstra
+  case dijkstraNode = "dijkstra-node"
+}
+public enum RouteObjective: String, Codable, Sendable { case distance, duration, economy }
+public enum VehicleProfile: String, Codable, Sendable {
+  case car, delivery, truck, travel, firefighting, emergency, thw, cycling, walking
+}
+public struct RouteOptions: Codable, Sendable {
+  public var engine: RoutingEngine = .astar
+  public var objective: RouteObjective = .distance
+  public var profile: VehicleProfile = .car
+  public init() {}
+}
+public struct RouteRequest: Codable, Sendable {
+  public var from: Coordinate, to: Coordinate
+  public var options: RouteOptions
+  public init(from: Coordinate, to: Coordinate, options: RouteOptions = RouteOptions()) {
+    self.from = from
+    self.to = to
+    self.options = options
+  }
+}
+public struct Maneuver: Codable, Sendable {
+  public let instruction: String
+  public let lat: Double, lon: Double
+}
+public struct Route: Codable, Sendable {
+  public let path: [Coordinate]
+  public let distanceM: Double, durationS: Double, fromSnapM: Double, toSnapM: Double
+  public let steps: [Maneuver]
+  enum CodingKeys: String, CodingKey {
+    case path, steps
+    case distanceM = "distance_m"
+    case durationS = "duration_s"
+    case fromSnapM = "from_snap_m"
+    case toSnapM = "to_snap_m"
+  }
+  public func geoJSON() throws -> Data {
+    try JSONSerialization.data(
+      withJSONObject: [
+        "type": "Feature", "properties": ["distance_m": distanceM, "duration_s": durationS],
+        "geometry": ["type": "LineString", "coordinates": path.map { [$0.lon, $0.lat] }],
+      ], options: [.sortedKeys])
+  }
+  public func gpx() -> Data {
+    let points = path.map { "<trkpt lat=\"\($0.lat)\" lon=\"\($0.lon)\"/>" }.joined()
+    return Data(
+      "<?xml version=\"1.0\" encoding=\"UTF-8\"?><gpx version=\"1.1\" creator=\"OSMmini\" xmlns=\"http://www.topografix.com/GPX/1/1\"><trk><name>OSMmini route</name><trkseg>\(points)</trkseg></trk></gpx>"
+        .utf8)
+  }
+}
+public struct VectorFeature: Codable, Sendable {
+  public let layer: String, kind: Int, extent: Int
+  public let `class`: String?, name: String?
+  public let paths: [[[Int]]]
+}
+public struct VectorTile: Codable, Sendable { public let features: [VectorFeature] }
+public enum OSMminiError: Error, LocalizedError, Sendable {
+  case native(String)
+  case incompatibleABI, invalidResponse
+  public var errorDescription: String? {
+    switch self {
+    case .native(let message): message
+    case .incompatibleABI: "Incompatible OSMmini native framework"
+    case .invalidResponse: "Invalid native response"
+    }
+  }
+}
