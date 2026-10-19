@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import OSMmini
 import Testing
 
 @testable import OSMminiDemoCLI
@@ -13,11 +14,11 @@ struct DemoRegionStorageTests {
 
   @discardableResult private func makeRegion(
     _ directory: URL, name: String = "Testregion", createdAt: String? = nil,
-    sourceSHA256: String = "abc", minZoom: Int = 5, maxZoom: Int = 14
+    sourceSHA256: String = "abc", minZoom: Int = 5, maxZoom: Int = 14, format: Int = 1
   ) throws -> Int64 {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     var manifest: [String: Any] = [
-      "format": 1, "name": name, "nodes": 3, "edges": 4,
+      "format": format, "name": name, "nodes": 3, "edges": 4,
       "bounds": ["min_lat": 48, "max_lat": 49, "min_lon": 12, "max_lon": 13],
       "min_zoom": minZoom, "max_zoom": maxZoom, "source_sha256": sourceSHA256,
     ]
@@ -52,6 +53,7 @@ struct DemoRegionStorageTests {
     #expect(stored.id == stored.directory)
     #expect(stored.name == "Testregion")
     #expect(stored.nodes == 3)
+    #expect(stored.format == 1)
     #expect(stored.byteCount == manifestBytes + 26)
     let expected = Date(timeIntervalSince1970: 1_792_397_730.1234567)
     #expect(abs(try #require(stored.importedAt).timeIntervalSince(expected)) < 0.001)
@@ -182,6 +184,42 @@ struct DemoRegionStorageTests {
     try content.write(to: source)
     #expect(
       try DemoRegionStorage.matchingRegion(for: source, in: root, minZoom: 5, maxZoom: 14) == nil)
+  }
+
+  @Test func compactReimportSkipsLegacyRegionAndReusesCurrentFormat() throws {
+    let root = try workspace()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let source = root.appendingPathComponent("source.osm.pbf")
+    let data = Data("same PBF content".utf8)
+    try data.write(to: source)
+    let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    let legacy = root.appendingPathComponent("legacy")
+    try makeRegion(legacy, sourceSHA256: digest)
+    #expect(try DemoRegionStorage.regions(in: root).count == 1)
+    let previous = root.appendingPathComponent("previous")
+    try makeRegion(previous, sourceSHA256: digest, format: 2)
+    try makeRegion(
+      root.appendingPathComponent("a-future"), sourceSHA256: digest,
+      format: RegionManifest.currentFormat + 1)
+    #expect(
+      try DemoRegionStorage.matchingRegion(
+        for: source, in: root, minZoom: 5, maxZoom: 14,
+        minimumFormat: RegionManifest.currentFormat) == nil)
+    let compact = root.appendingPathComponent("compact")
+    try makeRegion(compact, sourceSHA256: digest, format: RegionManifest.currentFormat)
+    #expect(
+      try DemoRegionStorage.regions(in: root).first {
+        $0.directory == compact.resolvingSymlinksInPath()
+      }?.format
+        == RegionManifest.currentFormat)
+    #expect(
+      try DemoRegionStorage.matchingRegion(
+        for: source, in: root, minZoom: 5, maxZoom: 14,
+        minimumFormat: RegionManifest.currentFormat) == compact.resolvingSymlinksInPath())
+    #expect(
+      FileManager.default.fileExists(atPath: legacy.appendingPathComponent("manifest.json").path))
+    #expect(
+      FileManager.default.fileExists(atPath: previous.appendingPathComponent("manifest.json").path))
   }
 
   @Test func matchingRegionIgnoresUnpublishedAndLinkedCandidates() throws {

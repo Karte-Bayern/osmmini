@@ -18,6 +18,7 @@ import Testing
   options.maxZoom = 14
   options.tileMemoryBytes = 64 * 1024 * 1024
   let manifest = try await OfflineEngine.importPBF(options)
+  #expect(manifest.format == RegionManifest.currentFormat)
   #expect(manifest.nodes == 3)
   let notice = try String(
     contentsOf: destination.appendingPathComponent("NOTICE.txt"), encoding: .utf8)

@@ -5,6 +5,7 @@ import OSMmini
 struct DemoStoredRegion: Identifiable, Sendable, Equatable {
   let directory: URL
   let name: String
+  let format: Int
   let nodes: Int
   /// Logical size of the region's regular files, including its manifest.
   let byteCount: Int64
@@ -25,6 +26,7 @@ enum DemoRegionStorage {
       return DemoStoredRegion(
         directory: directory.standardizedFileURL,
         name: manifest.region.name,
+        format: manifest.region.format,
         nodes: manifest.region.nodes,
         byteCount: try byteCount(in: directory),
         importedAt: manifest.importedAt)
@@ -46,7 +48,8 @@ enum DemoRegionStorage {
   /// Call from a worker, as with the other storage operations. Hashing retains
   /// at most one MiB of PBF data and checks cancellation between reads.
   static func matchingRegion(
-    for source: URL, in root: URL, minZoom: Int, maxZoom: Int
+    for source: URL, in root: URL, minZoom: Int, maxZoom: Int,
+    minimumFormat: Int = 1
   ) throws -> URL? {
     try Task.checkCancellation()
     let root = root.resolvingSymlinksInPath().standardizedFileURL
@@ -56,6 +59,8 @@ enum DemoRegionStorage {
     ).sorted { $0.path < $1.path }.compactMap { directory -> (URL, String)? in
       try Task.checkCancellation()
       guard let manifest = try? publishedManifest(directory, in: root),
+        manifest.region.format >= minimumFormat,
+        manifest.region.format <= RegionManifest.currentFormat,
         manifest.region.minZoom == minZoom, manifest.region.maxZoom == maxZoom
       else { return nil }
       return (directory.standardizedFileURL, manifest.region.sourceSHA256)

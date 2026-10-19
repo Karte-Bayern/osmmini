@@ -66,18 +66,29 @@ func BenchmarkMobileSearch(b *testing.B) {
 		results[i] = SearchResult{ID: int64(i + 1), Kind: "node", Label: fmt.Sprintf("Apotheke München %05d", i), Category: "pharmacy"}
 	}
 	path := writeSearchCatalog(b, results)
-	s, err := openSearch(path)
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer s.close()
-	for _, query := range []string{"Apotheke", "munch 12345", "missing"} {
-		b.Run(query, func(b *testing.B) {
-			b.ReportAllocs()
-			for i := 0; i < b.N; i++ {
-				if _, err := s.search(context.Background(), query, 20); err != nil {
-					b.Fatal(err)
-				}
+	for _, format := range []string{"legacy", "compact", "compressed"} {
+		catalog := path
+		if format != "legacy" {
+			catalog = compactSearchCatalog(b, path)
+		}
+		if format == "compressed" {
+			catalog = compressedSearchCatalog(b, catalog)
+		}
+		s, err := openSearch(catalog)
+		if err != nil {
+			b.Fatal(err)
+		}
+		defer s.close()
+		b.Run(format, func(b *testing.B) {
+			for _, query := range []string{"Apotheke", "munch 12345", "missing"} {
+				b.Run(query, func(b *testing.B) {
+					b.ReportAllocs()
+					for i := 0; i < b.N; i++ {
+						if _, err := s.search(context.Background(), query, 20); err != nil {
+							b.Fatal(err)
+						}
+					}
+				})
 			}
 		})
 	}

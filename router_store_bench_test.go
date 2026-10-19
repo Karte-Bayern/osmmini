@@ -95,3 +95,50 @@ func BenchmarkMemoryGraphWrite(b *testing.B) {
 		b.StartTimer()
 	}
 }
+
+// Compare file-backed reads without expanding either format into a Go graph.
+// Setup bytes and writes are excluded; graphs contain the same exact edges.
+func BenchmarkGraphStorageFormats(b *testing.B) {
+	memory, from, to := buildGridRouter(200, 200)
+	for _, format := range []string{"legacy", "compact"} {
+		b.Run(format, func(b *testing.B) {
+			path := filepath.Join(b.TempDir(), "graph.bin")
+			if format == "legacy" {
+				if err := os.WriteFile(path, legacyGraphFixture(b, memory), 0o600); err != nil {
+					b.Fatal(err)
+				}
+			} else if err := memory.WriteGraph(context.Background(), path); err != nil {
+				b.Fatal(err)
+			}
+			disk, err := OpenGraph(path)
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer disk.Close()
+			b.Run("edges", func(b *testing.B) {
+				b.ReportMetric(float64(len(disk.g.store.data)), "file_bytes")
+				b.ReportAllocs()
+				for range b.N {
+					var sum int64
+					for node := 0; node < disk.g.store.nodes; node++ {
+						for it := disk.g.store.edgesAt(node); it.next(); {
+							e := it.edge()
+							sum += e.To + int64(e.DistM)
+						}
+					}
+					graphStoreBenchmarkSum = sum
+				}
+			})
+			b.Run("route", func(b *testing.B) {
+				b.ReportAllocs()
+				for range b.N {
+					result, err := disk.RouteWithOptions(context.Background(), from, to, RouteOptions{Engine: EngineAStar, Objective: ObjectiveDuration})
+					if err != nil {
+						b.Fatal(err)
+					}
+					graphStoreBenchmarkSum = int64(result.Cost)
+				}
+			})
+		})
+	}
+}

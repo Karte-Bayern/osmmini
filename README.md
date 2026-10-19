@@ -485,7 +485,8 @@ Server and Swift use the same optimized PBF decoder and routing algorithms.
 Without transition penalties, A*/Dijkstra keep one search state per node;
 configured turn/crossing penalties retain the turn-aware search. Both paths
 use value heaps, and short queries start with small search maps. File-backed
-graphs retain format `OSMMGR01`; existing offline regions remain readable.
+graphs read both `OSMMGR01` and the compact `OSMMGR02`; existing offline regions
+remain readable.
 Profile restrictions, speed scaling and the target latitude cosine are resolved
 once per query. Turn-aware searches also reuse the incoming bearing and crossing
 cost for all outgoing edges of a search state. These changes apply to both
@@ -498,6 +499,14 @@ spools POI/address ways to disk and sorts at most 16,384 postings at once,
 merging at most 16 runs per pass. Its scratch files are removed on completion,
 cancellation or retry. Graph/search preparation closes before map generation,
 so those phases no longer retain the graph's mapped pages together.
+
+New offline imports use region format 3. Graph edges reference shared attributes
+and internal node indices, preserving the original 64-bit OSM IDs, coordinates,
+distances and routing behavior. The search index stores prefix-coded terms and
+variable-length offsets in independently readable 128-entry blocks. Search
+records are losslessly compressed in individually readable 32 KiB blocks. A
+complete Niederbayern package decreased from 592.6 MB to 267.6 MB; see the [storage
+measurements and upgrade notes](apple/README.md#offline-storage).
 
 The reusable `osmmini.NewAddressIndex(entries)` prepares search fields once
 and supports concurrent `Search`/`FindBest` queries. The HTTP server enables

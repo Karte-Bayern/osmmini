@@ -336,8 +336,69 @@ coordinate arrays instead of retaining way tag maps. The prefix index is sorted
 in chunks of 16,384 postings with at most 16 open input runs per merge. Temporary
 files consume additional disk space during import and are cleaned up on success,
 cancellation and retry after termination. Graph and search preparation close
-their graph mapping before map generation begins. The published region format
-and normal query APIs are unchanged; existing regions remain readable.
+their graph mapping before map generation begins. A retry also removes private
+tinyTiles/tinySQL map workspaces left by a terminated app, keeping those
+temporary files out of the published package.
+
+## Offline storage
+
+New imports write region format 3, using compact graph, prefix-index and
+compressed search files. Format 1/2 regions remain readable. The Swift query API
+is unchanged; update the native framework together with the Swift sources.
+Older SDKs cannot open format 3 packages.
+
+The graph stores 32-byte nodes, 16-byte edges and 12-byte spatial entries.
+Edges refer to internal node indices and shared 32-byte attribute records.
+Original signed 64-bit OSM IDs and all coordinate/distance/attribute float bits
+are preserved. The graph stays memory-mapped; it does not expand into maps on
+opening. Copying an already file-backed graph preserves its existing format.
+
+The search index uses byte-prefix terms and varint offsets/lengths in blocks of
+at most 128 postings. A small fixed-width directory stays on disk for binary
+lookup; queries decode only the relevant blocks into bounded scratch buffers.
+Legacy fixed-width indices remain readable. The existing `search.jsonl` filename
+now holds an `OSMSDAT1` container: independently zlib-compressed 32 KiB blocks
+and a disk-resident offset directory. Postings still address the original JSON
+byte stream. Queries decompress only the needed blocks, and settlement labels
+scan them sequentially. Inflaters and fixed-size buffers are reused per query;
+records crossing block boundaries use a query-local buffer capped at 1 MiB.
+Legacy raw JSONL remains readable. Logical JSON records and vector map detail
+are unchanged.
+
+A full import on 2026-10-19 compared commit `0054781` with the compact format,
+using the same Niederbayern PBF, zooms 5–14 and a 256 MiB tile-writer budget:
+
+| Files | Previous | Compact |
+| --- | ---: | ---: |
+| Routing graph | 326.1 MB | 163.1 MB |
+| Search index | 124.7 MB | 8.2 MB |
+| Search records | 55.2 MB | 9.7 MB |
+| Map artifact | 86.6 MB | 86.6 MB |
+| **Entire region** | **592.6 MB** | **267.6 MB** |
+
+These are decimal logical file sizes and exclude the source PBF. The package
+saves 325.0 MB (54.8%). Compressing the records saves another 45.5 MB compared
+with the 313.1 MB format-2 package. Imports took about 38 seconds on an M2 Max;
+this does not establish iPhone import limits. The same 2,096,430 nodes and
+4,307,507 directed edges are retained. Every decompressed search byte matched
+the original catalog; graph and index bytes were unchanged from format 2.
+Search, route and decoded-tile comparisons also matched.
+
+Compression trades some CPU time for disk space. In a 20,000-record synthetic
+catalog, a 20-result category query took about 0.06 ms instead of 0.02 ms, and a
+broad two-word query took about 4.8 ms instead of 1.8 ms. Missing-prefix queries
+were unchanged. Opening the full Niederbayern package, including its settlement
+scan, took about 0.57 seconds instead of 0.44 seconds. These are Mac measurements,
+not iPhone latency claims.
+
+Previously installed regions keep their original size until rebuilt. Import
+the PBF again into a new destination to use the compact format; a published
+destination is never overwritten. The demo reuses existing current-format
+packages, but creates a compact package instead of reusing a legacy one. Keep
+the original until the replacement opens successfully, then remove the old
+region from the list. Source PBF downloads can be removed separately once no
+pending import needs them. Old unfinished imports require a new workspace;
+their completed phases are not mixed with the new format.
 
 ## Package publication
 

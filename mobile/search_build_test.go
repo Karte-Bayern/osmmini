@@ -18,7 +18,7 @@ import (
 	osm "simonwaldherr.de/go/osmmini"
 )
 
-func TestSearchIndexSortRunsMatchExistingFormat(t *testing.T) {
+func TestSearchIndexSortRunsPreservePostingOrder(t *testing.T) {
 	for _, count := range []int{0, 1, searchSortPostings - 1, searchSortPostings, searchSortPostings + 1, searchSortPostings*searchMergeRuns + 17} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "search.idx")
@@ -41,8 +41,8 @@ func TestSearchIndexSortRunsMatchExistingFormat(t *testing.T) {
 			if err := builder.finish(); err != nil {
 				t.Fatal(err)
 			}
-			// Use the old index ordering/encoding independently of the new run
-			// writer. Exact padding and offset order matter to existing readers.
+			// Compare independently sorted postings after decoding the final
+			// blocks, including the multi-pass merge and term/block boundaries.
 			sort.Slice(want, func(i, j int) bool {
 				if want[i].term != want[j].term {
 					return want[i].term < want[j].term
@@ -54,18 +54,28 @@ func TestSearchIndexSortRunsMatchExistingFormat(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer file.Close()
-			reader := bufio.NewReader(file)
-			var got, expected [searchIndexBytes]byte
+			info, err := file.Stat()
+			if err != nil {
+				t.Fatal(err)
+			}
+			reader := &searchReader{index: file}
+			if err := reader.readIndexHeader(info.Size()); err != nil {
+				t.Fatal(err)
+			}
+			if !reader.compact || reader.count != count {
+				t.Fatalf("index format/count = %v/%d", reader.compact, reader.count)
+			}
+			iterator, err := reader.postingsFrom(nil, new(searchScratch))
+			if err != nil {
+				t.Fatal(err)
+			}
 			for i, p := range want {
-				clear(expected[:])
-				copy(expected[:], p.term)
-				binary.LittleEndian.PutUint64(expected[96:], p.offset)
-				binary.LittleEndian.PutUint32(expected[104:], p.length)
-				if _, err := io.ReadFull(reader, got[:]); err != nil || got != expected {
-					t.Fatalf("posting %d differs: %x, want %x; %v", i, got, expected, err)
+				term, offset, length, err := iterator.next()
+				if err != nil || string(term) != p.term || offset != p.offset || length != p.length {
+					t.Fatalf("posting %d differs: %q/%d/%d, want %+v; %v", i, term, offset, length, p, err)
 				}
 			}
-			if _, err := reader.ReadByte(); err != io.EOF {
+			if _, _, _, err := iterator.next(); err != io.EOF {
 				t.Fatalf("index has extra data: %v", err)
 			}
 			builder.close()

@@ -43,7 +43,13 @@ func placeMinZoom(kind string) int {
 
 func loadPlaces(ctx context.Context, search *searchReader) (placeIndex, error) {
 	index := placeIndex{}
-	reader := bufio.NewReaderSize(io.NewSectionReader(search.data, 0, search.dataBytes), 64<<10)
+	var data io.Reader = io.NewSectionReader(search.data, 0, search.dataBytes)
+	if search.compressedData {
+		scratch := searchScratchPool.Get().(*searchScratch)
+		defer searchScratchPool.Put(scratch)
+		data = &searchDataStream{search: search, ctx: ctx, scratch: scratch}
+	}
+	reader := bufio.NewReaderSize(data, 64<<10)
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err

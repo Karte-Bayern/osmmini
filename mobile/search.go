@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"unicode"
@@ -93,7 +92,11 @@ func buildSearch(ctx context.Context, path string, r *osm.Router, source string)
 		return err
 	}
 	defer f.Close()
-	w := bufio.NewWriter(f)
+	w, err := newSearchDataWriter(ctx, f)
+	if err != nil {
+		return err
+	}
+	defer w.close()
 	index := searchIndexBuilder{ctx: ctx, path: path + ".idx"}
 	defer index.close()
 	var offset uint64
@@ -242,10 +245,7 @@ func buildSearch(ctx context.Context, path string, r *osm.Router, source string)
 			}
 		}
 	}
-	if err = w.Flush(); err != nil {
-		return err
-	}
-	if err = f.Sync(); err != nil {
+	if err = w.finish(); err != nil {
 		return err
 	}
 	return index.finish()
@@ -275,8 +275,8 @@ func cleanSearchScratch(ctx context.Context, directory string) error {
 	return nil
 }
 
-// The search file/index stay byte-compatible with existing offline regions.
-// Only temporary way records and sort runs use these private import formats.
+// Way records and sort runs are private import formats. Published search data
+// and its final index each have their own versioned readers.
 func writeSearchWay(w *bufio.Writer, result SearchResult, nodes []int64) error {
 	data, err := json.Marshal(result)
 	if err != nil {
@@ -452,30 +452,19 @@ func (s *searchIndexBuilder) finish() error {
 	return mergeSearchPostings(s.ctx, s.path, runs, false)
 }
 
-func writeSearchPosting(w *bufio.Writer, p searchPosting, compact bool) error {
-	length := searchIndexBytes
-	if compact {
-		length = 1 + len(p.term) + 12
-	}
+func writeSearchRunPosting(w *bufio.Writer, p searchPosting) error {
+	length := 1 + len(p.term) + 12
 	if w.Available() < length {
 		if err := w.Flush(); err != nil {
 			return err
 		}
 	}
 	b := w.AvailableBuffer()[:length]
-	if compact {
-		// Temporary runs omit the final index's 96-byte zero padding.
-		b[0] = byte(len(p.term))
-		copy(b[1:], p.term)
-		at := 1 + len(p.term)
-		binary.LittleEndian.PutUint64(b[at:], p.offset)
-		binary.LittleEndian.PutUint32(b[at+8:], p.length)
-	} else {
-		clear(b)
-		copy(b[:searchKeyBytes], p.term)
-		binary.LittleEndian.PutUint64(b[96:], p.offset)
-		binary.LittleEndian.PutUint32(b[104:], p.length)
-	}
+	b[0] = byte(len(p.term))
+	copy(b[1:], p.term)
+	at := 1 + len(p.term)
+	binary.LittleEndian.PutUint64(b[at:], p.offset)
+	binary.LittleEndian.PutUint32(b[at+8:], p.length)
 	_, err := w.Write(b)
 	return err
 }
@@ -491,13 +480,26 @@ func writeSearchPostings(ctx context.Context, path string, postings []searchPost
 		}
 	}()
 	w := bufio.NewWriterSize(f, 32<<10)
+	var final *compactSearchWriter
+	if !compact {
+		final, err = newCompactSearchWriter(ctx, f, w)
+		if err != nil {
+			return err
+		}
+		defer final.close()
+	}
 	for i, p := range postings {
 		if i%4096 == 0 {
 			if err = ctx.Err(); err != nil {
 				return err
 			}
 		}
-		if err = writeSearchPosting(w, p, compact); err != nil {
+		if compact {
+			err = writeSearchRunPosting(w, p)
+		} else {
+			err = final.add(p)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -508,7 +510,7 @@ func writeSearchPostings(ctx context.Context, path string, postings []searchPost
 		return err
 	}
 	if !compact {
-		return f.Sync()
+		return final.finish()
 	}
 	return nil
 }
@@ -585,6 +587,14 @@ func mergeSearchPostings(ctx context.Context, path string, paths []string, compa
 		}
 	}()
 	w := bufio.NewWriterSize(f, 32<<10)
+	var final *compactSearchWriter
+	if !compact {
+		final, err = newCompactSearchWriter(ctx, f, w)
+		if err != nil {
+			return err
+		}
+		defer final.close()
+	}
 	for n := 0; len(queue) > 0; n++ {
 		if n%4096 == 0 {
 			if err = ctx.Err(); err != nil {
@@ -592,7 +602,12 @@ func mergeSearchPostings(ctx context.Context, path string, paths []string, compa
 			}
 		}
 		run := queue[0]
-		if err = writeSearchPosting(w, run.posting, compact); err != nil {
+		if compact {
+			err = writeSearchRunPosting(w, run.posting)
+		} else {
+			err = final.add(run.posting)
+		}
+		if err != nil {
 			return err
 		}
 		if err = run.advance(); err == io.EOF {
@@ -610,23 +625,34 @@ func mergeSearchPostings(ctx context.Context, path string, paths []string, compa
 		return err
 	}
 	if !compact {
-		return f.Sync()
+		return final.finish()
 	}
 	return nil
 }
 
 type searchReader struct {
-	data, index *os.File
-	count       int
-	dataBytes   int64
+	data, index    *os.File
+	count          int
+	dataBytes      int64
+	compact        bool
+	blocks         int
+	directory      int64
+	compressedData bool
+	dataBlocks     uint64
+	dataDirectory  int64
 }
 
 // Scratch buffers are owned by one query and reused across calls. The reader
 // itself has no cursor or mutable cache, so parallel Swift/Go searches cannot
 // interfere with one another. Large JSON records are never retained by the pool.
 type searchScratch struct {
-	postings [64 * searchIndexBytes]byte
-	data     [32 << 10]byte
+	postings   [64 * searchIndexBytes]byte
+	block      [searchBlockMaxBytes]byte
+	data       [32 << 10]byte
+	encoded    [searchDataMaxEncoded]byte
+	compressed bytes.Reader
+	inflater   io.ReadCloser
+	extra      [1]byte
 }
 
 var searchScratchPool = sync.Pool{New: func() any { return new(searchScratch) }}
@@ -642,7 +668,7 @@ func openSearch(path string) (*searchReader, error) {
 		return nil, err
 	}
 	st, err := idx.Stat()
-	if err != nil || st.Size()%searchIndexBytes != 0 {
+	if err != nil {
 		data.Close()
 		idx.Close()
 		return nil, fmt.Errorf("invalid search index")
@@ -653,7 +679,16 @@ func openSearch(path string) (*searchReader, error) {
 		idx.Close()
 		return nil, err
 	}
-	return &searchReader{data: data, index: idx, count: int(st.Size() / searchIndexBytes), dataBytes: dst.Size()}, nil
+	reader := &searchReader{data: data, index: idx}
+	if err = reader.readDataHeader(dst.Size()); err != nil {
+		reader.close()
+		return nil, err
+	}
+	if err = reader.readIndexHeader(st.Size()); err != nil {
+		reader.close()
+		return nil, err
+	}
+	return reader, nil
 }
 func (s *searchReader) close() { s.data.Close(); s.index.Close() }
 func (s *searchReader) search(ctx context.Context, query string, limit int) ([]SearchResult, error) {
@@ -681,107 +716,67 @@ func (s *searchReader) search(ctx context.Context, query string, limit int) ([]S
 	scratch := searchScratchPool.Get().(*searchScratch)
 	defer searchScratchPool.Put(scratch)
 	keyBytes := []byte(key)
-	var readErr error
-	start := sort.Search(s.count, func(i int) bool {
-		b := scratch.postings[:searchIndexBytes]
-		if _, err := s.index.ReadAt(b, int64(i)*searchIndexBytes); err != nil {
-			readErr = err
-			return true
-		}
-		term := b[:searchKeyBytes]
-		if end := bytes.IndexByte(term, 0); end >= 0 {
-			term = term[:end]
-		}
-		return bytes.Compare(term, keyBytes) >= 0
-	})
-	if readErr != nil {
-		return nil, readErr
+	iterator, err := s.postingsFrom(keyBytes, scratch)
+	if err != nil {
+		return nil, err
 	}
 	seen := map[uint64]bool{}
 	out := []SearchResult{}
-	var dataStart, dataEnd uint64
-	var oversized []byte
-	readRecord := func(offset uint64, length uint32) ([]byte, error) {
-		if length > maxSearchRecordBytes || offset > uint64(s.dataBytes) || uint64(length) > uint64(s.dataBytes)-offset {
-			return nil, fmt.Errorf("invalid search record length or offset")
-		}
-		end := offset + uint64(length)
-		if offset >= dataStart && end <= dataEnd {
-			return scratch.data[offset-dataStart : end-dataStart], nil
-		}
-		if length > uint32(len(scratch.data)) {
-			if cap(oversized) < int(length) {
-				oversized = make([]byte, length)
-			}
-			b := oversized[:length]
-			_, err := s.data.ReadAt(b, int64(offset))
-			return b, err
-		}
-		n := min(len(scratch.data), int(uint64(s.dataBytes)-offset))
-		if _, err := s.data.ReadAt(scratch.data[:n], int64(offset)); err != nil {
-			return nil, err
-		}
-		dataStart, dataEnd = offset, offset+uint64(n)
-		return scratch.data[:length], nil
-	}
-	for i := start; i < s.count && len(out) < limit; {
+	records := searchRecords{search: s, ctx: ctx, scratch: scratch}
+	for len(out) < limit {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		n := min(len(scratch.postings)/searchIndexBytes, s.count-i)
-		batch := scratch.postings[:n*searchIndexBytes]
-		if _, err := s.index.ReadAt(batch, int64(i)*searchIndexBytes); err != nil {
+		term, offset, length, err := iterator.next()
+		if err == io.EOF {
+			return out, nil
+		} else if err != nil {
 			return nil, err
 		}
-		for j := 0; j < n && len(out) < limit; j++ {
-			if err := ctx.Err(); err != nil {
-				return nil, err
+		if bytes.Compare(term, keyBytes) < 0 {
+			continue
+		}
+		if !bytes.HasPrefix(term, keyBytes) {
+			return out, nil
+		}
+		b, err := records.read(offset, length)
+		if err != nil {
+			return nil, err
+		}
+		// Normalized words contain only letters/digits and therefore have no
+		// JSON escape sequences. A missing raw word cannot match Text. This
+		// cheap filter avoids decoding every POI for a broad prefix; the full
+		// Text check below retains the established substring semantics.
+		matches := true
+		for _, word := range words {
+			if !bytes.Contains(b, []byte(word)) {
+				matches = false
+				break
 			}
-			p := batch[j*searchIndexBytes:][:searchIndexBytes]
-			if !bytes.HasPrefix(p[:searchKeyBytes], keyBytes) {
-				return out, nil
+		}
+		if !matches {
+			continue
+		}
+		if seen[offset] {
+			continue
+		}
+		seen[offset] = true
+		var result SearchResult
+		if err = json.Unmarshal(b, &result); err != nil {
+			return nil, err
+		}
+		for _, word := range words {
+			if !strings.Contains(result.Text, word) {
+				matches = false
+				break
 			}
-			i++
-			offset := binary.LittleEndian.Uint64(p[96:])
-			b, err := readRecord(offset, binary.LittleEndian.Uint32(p[104:]))
-			if err != nil {
-				return nil, err
+		}
+		if matches {
+			result.Text = ""
+			if len(out) == 0 {
+				out = make([]SearchResult, 0, limit)
 			}
-			// Normalized words contain only letters/digits and therefore have no
-			// JSON escape sequences. A missing raw word cannot match Text. This
-			// cheap filter avoids decoding every POI for a broad prefix; the full
-			// Text check below retains the established substring semantics.
-			matches := true
-			for _, word := range words {
-				if !bytes.Contains(b, []byte(word)) {
-					matches = false
-					break
-				}
-			}
-			if !matches {
-				continue
-			}
-			if seen[offset] {
-				continue
-			}
-			seen[offset] = true
-			var result SearchResult
-			if err = json.Unmarshal(b, &result); err != nil {
-				return nil, err
-			}
-			for _, word := range words {
-				if !strings.Contains(result.Text, word) {
-					matches = false
-					break
-				}
-			}
-			if matches {
-				result.Text = ""
-				if len(out) == 0 {
-					out = make([]SearchResult, 0, limit)
-				}
-				out = append(out, result)
-			}
+			out = append(out, result)
 		}
 	}
 	return out, nil

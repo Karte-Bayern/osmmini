@@ -18,20 +18,35 @@ import (
 )
 
 const graphHeaderSize = 96
-const graphNodeSize = 40
-const graphEdgeSize = 48
-const graphMagic = "OSMMGR01"
+const graphNodeSize = 32
+const graphEdgeSize = 16
+const graphCellSize = 12
+const graphAttributeSize = 32
+const graphMagic = "OSMMGR02"
+const graphLegacyMagic = "OSMMGR01"
+const graphLegacyNodeSize = 40
+const graphLegacyEdgeSize = 48
+const graphLegacyCellSize = 16
 
 type graphMetadata struct {
 	Classes []string               `json:"classes"`
 	Streets map[string]streetEntry `json:"streets"`
 }
 
+// Attributes are keyed by their float bits so the compact representation
+// preserves exact values, including signed zero, without quantization.
+type graphEdgeAttributes struct {
+	speed, height, weight uint64
+	class                 uint32
+}
+
 type diskGraph struct {
-	data                                       []byte
-	nodes, edgeCount, edgesOffset, cellsOffset int
-	classes                                    []string
-	release                                    func() error
+	data                                           []byte
+	nodes, edgeCount, edgesOffset, cellsOffset     int
+	nodeSize, edgeSize, cellSize, attributesOffset int
+	compact                                        bool
+	classes                                        []string
+	release                                        func() error
 }
 
 func (g Graph) coord(id int64) (Coord, bool) {
@@ -49,7 +64,7 @@ func (g Graph) coord(id int64) (Coord, bool) {
 // nodeRecord and coordAt are for scans that already know the record index.
 // Keeping that index avoids looking up each node ID again in the sorted table.
 func (d *diskGraph) nodeRecord(i int) []byte {
-	return d.data[graphHeaderSize+i*graphNodeSize : graphHeaderSize+(i+1)*graphNodeSize]
+	return d.data[graphHeaderSize+i*d.nodeSize : graphHeaderSize+(i+1)*d.nodeSize]
 }
 
 func (d *diskGraph) coordAt(i int) Coord {
@@ -59,19 +74,27 @@ func (d *diskGraph) coordAt(i int) Coord {
 
 func (d *diskGraph) nodeIndex(id int64) int {
 	i := sort.Search(d.nodes, func(i int) bool {
-		return int64(binary.LittleEndian.Uint64(d.data[graphHeaderSize+i*graphNodeSize:])) >= id
+		return int64(binary.LittleEndian.Uint64(d.data[graphHeaderSize+i*d.nodeSize:])) >= id
 	})
-	if i == d.nodes || int64(binary.LittleEndian.Uint64(d.data[graphHeaderSize+i*graphNodeSize:])) != id {
+	if i == d.nodes || int64(binary.LittleEndian.Uint64(d.data[graphHeaderSize+i*d.nodeSize:])) != id {
 		return -1
 	}
 	return i
 }
 
+func (d *diskGraph) edgeRange(i int) (start, count int) {
+	b := d.nodeRecord(i)
+	if d.compact {
+		return int(binary.LittleEndian.Uint32(b[24:])), int(binary.LittleEndian.Uint32(b[28:]))
+	}
+	return int(binary.LittleEndian.Uint64(b[24:])), int(binary.LittleEndian.Uint32(b[32:]))
+}
+
 type edgeIterator struct {
-	memory  []Edge
-	data    []byte
-	classes []string
-	index   int
+	memory []Edge
+	data   []byte
+	store  *diskGraph
+	index  int
 }
 
 func (g Graph) edges(id int64) edgeIterator {
@@ -87,14 +110,13 @@ func (g Graph) edges(id int64) edgeIterator {
 }
 
 func (d *diskGraph) edgesAt(i int) edgeIterator {
-	b := d.nodeRecord(i)
-	start, count := int(binary.LittleEndian.Uint64(b[24:])), int(binary.LittleEndian.Uint32(b[32:]))
-	return edgeIterator{data: d.data[d.edgesOffset+start*graphEdgeSize : d.edgesOffset+(start+count)*graphEdgeSize], classes: d.classes, index: -1}
+	start, count := d.edgeRange(i)
+	return edgeIterator{data: d.data[d.edgesOffset+start*d.edgeSize : d.edgesOffset+(start+count)*d.edgeSize], store: d, index: -1}
 }
 func (i *edgeIterator) next() bool {
 	i.index++
 	if i.data != nil {
-		return i.index < len(i.data)/graphEdgeSize
+		return i.index < len(i.data)/i.store.edgeSize
 	}
 	return i.index < len(i.memory)
 }
@@ -102,8 +124,14 @@ func (i *edgeIterator) edge() Edge {
 	if i.data == nil {
 		return i.memory[i.index]
 	}
-	b := i.data[i.index*graphEdgeSize:]
-	return Edge{To: int64(binary.LittleEndian.Uint64(b)), DistM: math.Float64frombits(binary.LittleEndian.Uint64(b[8:])), SpeedKph: math.Float64frombits(binary.LittleEndian.Uint64(b[16:])), MaxHeightM: math.Float64frombits(binary.LittleEndian.Uint64(b[24:])), MaxWeightT: math.Float64frombits(binary.LittleEndian.Uint64(b[32:])), HwyType: i.classes[binary.LittleEndian.Uint32(b[40:])]}
+	d := i.store
+	b := i.data[i.index*d.edgeSize:]
+	if d.compact {
+		target := int(binary.LittleEndian.Uint32(b))
+		a := d.data[d.attributesOffset+int(binary.LittleEndian.Uint32(b[4:]))*graphAttributeSize:]
+		return Edge{To: int64(binary.LittleEndian.Uint64(d.nodeRecord(target))), DistM: math.Float64frombits(binary.LittleEndian.Uint64(b[8:])), SpeedKph: math.Float64frombits(binary.LittleEndian.Uint64(a)), MaxHeightM: math.Float64frombits(binary.LittleEndian.Uint64(a[8:])), MaxWeightT: math.Float64frombits(binary.LittleEndian.Uint64(a[16:])), HwyType: d.classes[binary.LittleEndian.Uint32(a[24:])]}
+	}
+	return Edge{To: int64(binary.LittleEndian.Uint64(b)), DistM: math.Float64frombits(binary.LittleEndian.Uint64(b[8:])), SpeedKph: math.Float64frombits(binary.LittleEndian.Uint64(b[16:])), MaxHeightM: math.Float64frombits(binary.LittleEndian.Uint64(b[24:])), MaxWeightT: math.Float64frombits(binary.LittleEndian.Uint64(b[32:])), HwyType: d.classes[binary.LittleEndian.Uint32(b[40:])]}
 }
 func (g Graph) degree(id int64) int {
 	if g.store == nil {
@@ -113,8 +141,10 @@ func (g Graph) degree(id int64) int {
 	if i < 0 {
 		return 0
 	}
-	return int(binary.LittleEndian.Uint32(g.store.data[graphHeaderSize+i*graphNodeSize+32:]))
+	_, count := g.store.edgeRange(i)
+	return count
 }
+
 func (g Graph) eachNode(visit func(int64, Coord)) {
 	if g.store == nil {
 		for id, c := range g.coords {
@@ -140,7 +170,7 @@ func (g Graph) eachRoutableNode(visit func(int64, Coord)) {
 	}
 	for i := 0; i < g.store.nodes; i++ {
 		b := g.store.nodeRecord(i)
-		if binary.LittleEndian.Uint32(b[32:]) > 0 {
+		if _, count := g.store.edgeRange(i); count > 0 {
 			visit(int64(binary.LittleEndian.Uint64(b)), g.store.coordAt(i))
 		}
 	}
@@ -149,25 +179,30 @@ func (g Graph) eachRoutableNode(visit func(int64, Coord)) {
 // cellNodeIterator is a borrowed view of the spatial index, valid until Close.
 // It reads IDs in place rather than allocating a slice for every visited cell.
 type cellNodeIterator struct {
-	data []byte
-	key  int64
-	id   int64
+	data  []byte
+	store *diskGraph
+	key   int64
+	id    int64
 }
 
 func (d *diskGraph) cellNodesIter(key int64) cellNodeIterator {
 	start := sort.Search(d.nodes, func(i int) bool {
-		return int64(binary.LittleEndian.Uint64(d.data[d.cellsOffset+i*16:])) >= key
+		return int64(binary.LittleEndian.Uint64(d.data[d.cellsOffset+i*d.cellSize:])) >= key
 	})
-	return cellNodeIterator{data: d.data[d.cellsOffset+start*16 : d.cellsOffset+d.nodes*16], key: key}
+	return cellNodeIterator{data: d.data[d.cellsOffset+start*d.cellSize : d.cellsOffset+d.nodes*d.cellSize], store: d, key: key}
 }
 
 func (i *cellNodeIterator) next() bool {
-	if len(i.data) < 16 || int64(binary.LittleEndian.Uint64(i.data)) != i.key {
+	if len(i.data) == 0 || len(i.data) < i.store.cellSize || int64(binary.LittleEndian.Uint64(i.data)) != i.key {
 		i.data = nil
 		return false
 	}
-	i.id = int64(binary.LittleEndian.Uint64(i.data[8:]))
-	i.data = i.data[16:]
+	if i.store.compact {
+		i.id = int64(binary.LittleEndian.Uint64(i.store.nodeRecord(int(binary.LittleEndian.Uint32(i.data[8:])))))
+	} else {
+		i.id = int64(binary.LittleEndian.Uint64(i.data[8:]))
+	}
+	i.data = i.data[i.store.cellSize:]
 	return true
 }
 
@@ -186,7 +221,7 @@ func (d *diskGraph) export() (map[int64]Coord, map[int64][]Edge) {
 		b := d.nodeRecord(i)
 		id := int64(binary.LittleEndian.Uint64(b))
 		coords[id] = d.coordAt(i)
-		start, count := int(binary.LittleEndian.Uint64(b[24:])), int(binary.LittleEndian.Uint32(b[32:]))
+		start, count := d.edgeRange(i)
 		if count > 0 {
 			nodeEdges := edges[start : start+count : start+count]
 			it := d.edgesAt(i)
@@ -215,24 +250,64 @@ func (r *Router) WriteGraph(ctx context.Context, path string) (err error) {
 	ids := make([]int64, 0, r.NodeCount())
 	r.g.eachNode(func(id int64, _ Coord) { ids = append(ids, id) })
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	edgeCount := r.EdgeCount()
+	if len(ids) == 0 || uint64(len(ids)) > math.MaxUint32 || uint64(edgeCount) > math.MaxUint32 {
+		return errors.New("graph exceeds compact format limits; split the region")
+	}
+	bounds, ok := r.Bounds()
+	if !ok {
+		// A graph can lie on one latitude/longitude or contain a single node;
+		// CoordWindow.Valid deliberately rejects such windows for UI queries.
+		c, _ := r.g.coord(ids[0])
+		bounds = CoordWindow{MinLat: c.Lat, MaxLat: c.Lat, MinLon: c.Lon, MaxLon: c.Lon}
+		for _, id := range ids[1:] {
+			c, _ := r.g.coord(id)
+			bounds.MinLat = math.Min(bounds.MinLat, c.Lat)
+			bounds.MaxLat = math.Max(bounds.MaxLat, c.Lat)
+			bounds.MinLon = math.Min(bounds.MinLon, c.Lon)
+			bounds.MaxLon = math.Max(bounds.MaxLon, c.Lon)
+		}
+	}
+	if !validGraphBounds(bounds) {
+		return errors.New("invalid graph bounds")
+	}
 	classes := []string{}
 	classIDs := map[string]uint32{}
+	attributes := []graphEdgeAttributes{}
+	attributeIDs := map[graphEdgeAttributes]uint32{}
+	indexedEdges := 0
 	for i, id := range ids {
+		c, _ := r.g.coord(id)
+		if !bounds.Contains(c) {
+			return errors.New("graph coordinate outside bounds")
+		}
 		if i%4096 == 0 {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
 		}
 		for it := r.g.edges(id); it.next(); {
+			indexedEdges++
 			e := it.edge()
 			if _, ok := r.g.coord(e.To); !ok {
 				return fmt.Errorf("graph edge references missing node %d", e.To)
 			}
-			if _, ok := classIDs[e.HwyType]; !ok {
-				classIDs[e.HwyType] = uint32(len(classes))
+			class, ok := classIDs[e.HwyType]
+			if !ok {
+				class = uint32(len(classes))
+				classIDs[e.HwyType] = class
 				classes = append(classes, e.HwyType)
 			}
+			a := edgeAttributes(e, class)
+			if _, ok := attributeIDs[a]; !ok {
+				attributeIDs[a] = uint32(len(attributes))
+				attributes = append(attributes, a)
+			}
 		}
+	}
+
+	if indexedEdges != edgeCount {
+		return errors.New("graph adjacency references missing source nodes")
 	}
 	meta, err := json.Marshal(graphMetadata{classes, r.streets})
 	if err != nil {
@@ -259,17 +334,17 @@ func (r *Router) WriteGraph(ctx context.Context, path string) (err error) {
 	copy(header[:], graphMagic)
 	put := binary.LittleEndian.PutUint64
 	put(header[8:], uint64(len(ids)))
-	put(header[16:], uint64(r.EdgeCount()))
+	put(header[16:], uint64(edgeCount))
+	put(header[64:], uint64(len(attributes)))
 	put(header[24:], uint64(len(meta)))
-	bounds, _ := r.Bounds()
 	for i, v := range []float64{bounds.MinLat, bounds.MaxLat, bounds.MinLon, bounds.MaxLon} {
 		put(header[32+i*8:], math.Float64bits(v))
 	}
 	if _, err = w.Write(header[:]); err != nil {
 		return err
 	}
-	var record [graphEdgeSize]byte
-	var edgeStart uint64
+	var record [graphAttributeSize]byte
+	var edgeStart uint32
 	for n, id := range ids {
 		if n%4096 == 0 {
 			if err = ctx.Err(); err != nil {
@@ -281,10 +356,10 @@ func (r *Router) WriteGraph(ctx context.Context, path string) (err error) {
 		put(record[:], uint64(id))
 		put(record[8:], math.Float64bits(c.Lat))
 		put(record[16:], math.Float64bits(c.Lon))
-		put(record[24:], edgeStart)
+		binary.LittleEndian.PutUint32(record[24:], edgeStart)
 		degree := r.g.degree(id)
-		binary.LittleEndian.PutUint32(record[32:], uint32(degree))
-		edgeStart += uint64(degree)
+		binary.LittleEndian.PutUint32(record[28:], uint32(degree))
+		edgeStart += uint32(degree)
 		if _, err = w.Write(record[:graphNodeSize]); err != nil {
 			return err
 		}
@@ -297,38 +372,51 @@ func (r *Router) WriteGraph(ctx context.Context, path string) (err error) {
 		}
 		for it := r.g.edges(id); it.next(); {
 			e := it.edge()
-			clear(record[:])
-			put(record[:], uint64(e.To))
-			for i, v := range []float64{e.DistM, e.SpeedKph, e.MaxHeightM, e.MaxWeightT} {
-				put(record[8+i*8:], math.Float64bits(v))
-			}
-			binary.LittleEndian.PutUint32(record[40:], classIDs[e.HwyType])
-			if _, err = w.Write(record[:]); err != nil {
+			target := sort.Search(len(ids), func(i int) bool { return ids[i] >= e.To })
+			binary.LittleEndian.PutUint32(record[:], uint32(target))
+			binary.LittleEndian.PutUint32(record[4:], attributeIDs[edgeAttributes(e, classIDs[e.HwyType])])
+			put(record[8:], math.Float64bits(e.DistM))
+			if _, err = w.Write(record[:graphEdgeSize]); err != nil {
 				return err
 			}
 		}
 	}
-	type cell struct{ key, id int64 }
+
+	type cell struct {
+		key  int64
+		node uint32
+	}
 	cells := make([]cell, len(ids))
 	idx := &spatialIndex{cellSize: 0.01, minLat: bounds.MinLat, minLon: bounds.MinLon}
 	for i, id := range ids {
 		c, _ := r.g.coord(id)
 		x, y := idx.cell(c.Lat, c.Lon)
-		cells[i] = cell{cellKey(x, y), id}
+		cells[i] = cell{cellKey(x, y), uint32(i)}
 	}
 	sort.Slice(cells, func(i, j int) bool {
 		if cells[i].key != cells[j].key {
 			return cells[i].key < cells[j].key
 		}
-		return cells[i].id < cells[j].id
+		return cells[i].node < cells[j].node
 	})
 	for _, c := range cells {
 		put(record[:], uint64(c.key))
-		put(record[8:], uint64(c.id))
-		if _, err = w.Write(record[:16]); err != nil {
+		binary.LittleEndian.PutUint32(record[8:], c.node)
+		if _, err = w.Write(record[:graphCellSize]); err != nil {
 			return err
 		}
 	}
+	for _, a := range attributes {
+		clear(record[:])
+		put(record[:], a.speed)
+		put(record[8:], a.height)
+		put(record[16:], a.weight)
+		binary.LittleEndian.PutUint32(record[24:], a.class)
+		if _, err = w.Write(record[:]); err != nil {
+			return err
+		}
+	}
+
 	if _, err = w.Write(meta); err != nil {
 		return err
 	}
@@ -339,6 +427,14 @@ func (r *Router) WriteGraph(ctx context.Context, path string) (err error) {
 		return err
 	}
 	return f.Sync()
+}
+
+func validGraphBounds(b CoordWindow) bool {
+	return b.MinLat >= -90 && b.MaxLat <= 90 && b.MinLon >= -180 && b.MaxLon <= 180 && b.MinLat <= b.MaxLat && b.MinLon <= b.MaxLon
+}
+
+func edgeAttributes(e Edge, class uint32) graphEdgeAttributes {
+	return graphEdgeAttributes{math.Float64bits(e.SpeedKph), math.Float64bits(e.MaxHeightM), math.Float64bits(e.MaxWeightT), class}
 }
 
 func writeGraphSnapshot(ctx context.Context, path string, data []byte) (err error) {
@@ -384,17 +480,54 @@ func OpenGraph(path string) (*Router, error) {
 		return nil, err
 	}
 	fail := func(e error) (*Router, error) { _ = release(); return nil, e }
-	if len(data) < graphHeaderSize || string(data[:8]) != graphMagic {
+	if len(data) < graphHeaderSize {
 		return fail(errors.New("unsupported or truncated graph"))
 	}
+	compact := string(data[:8]) == graphMagic
+	if !compact && string(data[:8]) != graphLegacyMagic {
+		return fail(errors.New("unsupported or truncated graph"))
+	}
+	nodeSize, edgeSize, cellSize := graphLegacyNodeSize, graphLegacyEdgeSize, graphLegacyCellSize
+	if compact {
+		nodeSize, edgeSize, cellSize = graphNodeSize, graphEdgeSize, graphCellSize
+	}
 	n, e, m := binary.LittleEndian.Uint64(data[8:]), binary.LittleEndian.Uint64(data[16:]), binary.LittleEndian.Uint64(data[24:])
-	if n == 0 || n > uint64(len(data))/graphNodeSize || e > uint64(len(data))/graphEdgeSize || m > 64<<20 {
+	attributes := uint64(0)
+	if compact {
+		attributes = binary.LittleEndian.Uint64(data[64:])
+	}
+	// Validate sections against the remaining file size before advancing offsets;
+	// multiplication and addition must remain safe for hostile header counts.
+	size := uint64(len(data))
+	if n == 0 || n > size/uint64(nodeSize) || e > size/uint64(edgeSize) || m > 64<<20 || attributes > size/graphAttributeSize || (compact && (n > math.MaxUint32 || e > math.MaxUint32 || attributes > math.MaxUint32)) {
 		return fail(errors.New("invalid graph sizes"))
 	}
-	edgesOffset := uint64(graphHeaderSize) + n*graphNodeSize
-	cellsOffset := edgesOffset + e*graphEdgeSize
-	metaOffset := cellsOffset + n*16
-	if metaOffset > uint64(len(data)) || m != uint64(len(data))-metaOffset {
+	offset := uint64(graphHeaderSize)
+	take := func(count uint64, recordSize int) (uint64, bool) {
+		start := offset
+		if count > (size-offset)/uint64(recordSize) {
+			return 0, false
+		}
+		offset += count * uint64(recordSize)
+		return start, true
+	}
+	if _, ok := take(n, nodeSize); !ok {
+		return fail(io.ErrUnexpectedEOF)
+	}
+	edgesOffset, ok := take(e, edgeSize)
+	if !ok {
+		return fail(io.ErrUnexpectedEOF)
+	}
+	cellsOffset, ok := take(n, cellSize)
+	if !ok {
+		return fail(io.ErrUnexpectedEOF)
+	}
+	attributesOffset, ok := take(attributes, graphAttributeSize)
+	if !ok {
+		return fail(io.ErrUnexpectedEOF)
+	}
+	metaOffset := offset
+	if m != size-metaOffset {
 		return fail(io.ErrUnexpectedEOF)
 	}
 	var meta graphMetadata
@@ -404,25 +537,70 @@ func OpenGraph(path string) (*Router, error) {
 	if len(meta.Classes) == 0 && e > 0 {
 		return fail(errors.New("missing graph classes"))
 	}
-	d := &diskGraph{data: data, nodes: int(n), edgeCount: int(e), edgesOffset: int(edgesOffset), cellsOffset: int(cellsOffset), classes: meta.Classes, release: release}
+	graphBounds := CoordWindow{MinLat: math.Float64frombits(binary.LittleEndian.Uint64(data[32:])), MaxLat: math.Float64frombits(binary.LittleEndian.Uint64(data[40:])), MinLon: math.Float64frombits(binary.LittleEndian.Uint64(data[48:])), MaxLon: math.Float64frombits(binary.LittleEndian.Uint64(data[56:]))}
+	if !validGraphBounds(graphBounds) {
+		return fail(errors.New("invalid graph bounds"))
+	}
+	spatial := &spatialIndex{cellSize: 0.01, minLat: graphBounds.MinLat, minLon: graphBounds.MinLon}
+	d := &diskGraph{data: data, nodes: int(n), edgeCount: int(e), edgesOffset: int(edgesOffset), cellsOffset: int(cellsOffset), nodeSize: nodeSize, edgeSize: edgeSize, cellSize: cellSize, attributesOffset: int(attributesOffset), compact: compact, classes: meta.Classes, release: release}
 	var last int64
+	var nextEdge uint64
 	for i := 0; i < d.nodes; i++ {
-		b := data[graphHeaderSize+i*graphNodeSize:]
+		b := d.nodeRecord(i)
 		id := int64(binary.LittleEndian.Uint64(b))
-		start, count := binary.LittleEndian.Uint64(b[24:]), uint64(binary.LittleEndian.Uint32(b[32:]))
-		if (i > 0 && id <= last) || start > e || count > e-start {
+		if compact && !graphBounds.Contains(d.coordAt(i)) {
+			return fail(errors.New("graph coordinate outside bounds"))
+		}
+		var start, count uint64
+		if compact {
+			start, count = uint64(binary.LittleEndian.Uint32(b[24:])), uint64(binary.LittleEndian.Uint32(b[28:]))
+		} else {
+			start, count = binary.LittleEndian.Uint64(b[24:]), uint64(binary.LittleEndian.Uint32(b[32:]))
+		}
+		if (i > 0 && id <= last) || start > e || count > e-start || (compact && start != nextEdge) {
 			return fail(errors.New("invalid graph node index"))
 		}
+		nextEdge = start + count
 		last = id
 	}
+	if compact && nextEdge != e {
+		return fail(errors.New("invalid graph adjacency ranges"))
+	}
 	for i := 0; i < d.edgeCount; i++ {
-		if int(binary.LittleEndian.Uint32(data[d.edgesOffset+i*graphEdgeSize+40:])) >= len(d.classes) {
+		b := data[d.edgesOffset+i*d.edgeSize:]
+		if compact {
+			if uint64(binary.LittleEndian.Uint32(b)) >= n || uint64(binary.LittleEndian.Uint32(b[4:])) >= attributes {
+				return fail(errors.New("invalid graph edge index"))
+			}
+		} else if uint64(binary.LittleEndian.Uint32(b[40:])) >= uint64(len(d.classes)) {
 			return fail(errors.New("invalid graph edge class"))
 		}
 	}
-	b := CoordWindow{MinLat: math.Float64frombits(binary.LittleEndian.Uint64(data[32:])), MaxLat: math.Float64frombits(binary.LittleEndian.Uint64(data[40:])), MinLon: math.Float64frombits(binary.LittleEndian.Uint64(data[48:])), MaxLon: math.Float64frombits(binary.LittleEndian.Uint64(data[56:]))}
-	idx := &spatialIndex{cellSize: 0.01, minLat: b.MinLat, minLon: b.MinLon, maxX: int32(math.Floor((b.MaxLat - b.MinLat) / 0.01)), maxY: int32(math.Floor((b.MaxLon - b.MinLon) / 0.01))}
-	return &Router{g: Graph{store: d}, streets: meta.Streets, streetNameByNode: buildStreetNameIndex(meta.Streets), idx: idx, bounds: &b}, nil
+	if compact {
+		for i := uint64(0); i < attributes; i++ {
+			if uint64(binary.LittleEndian.Uint32(data[attributesOffset+i*graphAttributeSize+24:])) >= uint64(len(d.classes)) {
+				return fail(errors.New("invalid graph attribute class"))
+			}
+		}
+		var lastKey int64
+		var lastNode uint32
+		for i := 0; i < d.nodes; i++ {
+			b := data[d.cellsOffset+i*d.cellSize:]
+			key, node := int64(binary.LittleEndian.Uint64(b)), binary.LittleEndian.Uint32(b[8:])
+			if uint64(node) >= n || (i > 0 && (key < lastKey || (key == lastKey && node <= lastNode))) {
+				return fail(errors.New("invalid graph spatial index"))
+			}
+			c := d.coordAt(int(node))
+			x, y := spatial.cell(c.Lat, c.Lon)
+			if key != cellKey(x, y) {
+				return fail(errors.New("graph spatial cell does not match coordinate"))
+			}
+			lastKey, lastNode = key, node
+		}
+	}
+
+	idx := &spatialIndex{cellSize: 0.01, minLat: graphBounds.MinLat, minLon: graphBounds.MinLon, maxX: int32(math.Floor((graphBounds.MaxLat - graphBounds.MinLat) / 0.01)), maxY: int32(math.Floor((graphBounds.MaxLon - graphBounds.MinLon) / 0.01))}
+	return &Router{g: Graph{store: d}, streets: meta.Streets, streetNameByNode: buildStreetNameIndex(meta.Streets), idx: idx, bounds: &graphBounds}, nil
 }
 
 // Close releases a file-backed graph. Map-built routers need no cleanup.

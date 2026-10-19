@@ -454,7 +454,8 @@ struct DemoImportFailure: Codable, Sendable {
     let root = root
     let checking = Task.detached(priority: .utility) {
       try DemoRegionStorage.matchingRegion(
-        for: source, in: root, minZoom: options.minZoom, maxZoom: options.maxZoom)
+        for: source, in: root, minZoom: options.minZoom, maxZoom: options.maxZoom,
+        minimumFormat: RegionManifest.currentFormat)
     }
     let existing = try await withTaskCancellationHandler {
       try await checking.value

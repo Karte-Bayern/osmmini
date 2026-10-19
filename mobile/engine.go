@@ -21,11 +21,11 @@ import (
 	osm "simonwaldherr.de/go/osmmini"
 )
 
-const FormatVersion = 1
+const FormatVersion = 3
 
 // Import semantics may change without changing the readable region format.
 // Never mix checkpoints from different graph-building rules.
-const importRevision = 2
+const importRevision = 4
 
 const regionDataNotice = `Map data © OpenStreetMap contributors.
 
@@ -162,6 +162,9 @@ func Import(ctx context.Context, o ImportOptions, progress func(Progress)) (Mani
 		return manifest, err
 	}
 
+	if err = cleanMapImportScratch(ctx, stage); err != nil {
+		return manifest, err
+	}
 	report("building_map", 0.5)
 	_, err = tinytiles.BuildPBF(ctx, tinytiles.PBFBuildOptions{
 		PBFInputs: []string{o.PBF}, ArtifactPath: filepath.Join(stage, "basemap.ttiles"),
@@ -335,7 +338,7 @@ func Open(ctx context.Context, path string) (*Engine, error) {
 	if err = json.Unmarshal(b, &manifest); err != nil {
 		return nil, err
 	}
-	if manifest.Format != FormatVersion {
+	if manifest.Format < 1 || manifest.Format > FormatVersion {
 		return nil, fmt.Errorf("unsupported region format %d", manifest.Format)
 	}
 	for _, name := range []string{"graph.bin", "search.jsonl", "search.jsonl.idx"} {

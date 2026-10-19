@@ -198,6 +198,10 @@ private struct DemoSidebar: View {
                 Text("Importiert \(date.formatted(date: .abbreviated, time: .omitted))")
                   .font(.caption2).foregroundStyle(.secondary)
               }
+              if region.format < RegionManifest.currentFormat {
+                Text("Erneut importieren, um Speicherplatz zu sparen.")
+                  .font(.caption2).foregroundStyle(.secondary)
+              }
             }
             Spacer(minLength: 0)
             Image(systemName: active ? "arrow.up.forward.app" : "chevron.right")
