@@ -4,8 +4,85 @@ import UniformTypeIdentifiers
 
 @main struct OSMminiDemoApp: App {
   @State private var model = DemoModel()
-  var body: some Scene { WindowGroup { DemoView(model: model) } }
+  var body: some Scene {
+    WindowGroup { DemoView(model: model) }
+      #if os(macOS)
+        .defaultSize(width: 1180, height: 780)
+        .windowResizability(.contentMinSize)
+        .commands {
+          DemoMacCommands()
+          SidebarCommands()
+        }
+      #endif
+  }
 }
+
+struct DemoMapActions {
+  let search: () -> Void
+  let plan: () -> Void
+  let showRegions: () -> Void
+  let isEnabled: Bool
+}
+
+private struct DemoMapActionsKey: FocusedValueKey {
+  typealias Value = DemoMapActions
+}
+
+private struct DemoImportAction {
+  let perform: () -> Void
+  let isEnabled: Bool
+}
+
+private struct DemoImportActionKey: FocusedValueKey {
+  typealias Value = DemoImportAction
+}
+
+extension FocusedValues {
+  var mapActions: DemoMapActions? {
+    get { self[DemoMapActionsKey.self] }
+    set { self[DemoMapActionsKey.self] = newValue }
+  }
+
+  fileprivate var importAction: DemoImportAction? {
+    get { self[DemoImportActionKey.self] }
+    set { self[DemoImportActionKey.self] = newValue }
+  }
+}
+
+#if os(macOS)
+  private struct DemoMacCommands: Commands {
+    @FocusedValue(\.mapActions) private var mapActions
+    @FocusedValue(\.importAction) private var importAction
+
+    var body: some Commands {
+      CommandGroup(after: .newItem) {
+        Button("PBF-Datei importieren …") {
+          guard let importAction, importAction.isEnabled else { return }
+          importAction.perform()
+        }
+        .keyboardShortcut("o", modifiers: .command)
+        .disabled(importAction?.isEnabled != true)
+      }
+      CommandMenu("Karte") {
+        Button("Orte suchen …") {
+          guard let mapActions, mapActions.isEnabled else { return }
+          mapActions.search()
+        }
+        .keyboardShortcut("f", modifiers: .command)
+        .disabled(mapActions?.isEnabled != true)
+        Button("Routenplanung ein-/ausblenden") {
+          guard let mapActions, mapActions.isEnabled else { return }
+          mapActions.plan()
+        }
+        .keyboardShortcut("r", modifiers: [.command, .shift])
+        .disabled(mapActions?.isEnabled != true)
+        Divider()
+        Button("Offline-Karten anzeigen") { mapActions?.showRegions() }
+          .disabled(mapActions == nil)
+      }
+    }
+  }
+#endif
 
 struct DemoView: View {
   let model: DemoModel
@@ -27,6 +104,18 @@ struct DemoView: View {
         columns = .all
       }
     }
+    .navigationSplitViewStyle(.balanced)
+    #if os(macOS)
+      .frame(minWidth: 720, minHeight: 500)
+      .focusedSceneValue(
+        \.importAction,
+        DemoImportAction(
+          perform: {
+            guard !model.busy, model.pending == nil else { return }
+            importing = true
+          },
+          isEnabled: !model.busy && model.pending == nil))
+    #endif
     .fileImporter(isPresented: $importing, allowedContentTypes: [.data]) { result in
       switch result {
       case .success(let url): model.importFile(url)

@@ -1,4 +1,4 @@
-# OSMmini for Swift, iPhone, iPad and Mac
+# OSMmini for Swift, iPhone, iPad, iPhone Duo and Mac
 
 An embeddable, SQLite-free offline OSM engine with a Swift 6 API, a native
 SwiftUI vector map, and a demo application. The Go core is shared with the
@@ -17,7 +17,8 @@ make build-apple
 open apple/Demo/OSMminiDemo.xcodeproj
 ```
 
-Select the shared **OSMminiDemo** scheme and an iPhone, Simulator or Mac.
+Select the shared **OSMminiDemo** scheme and an iPhone, iPad, iPhone Duo,
+Simulator or Mac.
 For a physical iPhone, configure your signing team once in a local file:
 
 ```sh
@@ -51,6 +52,42 @@ swift test --package-path apple
 previous complete framework until all requested slices have built successfully.
 `GOCACHE`, `GOPROXY`, `GOTOOLCHAIN`, and `DEVELOPER_DIR` may be supplied by CI.
 No dependency versions are upgraded by the build.
+
+## Native windows and resizable displays
+
+The demo target builds a universal iPhone/iPad app and a native macOS app.
+Mac Catalyst is explicitly disabled. iPad multitasking and all interface
+orientations are enabled. Building with Xcode 27.1 uses the iOS 27.1 SDK's
+full-screen behavior for [iPhone Duo](https://developer.apple.com/iphone-duo/)
+while retaining the deployment targets above.
+
+Navigation uses the standard adaptive split view. Route and place details move
+beside the map when the actual detail window can retain at least 400 points
+for the map and 320–380 points for the inspector. Narrow and shallow windows
+keep details below the map; accessibility text uses a wider side panel.
+The layout follows available geometry and safe areas, including asymmetric
+display insets, rather than device names or interface orientation. `AnyLayout`
+retains the map and exporter instances across size changes.
+
+Mac windows start at 1180 × 780 points and resize down to 720 × 500. Native
+menu commands act on the focused window: **⌘O** imports a PBF, **⌘F** opens
+place search, and **⇧⌘R** toggles route planning. The View menu includes native
+sidebar commands. Search/directions sheets have desktop sizes and Escape
+closes them. The data engine remains shared between windows; navigation,
+location requests and presented panels remain local to each window.
+
+Validation with the complete Niederbayern extract passed all 173 Swift tests,
+native macOS and universal iOS Release builds, and the SDK's real-region
+search, routing and rendering checks. An iPad UI run retained the selected
+Passau route endpoint and 500 m map scale through portrait/landscape changes;
+the wide layout was also inspected visually. The iPhone Duo simulator's outer
+display rendered the map, search and route-start selection correctly.
+
+Interactive coverage remains limited: the local Duo simulator did not deliver
+a usable fold/display-size transition, and macOS UI automation could not start
+with the desktop locked. The iPad export-dialog rotation check was interrupted
+by a repeatable Simulator Metal/XPC driver crash after calculating the route,
+including in an isolated run. These interactions are not claimed as passed.
 
 ## Demo workflow
 

@@ -22,25 +22,37 @@ struct DemoMapScreen: View {
 
   var body: some View {
     GeometryReader { geometry in
-      let maximumInspectorHeight = min(
-        dynamicTypeSize.isAccessibilitySize ? 520 : 340,
-        geometry.size.height * (dynamicTypeSize.isAccessibilitySize ? 0.65 : 0.45))
-      DemoMapCanvas(model: model, location: location, onSelect: selectMapPoint)
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-          ScrollView {
-            inspector
-              .onGeometryChange(for: CGFloat.self) {
-                $0.size.height
-              } action: {
-                inspectorHeight = $0
-              }
-          }
-          .scrollBounceBehavior(.basedOnSize)
-          // A zero-height scroll view never measures its content on iOS.
-          // Keep a positive proposal so opening a panel can establish its height.
-          .frame(height: min(max(1, inspectorHeight), maximumInspectorHeight))
-          .background(.regularMaterial)
+      let metrics = DemoMapLayoutMetrics(
+        size: geometry.size, accessibility: dynamicTypeSize.isAccessibilitySize,
+        expanded: showsExpandedInspector)
+      let layout =
+        metrics.sideWidth == nil
+        ? AnyLayout(VStackLayout(spacing: 0)) : AnyLayout(HStackLayout(spacing: 0))
+      // AnyLayout keeps the same map and exporter alive when a window resizes
+      // or Duo changes displays. Only their placement and proposals change.
+      layout {
+        DemoMapCanvas(model: model, location: location, onSelect: selectMapPoint)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+        ScrollView {
+          inspector
+            .onGeometryChange(for: CGFloat.self) {
+              $0.size.height
+            } action: {
+              inspectorHeight = $0
+            }
         }
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(
+          width: metrics.sideWidth,
+          height: metrics.sideWidth == nil
+            ? min(max(1, inspectorHeight), metrics.maximumBottomHeight) : geometry.size.height
+        )
+        .background(.regularMaterial)
+        .overlay(alignment: .leading) {
+          Rectangle().fill(.quaternary).frame(width: metrics.sideWidth == nil ? 0 : 1)
+            .allowsHitTesting(false)
+        }
+      }
     }
     .navigationTitle(model.engine?.manifest.name ?? "Offline-Karte")
     #if os(iOS)
@@ -54,16 +66,7 @@ struct DemoMapScreen: View {
         Button(
           planning ? "Routendetails ausblenden" : "Route planen",
           systemImage: "point.topleft.down.to.point.bottomright.curvepath"
-        ) {
-          mapTarget = nil
-          if model.inspectedPlace != nil {
-            model.dismissPlace()
-            planning = true
-          } else {
-            planning.toggle()
-          }
-          routeDetailsExpanded = true
-        }.disabled(model.engine == nil)
+        ) { togglePlanning() }.disabled(model.engine == nil)
         Button {
           showLocation()
         } label: {
@@ -80,6 +83,12 @@ struct DemoMapScreen: View {
         .disabled(model.engine == nil)
       }
     }
+    .focusedSceneValue(
+      \.mapActions,
+      DemoMapActions(
+        search: { openSearch(for: nil) }, plan: togglePlanning, showRegions: showRegions,
+        isEnabled: model.engine != nil)
+    )
     .sheet(isPresented: $searching) {
       DemoPlaceSearch(model: model, target: searchTarget) { result in
         if let searchTarget {
@@ -115,6 +124,22 @@ struct DemoMapScreen: View {
     .onChange(of: model.start != nil || model.destination != nil, initial: true) { _, hasPoints in
       planning = hasPoints
     }
+  }
+
+  private var showsExpandedInspector: Bool {
+    mapTarget != nil || model.inspectedPlace != nil || planning || model.busy
+      || location.state != .idle
+  }
+
+  private func togglePlanning() {
+    mapTarget = nil
+    if model.inspectedPlace != nil {
+      model.dismissPlace()
+      planning = true
+    } else {
+      planning.toggle()
+    }
+    routeDetailsExpanded = true
   }
 
   private var inspector: some View {
@@ -464,13 +489,32 @@ struct DemoMapScreen: View {
       }
       .navigationTitle("Wegbeschreibung")
       .toolbar {
-        ToolbarItem(placement: .cancellationAction) { Button("Schließen") { directions = false } }
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Schließen", role: .cancel) { directions = false }
+            .keyboardShortcut(.cancelAction)
+        }
       }
     }
     #if os(macOS)
-      .frame(minWidth: 420, minHeight: 450)
+      .frame(minWidth: 420, idealWidth: 560, minHeight: 450, idealHeight: 620)
+    #else
+      .presentationDetents([.medium, .large])
     #endif
-    .presentationDetents([.medium, .large])
+  }
+}
+
+/// Use the detail window's available size, independent of device name,
+/// orientation and display count. Safe areas have already been applied here.
+struct DemoMapLayoutMetrics {
+  let sideWidth: CGFloat?
+  let maximumBottomHeight: CGFloat
+
+  init(size: CGSize, accessibility: Bool, expanded: Bool) {
+    let width = size.width.isFinite ? max(0, size.width) : 0
+    let height = size.height.isFinite ? max(0, size.height) : 0
+    let desiredWidth = accessibility ? 380.0 : min(380, max(320, width / 3))
+    sideWidth = expanded && height >= 340 && width - desiredWidth >= 400 ? desiredWidth : nil
+    maximumBottomHeight = min(accessibility ? 520 : 340, height * (accessibility ? 0.65 : 0.45))
   }
 }
 
@@ -573,14 +617,17 @@ private struct DemoPlaceSearch: View {
         .navigationBarTitleDisplayMode(.inline)
       #endif
       .toolbar {
-        ToolbarItem(placement: .cancellationAction) { Button("Schließen") { dismiss() } }
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Schließen", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
+        }
       }
     }
     #if os(macOS)
-      .frame(minWidth: 420, minHeight: 450)
+      .frame(minWidth: 420, idealWidth: 560, minHeight: 450, idealHeight: 620)
+    #else
+      .presentationDetents([.large])
+      .presentationDragIndicator(.visible)
     #endif
-    .presentationDetents([.large])
-    .presentationDragIndicator(.visible)
     .onAppear {
       model.resumeSearch(for: presentationID)
       focused = true
