@@ -1,6 +1,7 @@
 package mobile
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	osm "simonwaldherr.de/go/osmmini"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestImportRejectsLegacyCheckpointWithoutModifyingIt(t *testing.T) {
@@ -274,5 +276,100 @@ func TestImportResumesCompletedGraphAndIsIdempotent(t *testing.T) {
 	}
 	if _, err := Import(t.Context(), o, nil); err != nil {
 		t.Fatalf("retry after publication: %v", err)
+	}
+}
+
+func TestImportResumesCompletedGraphAndSearchBeforeMapBuild(t *testing.T) {
+	pbf := fixture(t)
+	destination := filepath.Join(t.TempDir(), "region")
+	stage := destination + ".pending"
+	options := ImportOptions{PBF: pbf, Destination: destination, Name: "Resumed region", MinZoom: 14, MaxZoom: 14}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	reachedMap := false
+	_, err := Import(ctx, options, func(p Progress) {
+		if p.Phase == "building_map" {
+			reachedMap = true
+			cancel()
+		}
+	})
+	if !reachedMap || !errors.Is(err, context.Canceled) {
+		t.Fatalf("map-phase cancellation: reached=%v, error=%v", reachedMap, err)
+	}
+	if _, err := os.Stat(destination); !os.IsNotExist(err) {
+		t.Fatalf("cancelled import published a region: %v", err)
+	}
+
+	type savedFile struct {
+		info os.FileInfo
+		data []byte
+	}
+	saved := make(map[string]savedFile)
+	for i, name := range []string{"graph.bin", "graph.ready", "search.jsonl", "search.jsonl.idx", "search.ready"} {
+		path := filepath.Join(stage, name)
+		data, err := os.ReadFile(path)
+		if err != nil || len(data) == 0 {
+			t.Fatalf("completed checkpoint %s missing: %v", name, err)
+		}
+		// An old, explicit timestamp detects rewrites even on filesystems
+		// whose modification-time resolution is coarser than a fixture import.
+		stamp := time.Unix(1_000_000+int64(i), 0)
+		if err := os.Chtimes(path, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		saved[name] = savedFile{info: info, data: data}
+	}
+
+	phases := make(map[string]bool)
+	manifest, err := Import(t.Context(), options, func(p Progress) { phases[p.Phase] = true })
+	if err != nil {
+		t.Fatalf("resume after map-phase cancellation: %v", err)
+	}
+	if phases["building_graph"] || !phases["loading_graph"] || !phases["building_map"] || !phases["ready"] {
+		t.Fatalf("resume skipped or repeated the wrong phases: %+v", phases)
+	}
+	if manifest.Name != options.Name || manifest.Nodes != 3 || manifest.Edges != 4 {
+		t.Fatalf("graph metadata lost after closing the preparation phase: %+v", manifest)
+	}
+	for name, before := range saved {
+		path := filepath.Join(destination, name)
+		after, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(data, before.data) || !after.ModTime().Equal(before.info.ModTime()) || !os.SameFile(before.info, after) {
+			t.Fatalf("completed %s was rebuilt instead of resumed: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(stage); !os.IsNotExist(err) {
+		t.Fatalf("published import left its checkpoint directory: %v", err)
+	}
+	if err := os.Remove(pbf); err != nil {
+		t.Fatal(err)
+	}
+	engine, err := Open(t.Context(), destination)
+	if err != nil {
+		t.Fatalf("resumed region cannot open without its source: %v", err)
+	}
+	defer engine.Close()
+	results, err := engine.Search(t.Context(), "cafe", 10)
+	if err != nil || len(results) != 1 || results[0].ID != 2 || results[0].Label != "Café Test" {
+		t.Fatalf("resumed offline search: %+v, %v", results, err)
+	}
+	route, err := engine.Route(t.Context(), RouteRequest{From: osm.Coord{Lat: 48.001, Lon: 12.001}, To: osm.Coord{Lat: 48.003, Lon: 12.003}})
+	if err != nil || len(route.Path) != 3 || route.DistanceM <= 0 || route.DurationS <= 0 {
+		t.Fatalf("resumed offline route: %+v, %v", route, err)
+	}
+	z := options.MaxZoom
+	x := int((12.002 + 180) / 360 * math.Exp2(float64(z)))
+	latitude := 48.002 * math.Pi / 180
+	y := int((1 - math.Asinh(math.Tan(latitude))/math.Pi) / 2 * math.Exp2(float64(z)))
+	if tile, err := engine.Tile(t.Context(), z, x, y); err != nil || len(tile.Features) == 0 {
+		t.Fatalf("resumed offline map: %+v, %v", tile, err)
 	}
 }

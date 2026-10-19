@@ -3,6 +3,7 @@ package osmmini
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -88,5 +89,72 @@ func TestRoadImportWindowCountsOnlyRetainedCoordinates(t *testing.T) {
 	}
 	if _, err := router.RouteWithOptions(t.Context(), 20, 30, RouteOptions{Engine: EngineDijkstra}); err != nil {
 		t.Fatalf("windowed route: %v", err)
+	}
+}
+
+func TestRoadImportKeepsExactIndependentAdjacencySpans(t *testing.T) {
+	table := []string{"", "highway", "residential", "name", "Main Street", "Side Street", "oneway", "-1", "maxspeed", "80", "maxheight", "2.5", "maxweight", "7.5"}
+	var group []byte
+	for _, id := range []int64{10, 20, 30, 40, 50, 60, 70} {
+		lat := 480000000 + id*1000
+		if id == 60 {
+			lat = 480010000 // coincides with 10; do not count a zero-length edge
+		}
+		group = append(group, testPBFPrimitiveGroup(1, testPBFNode(id, nil, nil, lat, 120000000))...)
+	}
+	group = append(group, testPBFPrimitiveGroup(3, testPBFWay(1, []uint64{1, 3}, []uint64{2, 4}, []int64{10, 10, 10}))...)
+	group = append(group, testPBFPrimitiveGroup(3, testPBFWay(2, []uint64{1, 3, 8, 10, 12}, []uint64{2, 5, 9, 11, 13}, []int64{20, 20}))...)
+	group = append(group, testPBFPrimitiveGroup(3, testPBFWay(3, []uint64{1, 6}, []uint64{2, 7}, []int64{40, 10}))...)
+	group = append(group, testPBFPrimitiveGroup(3, testPBFWay(4, []uint64{1}, []uint64{2}, []int64{10, 50}))...)
+	group = append(group, testPBFPrimitiveGroup(3, testPBFWay(5, []uint64{1}, []uint64{2}, []int64{70, 10}))...)
+	path := filepath.Join(t.TempDir(), "junction.osm.pbf")
+	if err := os.WriteFile(path, testPBFData(table, group), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r, _, err := BuildRouterWithAddressesOptions(path, BuildOptions{Context: t.Context(), SkipAddresses: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.NodeCount() != 5 || r.EdgeCount() != 7 {
+		t.Fatalf("graph = %d nodes / %d edges, want 5 / 7", r.NodeCount(), r.EdgeCount())
+	}
+	coords, adj := r.ExportGraph()
+	for id, edges := range adj {
+		if len(edges) != cap(edges) {
+			t.Fatalf("node %d retains %d spare edge slots", id, cap(edges)-len(edges))
+		}
+	}
+	if edges := adj[20]; len(edges) != 3 || edges[0].To != 10 || edges[1].To != 30 || edges[2].To != 40 {
+		t.Fatalf("junction edge ordering changed: %+v", edges)
+	}
+	if edge := adj[20][2]; edge.SpeedKph != 80 || edge.MaxHeightM != 2.5 || edge.MaxWeightT != 7.5 || edge.HwyType != "residential" {
+		t.Fatalf("edge attributes changed: %+v", edge)
+	}
+	if edges := adj[40]; len(edges) != 1 || edges[0].To != 20 || adj[50][0].To != 40 {
+		t.Fatalf("reverse oneway changed: 40=%+v, 50=%+v", edges, adj[50])
+	}
+	// The shared allocation remains an implementation detail: appending to one
+	// exported slice must allocate rather than mutate a neighbouring node.
+	want := make(map[int64][]Edge, len(adj))
+	for id, edges := range adj {
+		want[id] = append([]Edge(nil), edges...)
+	}
+	expanded := append(adj[20], Edge{To: 999})
+	expanded[len(expanded)-1].To = 1000
+	if !reflect.DeepEqual(adj, want) {
+		t.Fatal("append to one node corrupted another node's edges")
+	}
+	graphPath := filepath.Join(t.TempDir(), "graph.bin")
+	if err := r.WriteGraph(t.Context(), graphPath); err != nil {
+		t.Fatal(err)
+	}
+	disk, err := OpenGraph(graphPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = disk.Close() })
+	diskCoords, diskAdj := disk.ExportGraph()
+	if !reflect.DeepEqual(coords, diskCoords) || !reflect.DeepEqual(adj, diskAdj) {
+		t.Fatal("compact adjacency changed the portable graph snapshot")
 	}
 }

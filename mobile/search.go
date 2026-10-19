@@ -3,11 +3,15 @@ package mobile
 import (
 	"bufio"
 	"bytes"
+	"container/heap"
 	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -29,6 +33,7 @@ type SearchResult struct {
 
 const searchKeyBytes = 96
 const searchIndexBytes = 112
+const maxSearchRecordBytes = 1 << 20
 
 type searchPosting struct {
 	term   string
@@ -80,13 +85,17 @@ func normalized(s string) string {
 }
 
 func buildSearch(ctx context.Context, path string, r *osm.Router, source string) error {
+	if err := cleanSearchScratch(ctx, filepath.Dir(path)); err != nil {
+		return err
+	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 	w := bufio.NewWriter(f)
-	var postings []searchPosting
+	index := searchIndexBuilder{ctx: ctx, path: path + ".idx"}
+	defer index.close()
 	var offset uint64
 	emit := func(result SearchResult) error {
 		if err := ctx.Err(); err != nil {
@@ -98,6 +107,9 @@ func buildSearch(ctx context.Context, path string, r *osm.Router, source string)
 			return err
 		}
 		b = append(b, '\n')
+		if len(b) > maxSearchRecordBytes {
+			return fmt.Errorf("search record exceeds %d bytes", maxSearchRecordBytes)
+		}
 		if _, err = w.Write(b); err != nil {
 			return err
 		}
@@ -107,7 +119,9 @@ func buildSearch(ctx context.Context, path string, r *osm.Router, source string)
 				term = term[:searchKeyBytes]
 			}
 			if !seen[term] {
-				postings = append(postings, searchPosting{term, offset, uint32(len(b))})
+				if err := index.add(searchPosting{term, offset, uint32(len(b))}); err != nil {
+					return err
+				}
 				seen[term] = true
 			}
 		}
@@ -119,8 +133,16 @@ func buildSearch(ctx context.Context, path string, r *osm.Router, source string)
 			return err
 		}
 	}
-	var ways []osm.Way
-	refs := map[int64]osm.Coord{}
+	// Keep only referenced IDs in memory. The labels and geometry of address/POI
+	// ways are streamed to a private scratch file until their coordinates arrive
+	// during the node pass. Large regions otherwise retain every way's tag map.
+	ways, err := os.CreateTemp(filepath.Dir(path), ".search-ways-*")
+	if err != nil {
+		return err
+	}
+	defer func() { ways.Close(); os.Remove(ways.Name()) }()
+	wayWriter := bufio.NewWriter(ways)
+	var refs []int64
 	poiKey := func(k string) bool {
 		switch k {
 		case "amenity", "shop", "tourism", "leisure", "office", "emergency", "place":
@@ -160,42 +182,63 @@ func buildSearch(ctx context.Context, path string, r *osm.Router, source string)
 		if category(way.Tags) == "" && way.Tags["addr:street"] == "" {
 			return nil
 		}
-		ways = append(ways, way)
-		for _, id := range way.NodeIDs {
-			refs[id] = osm.Coord{}
-		}
-		return nil
+		refs = append(refs, way.NodeIDs...)
+		return writeSearchWay(wayWriter, result(way.ID, "way", osm.Coord{}, way.Tags), way.NodeIDs)
 	}})
 	if err != nil {
 		return err
 	}
+	if err = wayWriter.Flush(); err != nil {
+		return err
+	}
+	if _, err = ways.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
 	if len(refs) > 0 {
+		if err = ctx.Err(); err != nil {
+			return err
+		}
+		slices.Sort(refs)
+		refs = slices.Compact(refs)
+		if err = ctx.Err(); err != nil {
+			return err
+		}
+		coordinates := make([]osm.Coord, len(refs))
+		found := make([]bool, len(refs))
+		cursor := 0
+		var lastID int64
 		err = osm.ExtractFile(source, osm.Options{Context: ctx}, osm.Callbacks{Node: func(id int64, lat, lon float64) error {
-			if _, ok := refs[id]; ok {
-				refs[id] = osm.Coord{Lat: lat, Lon: lon}
+			// PBF nodes normally arrive in ID order. Merge against the sorted
+			// references in linear time, with binary search for unsorted files.
+			if id < lastID {
+				cursor, _ = slices.BinarySearch(refs, id)
+			} else {
+				for cursor < len(refs) && refs[cursor] < id {
+					cursor++
+				}
+			}
+			lastID = id
+			if cursor < len(refs) && refs[cursor] == id {
+				coordinates[cursor] = osm.Coord{Lat: lat, Lon: lon}
+				found[cursor] = true
 			}
 			return nil
 		}})
 		if err != nil {
 			return err
 		}
-	}
-	for _, way := range ways {
-		var c osm.Coord
-		count := 0
-		for _, id := range way.NodeIDs {
-			p := refs[id]
-			if p.Lat != 0 || p.Lon != 0 {
-				c.Lat += p.Lat
-				c.Lon += p.Lon
-				count++
-			}
-		}
-		if count > 0 {
-			c.Lat /= float64(count)
-			c.Lon /= float64(count)
-			if err = emit(result(way.ID, "way", c, way.Tags)); err != nil {
+		reader := bufio.NewReader(ways)
+		for {
+			way, err := readSearchWay(ctx, reader, refs, coordinates, found)
+			if err == io.EOF {
+				break
+			} else if err != nil {
 				return err
+			}
+			if way.Kind != "" {
+				if err = emit(way); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -205,37 +248,371 @@ func buildSearch(ctx context.Context, path string, r *osm.Router, source string)
 	if err = f.Sync(); err != nil {
 		return err
 	}
-	sort.Slice(postings, func(i, j int) bool {
-		if postings[i].term != postings[j].term {
-			return postings[i].term < postings[j].term
-		}
-		return postings[i].offset < postings[j].offset
-	})
-	index, err := os.OpenFile(path+".idx", os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	return index.finish()
+}
+
+// Import holds the destination lock while building this private staging
+// directory. A process killed during indexing cannot run defers, so discard its
+// scratch files on resume instead of carrying them into the published region.
+func cleanSearchScratch(ctx context.Context, directory string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(directory)
 	if err != nil {
 		return err
 	}
-	defer index.Close()
-	iw := bufio.NewWriter(index)
-	var b [searchIndexBytes]byte
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if strings.HasPrefix(entry.Name(), ".search-sort-") || strings.HasPrefix(entry.Name(), ".search-ways-") {
+			if err := os.RemoveAll(filepath.Join(directory, entry.Name())); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// The search file/index stay byte-compatible with existing offline regions.
+// Only temporary way records and sort runs use these private import formats.
+func writeSearchWay(w *bufio.Writer, result SearchResult, nodes []int64) error {
+	data, err := json.Marshal(result)
+	if err != nil {
+		return err
+	}
+	if len(data) > maxSearchRecordBytes || uint64(len(nodes)) > uint64(^uint32(0)) {
+		return fmt.Errorf("temporary search way exceeds record limit")
+	}
+	var b [8]byte
+	binary.LittleEndian.PutUint32(b[:4], uint32(len(data)))
+	binary.LittleEndian.PutUint32(b[4:], uint32(len(nodes)))
+	if _, err = w.Write(b[:]); err != nil {
+		return err
+	}
+	if _, err = w.Write(data); err != nil {
+		return err
+	}
+	// Geometry is streamed as IDs, avoiding another large JSON allocation for
+	// ways with many vertices. The extraction callback already owns the slice.
+	for _, id := range nodes {
+		binary.LittleEndian.PutUint64(b[:], uint64(id))
+		if _, err = w.Write(b[:]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func readSearchWay(ctx context.Context, r *bufio.Reader, refs []int64, coordinates []osm.Coord, found []bool) (SearchResult, error) {
+	var result SearchResult
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	var b [8]byte
+	if _, err := io.ReadFull(r, b[:]); err != nil {
+		return result, err
+	}
+	length := binary.LittleEndian.Uint32(b[:4])
+	nodes := binary.LittleEndian.Uint32(b[4:])
+	if length == 0 || length > maxSearchRecordBytes {
+		return result, fmt.Errorf("invalid temporary search way length")
+	}
+	data := make([]byte, length)
+	if _, err := io.ReadFull(r, data); err != nil {
+		return result, fmt.Errorf("read temporary search way: %w", err)
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return result, err
+	}
+	var c osm.Coord
+	count := 0
+	for i := uint32(0); i < nodes; i++ {
+		if i%4096 == 0 {
+			if err := ctx.Err(); err != nil {
+				return result, err
+			}
+		}
+		if _, err := io.ReadFull(r, b[:]); err != nil {
+			return result, fmt.Errorf("read temporary search way reference: %w", err)
+		}
+		if j, ok := slices.BinarySearch(refs, int64(binary.LittleEndian.Uint64(b[:]))); ok && found[j] {
+			c.Lat += coordinates[j].Lat
+			c.Lon += coordinates[j].Lon
+			count++
+		}
+	}
+	if count == 0 {
+		return SearchResult{}, nil
+	}
+	result.Coordinate = osm.Coord{Lat: c.Lat / float64(count), Lon: c.Lon / float64(count)}
+	return result, nil
+}
+
+// Each sort chunk holds at most 16,384 postings and 96 bytes per term. Merge
+// passes open at most 16 runs, so index preparation does not grow a RAM-resident
+// posting list alongside the graph and all POI/address geometry.
+const searchSortPostings = 16 << 10
+const searchMergeRuns = 16
+
+type searchIndexBuilder struct {
+	ctx      context.Context
+	path     string
+	dir      string
+	postings []searchPosting
+	runs     []string
+}
+
+func (s *searchIndexBuilder) close() {
+	if s.dir != "" {
+		_ = os.RemoveAll(s.dir)
+	}
+}
+
+func (s *searchIndexBuilder) add(p searchPosting) error {
+	if err := s.ctx.Err(); err != nil {
+		return err
+	}
+	if s.postings == nil {
+		s.postings = make([]searchPosting, 0, searchSortPostings)
+	}
+	// A term must not pin the entire normalized address/brand string.
+	p.term = strings.Clone(p.term)
+	s.postings = append(s.postings, p)
+	if len(s.postings) < searchSortPostings {
+		return nil
+	}
+	return s.flush()
+}
+
+func sortSearchPostings(postings []searchPosting) {
+	slices.SortFunc(postings, func(a, b searchPosting) int {
+		if c := strings.Compare(a.term, b.term); c != 0 {
+			return c
+		}
+		if a.offset < b.offset {
+			return -1
+		}
+		if a.offset > b.offset {
+			return 1
+		}
+		return 0
+	})
+}
+
+func (s *searchIndexBuilder) flush() error {
+	if len(s.postings) == 0 {
+		return s.ctx.Err()
+	}
+	if s.dir == "" {
+		var err error
+		s.dir, err = os.MkdirTemp(filepath.Dir(s.path), ".search-sort-*")
+		if err != nil {
+			return err
+		}
+	}
+	sortSearchPostings(s.postings)
+	path := filepath.Join(s.dir, fmt.Sprintf("run-%d", len(s.runs)))
+	if err := writeSearchPostings(s.ctx, path, s.postings, true); err != nil {
+		return err
+	}
+	s.runs = append(s.runs, path)
+	clear(s.postings)
+	s.postings = s.postings[:0]
+	return nil
+}
+
+func (s *searchIndexBuilder) finish() error {
+	if len(s.runs) == 0 {
+		sortSearchPostings(s.postings)
+		return writeSearchPostings(s.ctx, s.path, s.postings, false)
+	}
+	if err := s.flush(); err != nil {
+		return err
+	}
+	runs := s.runs
+	for pass := 0; len(runs) > searchMergeRuns; pass++ {
+		var next []string
+		for i := 0; i < len(runs); i += searchMergeRuns {
+			group := runs[i:min(len(runs), i+searchMergeRuns)]
+			path := filepath.Join(s.dir, fmt.Sprintf("merge-%d-%d", pass, i))
+			if err := mergeSearchPostings(s.ctx, path, group, true); err != nil {
+				return err
+			}
+			next = append(next, path)
+			for _, old := range group {
+				if err := os.Remove(old); err != nil {
+					return err
+				}
+			}
+		}
+		runs = next
+	}
+	return mergeSearchPostings(s.ctx, s.path, runs, false)
+}
+
+func writeSearchPosting(w *bufio.Writer, p searchPosting, compact bool) error {
+	length := searchIndexBytes
+	if compact {
+		length = 1 + len(p.term) + 12
+	}
+	if w.Available() < length {
+		if err := w.Flush(); err != nil {
+			return err
+		}
+	}
+	b := w.AvailableBuffer()[:length]
+	if compact {
+		// Temporary runs omit the final index's 96-byte zero padding.
+		b[0] = byte(len(p.term))
+		copy(b[1:], p.term)
+		at := 1 + len(p.term)
+		binary.LittleEndian.PutUint64(b[at:], p.offset)
+		binary.LittleEndian.PutUint32(b[at+8:], p.length)
+	} else {
+		clear(b)
+		copy(b[:searchKeyBytes], p.term)
+		binary.LittleEndian.PutUint64(b[96:], p.offset)
+		binary.LittleEndian.PutUint32(b[104:], p.length)
+	}
+	_, err := w.Write(b)
+	return err
+}
+
+func writeSearchPostings(ctx context.Context, path string, postings []searchPosting, compact bool) (err error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := f.Close(); err == nil {
+			err = closeErr
+		}
+	}()
+	w := bufio.NewWriterSize(f, 32<<10)
 	for i, p := range postings {
 		if i%4096 == 0 {
 			if err = ctx.Err(); err != nil {
 				return err
 			}
 		}
-		clear(b[:])
-		copy(b[:searchKeyBytes], p.term)
-		binary.LittleEndian.PutUint64(b[96:], p.offset)
-		binary.LittleEndian.PutUint32(b[104:], p.length)
-		if _, err = iw.Write(b[:]); err != nil {
+		if err = writeSearchPosting(w, p, compact); err != nil {
 			return err
 		}
 	}
-	if err = iw.Flush(); err != nil {
+	if err = ctx.Err(); err != nil {
 		return err
 	}
-	return index.Sync()
+	if err = w.Flush(); err != nil {
+		return err
+	}
+	if !compact {
+		return f.Sync()
+	}
+	return nil
+}
+
+type searchRun struct {
+	reader  *bufio.Reader
+	posting searchPosting
+	buffer  [searchKeyBytes + 12]byte
+}
+
+func (r *searchRun) advance() error {
+	n, err := r.reader.ReadByte()
+	if err != nil {
+		return err
+	}
+	if n == 0 || n > searchKeyBytes {
+		return fmt.Errorf("invalid temporary search key length")
+	}
+	b := r.buffer[:int(n)+12]
+	if _, err = io.ReadFull(r.reader, b); err != nil {
+		return fmt.Errorf("read temporary search posting: %w", err)
+	}
+	term := r.posting.term
+	if term != string(b[:n]) {
+		term = string(b[:n])
+	}
+	r.posting = searchPosting{term, binary.LittleEndian.Uint64(b[n:]), binary.LittleEndian.Uint32(b[int(n)+8:])}
+	return nil
+}
+
+type searchRunHeap []*searchRun
+
+func (h searchRunHeap) Len() int { return len(h) }
+func (h searchRunHeap) Less(i, j int) bool {
+	a, b := h[i].posting, h[j].posting
+	if a.term != b.term {
+		return a.term < b.term
+	}
+	return a.offset < b.offset
+}
+func (h searchRunHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+func (h *searchRunHeap) Push(x any)   { *h = append(*h, x.(*searchRun)) }
+func (h *searchRunHeap) Pop() any {
+	i := len(*h) - 1
+	x := (*h)[i]
+	*h = (*h)[:i]
+	return x
+}
+
+func mergeSearchPostings(ctx context.Context, path string, paths []string, compact bool) (err error) {
+	var queue searchRunHeap
+	for _, path := range paths {
+		f, openErr := os.Open(path)
+		if openErr != nil {
+			return openErr
+		}
+		defer f.Close()
+		run := &searchRun{reader: bufio.NewReaderSize(f, 32<<10)}
+		if err = run.advance(); err == io.EOF {
+			continue
+		} else if err != nil {
+			return err
+		}
+		queue = append(queue, run)
+	}
+	heap.Init(&queue)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := f.Close(); err == nil {
+			err = closeErr
+		}
+	}()
+	w := bufio.NewWriterSize(f, 32<<10)
+	for n := 0; len(queue) > 0; n++ {
+		if n%4096 == 0 {
+			if err = ctx.Err(); err != nil {
+				return err
+			}
+		}
+		run := queue[0]
+		if err = writeSearchPosting(w, run.posting, compact); err != nil {
+			return err
+		}
+		if err = run.advance(); err == io.EOF {
+			heap.Pop(&queue)
+		} else if err != nil {
+			return err
+		} else {
+			heap.Fix(&queue, 0)
+		}
+	}
+	if err = ctx.Err(); err != nil {
+		return err
+	}
+	if err = w.Flush(); err != nil {
+		return err
+	}
+	if !compact {
+		return f.Sync()
+	}
+	return nil
 }
 
 type searchReader struct {
@@ -325,7 +702,7 @@ func (s *searchReader) search(ctx context.Context, query string, limit int) ([]S
 	var dataStart, dataEnd uint64
 	var oversized []byte
 	readRecord := func(offset uint64, length uint32) ([]byte, error) {
-		if length > 1<<20 || offset > uint64(s.dataBytes) || uint64(length) > uint64(s.dataBytes)-offset {
+		if length > maxSearchRecordBytes || offset > uint64(s.dataBytes) || uint64(length) > uint64(s.dataBytes)-offset {
 			return nil, fmt.Errorf("invalid search record length or offset")
 		}
 		end := offset + uint64(length)

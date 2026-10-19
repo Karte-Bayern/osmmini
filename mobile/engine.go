@@ -155,43 +155,13 @@ func Import(ctx context.Context, o ImportOptions, progress func(Progress)) (Mani
 	if err = os.WriteFile(signaturePath, []byte(signature), 0o600); err != nil {
 		return manifest, err
 	}
-	graphPath := filepath.Join(stage, "graph.bin")
-	var router *osm.Router
-	if _, err = os.Stat(filepath.Join(stage, "graph.ready")); err == nil {
-		report("loading_graph", 0.3)
-		router, err = osm.OpenGraph(graphPath)
-	} else {
-		report("building_graph", 0.05)
-		router, _, err = osm.BuildRouterWithAddressesOptions(o.PBF, osm.BuildOptions{Context: ctx, MaxNodes: o.MaxImportNodes, SkipAddresses: true})
-		if err == nil && router.NodeCount() == 0 {
-			err = errors.New("PBF contains no routable roads")
-		}
-		if err == nil {
-			_ = os.Remove(graphPath)
-			err = router.WriteGraph(ctx, graphPath)
-		}
-		if err == nil {
-			err = os.WriteFile(filepath.Join(stage, "graph.ready"), []byte("1"), 0o600)
-		}
-		if err == nil {
-			// Drop the importer's coordinate/adjacency maps before the next PBF
-			// passes. Search and tile preparation only need the file-backed graph.
-			router, err = osm.OpenGraph(graphPath)
-		}
-	}
+	// Finish and close graph/search preparation before starting the tile
+	// generator. Its mmap and street lookup maps need not overlap that peak.
+	graph, err := prepareGraphAndSearch(ctx, o, stage, report)
 	if err != nil {
 		return manifest, err
 	}
-	defer router.Close()
-	report("indexing_search", 0.35)
-	if _, err = os.Stat(filepath.Join(stage, "search.ready")); err != nil {
-		if err = buildSearch(ctx, filepath.Join(stage, "search.jsonl"), router, o.PBF); err != nil {
-			return manifest, err
-		}
-		if err = os.WriteFile(filepath.Join(stage, "search.ready"), []byte("1"), 0o600); err != nil {
-			return manifest, err
-		}
-	}
+
 	report("building_map", 0.5)
 	_, err = tinytiles.BuildPBF(ctx, tinytiles.PBFBuildOptions{
 		PBFInputs: []string{o.PBF}, ArtifactPath: filepath.Join(stage, "basemap.ttiles"),
@@ -215,8 +185,7 @@ func Import(ctx context.Context, o ImportOptions, progress func(Progress)) (Mani
 	if err != nil {
 		return manifest, err
 	}
-	bounds, _ := router.Bounds()
-	manifest = Manifest{Format: FormatVersion, Name: o.Name, CreatedAt: time.Now().UTC(), SourceSHA256: sourceHash, Nodes: router.NodeCount(), Edges: router.EdgeCount(), Bounds: bounds, MinZoom: o.MinZoom, MaxZoom: o.MaxZoom, Checksums: map[string]string{}}
+	manifest = Manifest{Format: FormatVersion, Name: o.Name, CreatedAt: time.Now().UTC(), SourceSHA256: sourceHash, Nodes: graph.nodes, Edges: graph.edges, Bounds: graph.bounds, MinZoom: o.MinZoom, MaxZoom: o.MaxZoom, Checksums: map[string]string{}}
 	if manifest.Name == "" {
 		manifest.Name = filepath.Base(o.PBF)
 	}
@@ -256,6 +225,57 @@ func Import(ctx context.Context, o ImportOptions, progress func(Progress)) (Mani
 	report("ready", 1)
 	return manifest, nil
 }
+
+// Only value metadata leaves this phase; graph buffers and lookup maps can be
+// collected while tinyTiles builds its own feature and coordinate structures.
+type importGraphInfo struct {
+	nodes, edges int
+	bounds       osm.CoordWindow
+}
+
+func prepareGraphAndSearch(ctx context.Context, o ImportOptions, stage string, report func(string, float64)) (importGraphInfo, error) {
+	var err error
+	graphPath := filepath.Join(stage, "graph.bin")
+	var router *osm.Router
+	if _, err = os.Stat(filepath.Join(stage, "graph.ready")); err == nil {
+		report("loading_graph", 0.3)
+		router, err = osm.OpenGraph(graphPath)
+	} else {
+		report("building_graph", 0.05)
+		router, _, err = osm.BuildRouterWithAddressesOptions(o.PBF, osm.BuildOptions{Context: ctx, MaxNodes: o.MaxImportNodes, SkipAddresses: true})
+		if err == nil && router.NodeCount() == 0 {
+			err = errors.New("PBF contains no routable roads")
+		}
+		if err == nil {
+			_ = os.Remove(graphPath)
+			err = router.WriteGraph(ctx, graphPath)
+		}
+		if err == nil {
+			err = os.WriteFile(filepath.Join(stage, "graph.ready"), []byte("1"), 0o600)
+		}
+		if err == nil {
+			// Drop the importer's coordinate/adjacency maps before the next PBF
+			// passes. Search and tile preparation only need the file-backed graph.
+			router, err = osm.OpenGraph(graphPath)
+		}
+	}
+	if err != nil {
+		return importGraphInfo{}, err
+	}
+	defer router.Close()
+	report("indexing_search", 0.35)
+	if _, err = os.Stat(filepath.Join(stage, "search.ready")); err != nil {
+		if err = buildSearch(ctx, filepath.Join(stage, "search.jsonl"), router, o.PBF); err != nil {
+			return importGraphInfo{}, err
+		}
+		if err = os.WriteFile(filepath.Join(stage, "search.ready"), []byte("1"), 0o600); err != nil {
+			return importGraphInfo{}, err
+		}
+	}
+	bounds, _ := router.Bounds()
+	return importGraphInfo{nodes: router.NodeCount(), edges: router.EdgeCount(), bounds: bounds}, nil
+}
+
 func writeSynced(path string, b []byte) error {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {

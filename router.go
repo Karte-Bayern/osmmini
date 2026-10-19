@@ -333,21 +333,24 @@ func BuildRouterWithAddressesOptions(path string, bo BuildOptions) (*Router, []A
 		filterWin = &w
 	}
 
-	initialNodes := 1 << 20
+	initialNodes := 1 << 16
 	if bo.MaxNodes > 0 {
-		initialNodes = min(1<<16, bo.MaxNodes)
+		initialNodes = min(initialNodes, bo.MaxNodes)
 	}
-	var referenced map[int64]struct{}
+	// The same map first tracks referenced IDs and later counts outgoing
+	// edges. Reusing its storage avoids keeping a separate degree map alive
+	// while the coordinate and adjacency maps are built.
+	var referenced map[int64]int
 	if filterWin == nil {
-		referenced = make(map[int64]struct{}, initialNodes)
+		referenced = make(map[int64]int, initialNodes)
 	}
 	var coordsAll map[int64]Coord
 	var addrs []AddressEntry
 	if !bo.SkipAddresses {
 		addrs = make([]AddressEntry, 0, 1<<16)
 	}
-	highways := make([]highwayWay, 0, 1<<18)
-	streets := make(map[string]streetEntry, 1<<18)
+	highways := make([]highwayWay, 0, 1024)
+	streets := make(map[string]streetEntry, 1024)
 
 	opts := Options{
 		Context:             bo.Context,
@@ -437,7 +440,7 @@ func BuildRouterWithAddressesOptions(path string, bo BuildOptions) (*Router, []A
 					if bo.MaxNodes > 0 && len(referenced) >= bo.MaxNodes {
 						return fmt.Errorf("graph import exceeds %d road nodes; choose a smaller region or increase MaxNodes", bo.MaxNodes)
 					}
-					referenced[id] = struct{}{}
+					referenced[id] = 0
 				}
 			}
 			highways = append(highways, highwayWay{
@@ -470,7 +473,7 @@ func BuildRouterWithAddressesOptions(path string, bo BuildOptions) (*Router, []A
 		if err := ExtractFile(path, opts, cb); err != nil {
 			return nil, nil, err
 		}
-		referenced = make(map[int64]struct{})
+		referenced = make(map[int64]int)
 	} else {
 		if err := ExtractFile(path, opts, Callbacks{HighwayWay: cb.HighwayWay}); err != nil {
 			return nil, nil, err
@@ -482,18 +485,33 @@ func BuildRouterWithAddressesOptions(path string, bo BuildOptions) (*Router, []A
 			return nil, nil, err
 		}
 	}
-	// Reuse the reference set to mark actual edge endpoints. Coordinates with
-	// missing neighbours must be pruned, including sinks of one-way roads.
+	// Count valid outgoing edges before allocating adjacency storage. Appending
+	// each edge to a separately grown node slice otherwise leaves spare capacity
+	// and millions of small allocations behind in a whole-region graph. A zero
+	// degree still marks a valid one-way sink whose coordinate must be retained.
 	clear(referenced)
-
-	adjCapacity := len(coordsAll)
-	if filterWin != nil {
-		adjCapacity = min(adjCapacity, 1<<20)
+	edgeCount := 0
+	if err := visitHighwayEdges(bo.Context, coordsAll, highways, func(from, to int64, _ float64, _ highwayWay) {
+		referenced[from]++
+		if _, exists := referenced[to]; !exists {
+			referenced[to] = 0
+		}
+		edgeCount++
+	}); err != nil {
+		return nil, nil, err
 	}
-	adj := make(map[int64][]Edge, adjCapacity)
+	adj := make(map[int64][]Edge, len(referenced))
+	edges := make([]Edge, edgeCount)
+	edgeOffset := 0
+	for id, degree := range referenced {
+		if degree > 0 {
+			// Limit each slice to its own span: later append through ExportGraph
+			// must not be able to overwrite the next node's edges.
+			adj[id] = edges[edgeOffset : edgeOffset : edgeOffset+degree]
+			edgeOffset += degree
+		}
+	}
 	addEdge := func(from, to int64, dist float64, hw highwayWay) {
-		referenced[from] = struct{}{}
-		referenced[to] = struct{}{}
 		adj[from] = append(adj[from], Edge{
 			To:         to,
 			DistM:      dist,
@@ -503,36 +521,8 @@ func BuildRouterWithAddressesOptions(path string, bo BuildOptions) (*Router, []A
 			HwyType:    hw.hwyType,
 		})
 	}
-
-	for wi, hw := range highways {
-		if wi%4096 == 0 && bo.Context != nil {
-			if err := bo.Context.Err(); err != nil {
-				return nil, nil, err
-			}
-		}
-		ids := hw.nodes
-		for i := 0; i < len(ids)-1; i++ {
-			aID := ids[i]
-			bID := ids[i+1]
-			a, okA := coordsAll[aID]
-			b, okB := coordsAll[bID]
-			if !okA || !okB {
-				continue
-			}
-			d := haversineMeters(a.Lat, a.Lon, b.Lat, b.Lon)
-			if d <= 0 || math.IsNaN(d) || math.IsInf(d, 0) {
-				continue
-			}
-			switch hw.oneway {
-			case 1:
-				addEdge(aID, bID, d, hw)
-			case -1:
-				addEdge(bID, aID, d, hw)
-			default:
-				addEdge(aID, bID, d, hw)
-				addEdge(bID, aID, d, hw)
-			}
-		}
+	if err := visitHighwayEdges(bo.Context, coordsAll, highways, addEdge); err != nil {
+		return nil, nil, err
 	}
 
 	// prune coords to nodes that actually have edges
@@ -585,6 +575,41 @@ func BuildRouterWithAddressesOptions(path string, bo BuildOptions) (*Router, []A
 		idx:              idx,
 		bounds:           bounds,
 	}, addrs, nil
+}
+
+// visitHighwayEdges shares the filtering and ordering between degree counting
+// and adjacency filling. Missing or degenerate segments must be skipped in both
+// passes, including when a Window clips a way in the middle.
+func visitHighwayEdges(ctx context.Context, coords map[int64]Coord, highways []highwayWay, visit func(int64, int64, float64, highwayWay)) error {
+	for wi, hw := range highways {
+		if wi%4096 == 0 && ctx != nil {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		for i := 0; i < len(hw.nodes)-1; i++ {
+			aID, bID := hw.nodes[i], hw.nodes[i+1]
+			a, okA := coords[aID]
+			b, okB := coords[bID]
+			if !okA || !okB {
+				continue
+			}
+			d := haversineMeters(a.Lat, a.Lon, b.Lat, b.Lon)
+			if d <= 0 || math.IsNaN(d) || math.IsInf(d, 0) {
+				continue
+			}
+			switch hw.oneway {
+			case 1:
+				visit(aID, bID, d, hw)
+			case -1:
+				visit(bID, aID, d, hw)
+			default:
+				visit(aID, bID, d, hw)
+				visit(bID, aID, d, hw)
+			}
+		}
+	}
+	return nil
 }
 
 func computeBounds(coords map[int64]Coord) (CoordWindow, bool) {

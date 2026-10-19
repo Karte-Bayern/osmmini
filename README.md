@@ -491,6 +491,14 @@ once per query. Turn-aware searches also reuse the incoming bearing and crossing
 cost for all outgoing edges of a search state. These changes apply to both
 in-memory and file-backed graphs.
 
+PBF graph imports count valid outgoing edges first and allocate one exact-sized
+edge buffer, with capped slices per node. This reduces small allocations and
+unused capacity for both server and mobile imports. Mobile search preparation
+spools POI/address ways to disk and sorts at most 16,384 postings at once,
+merging at most 16 runs per pass. Its scratch files are removed on completion,
+cancellation or retry. Graph/search preparation closes before map generation,
+so those phases no longer retain the graph's mapped pages together.
+
 The reusable `osmmini.NewAddressIndex(entries)` prepares search fields once
 and supports concurrent `Search`/`FindBest` queries. The HTTP server enables
 it with `-address-index`. It is opt-in because it retains additional RAM;
@@ -507,11 +515,18 @@ Allocation comparisons on an M2 Max, using the included synthetic benchmarks:
 | Repeated address search, 50,000 entries | 100,004 allocations | 4 allocations with AddressIndex |
 | Decode vector tile, 264 synthetic features | 1,659,310 B / 4,748 allocations | 307,488 B / 540 allocations |
 | Decode Monaco vector tile, 3,304 features | 4,814,446 B / 35,742 allocations | 1,114,097 B / 7,312 allocations |
+| Import 40,000-node road grid | 80.29 MB allocated | 20.97 MB allocated |
 
 These are allocated bytes/counts **per call**, not process RSS or peak import
 memory. AddressIndex construction additionally allocated about 4.91 MB for the
 50,000-entry fixture. CPU timings were affected by substantial simulator load;
 physical-iPhone and large-region measurements remain separate validation work.
+
+The included `BenchmarkSearchIndexBuildMemory` compares the former retained
+posting list with bounded sorting for 500,000 entries. Sampled live heap after
+GC falls from 25.78 MB to 0.79 MB; cumulative allocation falls from 107.49 MB to
+39.11 MB. Sorting trades additional temporary disk I/O for lower RAM use.
+For whole-import RSS measurements, see the [Apple SDK validation notes](apple/README.md#validation-and-current-scope).
 
 The vector decoder reads protobuf fields without intermediate field/value
 slices and allocates exact-sized coordinate storage after validation. The Monaco
