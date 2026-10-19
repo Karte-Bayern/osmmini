@@ -149,19 +149,22 @@ func (i *edgeIterator) edge() Edge {
 	return Edge{To: int64(binary.LittleEndian.Uint64(b)), DistM: math.Float64frombits(binary.LittleEndian.Uint64(b[8:])), SpeedKph: math.Float64frombits(binary.LittleEndian.Uint64(b[16:])), MaxHeightM: math.Float64frombits(binary.LittleEndian.Uint64(b[24:])), MaxWeightT: math.Float64frombits(binary.LittleEndian.Uint64(b[32:])), HwyType: d.classes[binary.LittleEndian.Uint32(b[40:])]}
 }
 
-// Compact graph edges already carry the destination's table index. Routing
-// can retain it instead of looking up the decoded OSM ID again for every edge.
-func (i *edgeIterator) targetIndex() uint32 {
+// Route relaxation needs only these encoded fields. Avoid expanding an Edge
+// and its target OSM ID/shared attributes on every visit to a compact edge.
+func (i *edgeIterator) compactFields() (target, attribute uint32, distance float64) {
 	if i.chain != nil {
-		next := (i.index == 1) != i.reversed
-		position := i.position - 1
-		if next {
-			position = i.position + 1
-		}
 		start := binary.LittleEndian.Uint32(i.chain)
-		return binary.LittleEndian.Uint32(i.store.data[i.store.verticesOffset+int(start+position)*graphChainVertexSize:])
+		position, segment := i.position-1, i.position-1
+		if (i.index == 1) != i.reversed {
+			position, segment = i.position+1, i.position
+		}
+		target = binary.LittleEndian.Uint32(i.store.data[i.store.verticesOffset+int(start+position)*graphChainVertexSize:])
+		attribute = binary.LittleEndian.Uint32(i.chain[8:])
+		distance = math.Float64frombits(binary.LittleEndian.Uint64(i.store.data[i.store.verticesOffset+int(start+segment)*graphChainVertexSize+4:]))
+		return
 	}
-	return binary.LittleEndian.Uint32(i.data[i.index*i.store.edgeSize:])
+	b := i.data[i.index*i.store.edgeSize:]
+	return binary.LittleEndian.Uint32(b), binary.LittleEndian.Uint32(b[4:]), math.Float64frombits(binary.LittleEndian.Uint64(b[8:]))
 }
 func (g Graph) degree(id int64) int {
 	if g.store == nil {

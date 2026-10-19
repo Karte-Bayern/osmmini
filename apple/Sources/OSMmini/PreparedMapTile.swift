@@ -60,6 +60,7 @@ struct PreparedMapTile: Sendable {
     }
     var prepared: [Feature] = []
     var labels: [Label] = []
+    var points: [CGPoint] = []
     prepared.reserveCapacity(geometryCount)
     labels.reserveCapacity(labelCount)
     for feature in tile.features {
@@ -95,17 +96,8 @@ struct PreparedMapTile: Sendable {
         style = .road(major: ["motorway", "trunk", "primary"].contains(feature.class ?? ""))
       default: continue
       }
-      var path = Path()
-      var count = 0
-      for ring in feature.paths {
-        for (index, point) in ring.enumerated() where point.count >= 2 {
-          if count & 1023 == 0 { try Task.checkCancellation() }
-          count += 1
-          let position = CGPoint(x: Double(point[0]) * scale, y: Double(point[1]) * scale)
-          if index == 0 { path.move(to: position) } else { path.addLine(to: position) }
-        }
-        if feature.kind == 3 { path.closeSubpath() }
-      }
+      let path = try Self.preparePath(
+        feature.paths, kind: feature.kind, scale: scale, points: &points)
       prepared.append(Feature(path: path, style: style))
       if case .road(let major) = style, let name = Self.labelName(feature.name),
         let point = try Self.roadLabelPoint(feature.paths, scale: scale)
@@ -116,6 +108,33 @@ struct PreparedMapTile: Sendable {
     features = prepared
     self.labels = labels
     spatialIndex = try PreparedMapTileIndex(prepared)
+  }
+
+  /// Submit each ring in one operation. Scratch coordinates are reused across
+  /// features, then dropped with preparation; cached paths own their geometry.
+  static func preparePath(
+    _ paths: [[[Int]]], kind: Int, scale: Double, points: inout [CGPoint]
+  ) throws -> Path {
+    var path = Path()
+    var count = 0
+    for ring in paths {
+      points.removeAll(keepingCapacity: true)
+      points.reserveCapacity(ring.count)
+      for point in ring where point.count >= 2 {
+        if count & 1023 == 0 { try Task.checkCancellation() }
+        count += 1
+        points.append(CGPoint(x: Double(point[0]) * scale, y: Double(point[1]) * scale))
+      }
+      if ring.first.map({ $0.count >= 2 }) == true {
+        path.addLines(points)
+      } else {
+        // Preserve the old continuation behavior for malformed rings whose
+        // first coordinate was skipped rather than treated as a move command.
+        for point in points { path.addLine(to: point) }
+      }
+      if kind == 3 { path.closeSubpath() }
+    }
+    return path
   }
 
   static func roadWidth(major: Bool, overzoom: Int) -> CGFloat {

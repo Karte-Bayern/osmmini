@@ -27,7 +27,7 @@ func BenchmarkRealGraphStorageRouting(b *testing.B) {
 			if !ok {
 				b.Fatal("missing Landshut endpoint")
 			}
-			for _, objective := range []Objective{ObjectiveDistance, ObjectiveDuration} {
+			for _, objective := range []Objective{ObjectiveDistance, ObjectiveDuration, ObjectiveEconomy} {
 				b.Run(string(objective), func(b *testing.B) {
 					opt := RouteOptions{Profile: ProfileCar, Objective: objective}
 					b.ReportAllocs()

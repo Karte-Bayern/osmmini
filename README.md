@@ -515,6 +515,26 @@ implementation exactly. Bytes are cumulative allocations per query, not peak
 RSS. These warmed desktop samples do not establish iPhone latency. The opt-in
 `BenchmarkRealGraphStorageRouting` below reproduces the query workload.
 
+A further comparison against `104e787` reads only the compact edge's target,
+attribute index and distance during relaxation. A query-local 64-entry cache
+resolves shared access restrictions and speed/economy parameters on a miss.
+Its slot storage is fixed at 1 KiB, collisions replace entries, and no mutable
+settings are shared across queries. Distance arithmetic retains the scalar
+operation order instead of substituting rounded reciprocal multipliers.
+Three alternating five-route samples on the same M2 Max/Niederbayern fixture
+gave these additional improvements:
+
+| Car objective | `104e787` | Cached attributes | Reduction |
+| --- | ---: | ---: | ---: |
+| Distance | 106.8 ms | 92.8 ms | 13.1% |
+| Duration | 157.7 ms | 129.2 ms | 18.1% |
+| Economy | 258.1 ms | 192.9 ms | 25.3% |
+
+Allocated bytes remain roughly unchanged. Both directions of the station route
+matched the retained scalar scorer for all three objectives, including exact
+path IDs and metric bits. Optional `TestRealGraphScoringEquivalence` checks this
+with `OSMMINI_REAL_GRAPH`; the benchmark above now includes economy queries.
+
 Swift's prepared map labels also retain their normalized deduplication key.
 Drawing reuses it instead of trimming/lowercasing each candidate every frame.
 The previous label-placement oracle still checks identical accepted labels.
@@ -524,6 +544,16 @@ Three alternating 120-frame Release samples reduced CPU placement time for
 and GPU work. A cached label retains an additional 16-byte String value plus
 normalized text storage; unlabelled feature records do not grow. See the
 [Swift map benchmarks](apple/README.md) for the command and memory tradeoff.
+
+Swift also batches each geometry ring into one `Path.addLines` call and reuses
+one temporary point buffer across a tile's features. The buffer is released
+after preparation; retained geometry/label records do not grow. Release path
+construction samples fell from 10.03 to 7.42 ms for 4,000 road paths (26.0%),
+13.71 to 9.19 ms for 2,000 multipart paths (32.9%), and 3.82 to 3.56 ms for
+20,000 short building polygons (6.7%). These are three-pass synthetic CPU
+medians, excluding native reads, label preparation and drawing. Exact path
+elements also matched the scalar constructor for 22,619 features in eight
+real Niederbayern city tiles, including polygons and road geometry.
 
 PBF graph imports count valid outgoing edges first and allocate one exact-sized
 edge buffer, with capped slices per node. This reduces small allocations and

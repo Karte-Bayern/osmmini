@@ -361,6 +361,7 @@ preparation/rendering and catalog filtering times without timing assertions:
 ```sh
 OSMMINI_BENCHMARKS=1 swift test --package-path apple -c release --filter nativeBufferTransferBenchmark
 OSMMINI_MAP_BENCHMARK=1 swift test --package-path apple -c release --filter mapGeometryReplayBenchmark
+OSMMINI_MAP_BENCHMARK=1 swift test --package-path apple -c release --filter mapPathPreparationBenchmark
 OSMMINI_MAP_BENCHMARK=1 swift test --package-path apple -c release --filter offlineMapLoadingBenchmark
 OSMMINI_MAP_BENCHMARK=1 swift test --package-path apple -c release --filter mapCullingReplayBenchmark
 OSMMINI_MAP_BENCHMARK=1 swift test --package-path apple -c release --filter mapLabelLayoutBenchmark
@@ -383,6 +384,17 @@ GPU frame-rate claims. Files and OS caches remain in place between samples.
 
 The map benchmark measures CPU geometry work and CoreGraphics replay; it does
 not measure GPU frame rate or physical-device memory use.
+Path preparation now batches each ring through `Path.addLines`, reusing one
+temporary point buffer across a tile. It retains scalar behavior for malformed
+rings whose initial coordinate was skipped, and checks cancellation while
+projecting coordinates. Cached paths own their geometry; the temporary buffer
+does not increase retained tile records. The separate path-preparation benchmark
+alternates old/new construction over three passes. On the M2 Max in Release
+mode (2026-10-20), median times fell from 10.03 to 7.42 ms for 4,000 road paths,
+13.71 to 9.19 ms for 2,000 multipart paths, and 3.82 to 3.56 ms for 20,000 short
+building polygons (26.0%, 32.9% and 6.7%). This excludes I/O, labels and drawing.
+An additional opt-in real-region check compared every path element of 22,619
+features in eight city tiles with the previous scalar constructor. All matched.
 The loading benchmark compares serial loading with the bounded loader using
 24 synthetic tiles with 32,768 vertices each. It includes worker JSON decoding,
 path preparation and cache publication, alternates execution order across
@@ -433,6 +445,13 @@ to 159.0 ms (duration objective), with exactly matching paths and metrics.
 Cumulative allocation decreased from about 38 to 29 MB per route. These are
 alternating desktop query samples; see the [Go measurements](../README.md#shared-go-core-performance).
 Existing regions use this search optimization without reimporting.
+The further compact-attribute cache reduced those full-route medians from
+106.8 to 92.8 ms and 157.7 to 129.2 ms; economy queries fell from 258.1 to
+192.9 ms. These are additional comparisons against `104e787` under the same
+alternating desktop protocol. The 64-entry cache is local to each query;
+profile/vehicle restrictions, scalar cost arithmetic and resulting paths remain
+unchanged. Full measurements and the scalar-scorer comparison command are in
+the Go performance section linked above. Allocation totals remain roughly equal.
 
 `Geofabrik` retains its decoded catalog in memory after the first load. Overlapping
 catalog refreshes share the result. Concurrent downloads of the same PBF URL

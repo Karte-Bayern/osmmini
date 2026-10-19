@@ -224,3 +224,40 @@ func TestRealGraphDedupEquivalence(t *testing.T) {
 		fmt.Printf("REAL GRAPH ROUTE EQUIVALENCE %s PassauHbf→LandshutHbf from=%d/%.6fm to=%d/%.6fm points=%d path_sha256=%x distance_m=%.9f duration_s=%.9f cost=%.9f\n", objective, newFrom, newFromSnap, newTo, newToSnap, len(newRoute.Path), hash.Sum(nil), newRoute.DistanceM, newRoute.DurationS, newRoute.Cost)
 	}
 }
+
+// A no-op territory policy selects the retained ID-based scalar scorer. Compare
+// it against compact-field relaxation on the same real graph, including economy.
+func TestRealGraphScoringEquivalence(t *testing.T) {
+	path := os.Getenv("OSMMINI_REAL_GRAPH")
+	if path == "" {
+		t.Skip("set OSMMINI_REAL_GRAPH to a Niederbayern graph.bin")
+	}
+	r, err := OpenGraph(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	from, _, fromOK := r.NearestNode(48.574, 13.450)
+	to, _, toOK := r.NearestNode(48.549, 12.137)
+	if !fromOK || !toOK {
+		t.Fatal("station endpoints unavailable")
+	}
+	for _, pair := range [][2]int64{{from, to}, {to, from}} {
+		for _, objective := range []Objective{ObjectiveDistance, ObjectiveDuration, ObjectiveEconomy} {
+			opt := RouteOptions{Profile: ProfileCar, Objective: objective}
+			got, err := r.RouteWithOptions(t.Context(), pair[0], pair[1], opt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			opt.TerritoryCost = &TerritoryCostPolicy{}
+			want, err := r.RouteWithOptions(t.Context(), pair[0], pair[1], opt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(got.Path, want.Path) || math.Float64bits(got.Cost) != math.Float64bits(want.Cost) || math.Float64bits(got.DistanceM) != math.Float64bits(want.DistanceM) || math.Float64bits(got.DurationS) != math.Float64bits(want.DurationS) {
+				t.Fatalf("compact scoring changed %s route %v", objective, pair)
+			}
+			fmt.Printf("REAL GRAPH SCORING EQUIVALENCE %s %d→%d points=%d distance_m=%.9f duration_s=%.9f cost=%.9f\n", objective, pair[0], pair[1], len(got.Path), got.DistanceM, got.DurationS, got.Cost)
+		}
+	}
+}

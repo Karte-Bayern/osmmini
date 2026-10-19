@@ -30,6 +30,7 @@ func (r *Router) indexNodeSearch(ctx context.Context, from, to int64, opt RouteO
 	}
 	fromIndex, toIndex := uint32(start), uint32(target)
 	eval := newRouteEvaluator(opt)
+	costs := newCompactRouteCosts(eval)
 	heuristic := newRouteHeuristic(d.coordAt(target), opt)
 	dist := make(map[uint32]float64, min(64, d.nodes))
 	var previous map[uint32]uint32
@@ -64,12 +65,12 @@ func (r *Router) indexNodeSearch(ctx context.Context, from, to int64, opt RouteO
 			return path, current.dist, nil
 		}
 		for it := d.edgesAt(int(current.id)); it.next(); {
-			edge := it.edge()
-			if !eval.edgeAllowed(edge) {
+			next, attribute, distance := it.compactFields()
+			edgeCost, allowed := costs.edgeCost(d, attribute, distance)
+			if !allowed {
 				continue
 			}
-			next := it.targetIndex()
-			cost := current.dist + eval.baseEdgeCost(edge)
+			cost := current.dist + edgeCost
 			if old, exists := dist[next]; exists && cost >= old {
 				continue
 			}
