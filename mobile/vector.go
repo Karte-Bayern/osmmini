@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"sync"
 )
 
 type VectorFeature struct {
@@ -21,6 +22,43 @@ type VectorFeature struct {
 type VectorTile struct {
 	Features []VectorFeature `json:"features"`
 }
+
+// A decoder belongs to one call until expansion finishes. Reusing its flate
+// state avoids allocating a 32 KiB history window for every compressed tile.
+// Keep the returned bytes separate: callers may decode them after this reader
+// is already handling another tile.
+type vectorGzipReader struct {
+	source bytes.Reader
+	reader *gzip.Reader
+}
+
+var vectorGzipPool = sync.Pool{New: func() any { return new(vectorGzipReader) }}
+
+func expandVectorGzip(data []byte) ([]byte, error) {
+	state := vectorGzipPool.Get().(*vectorGzipReader)
+	defer func() {
+		if state.reader != nil {
+			_ = state.reader.Close()
+			state.reader.Header = gzip.Header{}
+		}
+		// The flate reader references source. Clear it before pooling so neither
+		// the compressed tile nor optional gzip header strings are retained.
+		state.source.Reset(nil)
+		vectorGzipPool.Put(state)
+	}()
+	state.source.Reset(data)
+	var err error
+	if state.reader == nil {
+		state.reader, err = gzip.NewReader(&state.source)
+	} else {
+		err = state.reader.Reset(&state.source)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return io.ReadAll(io.LimitReader(state.reader, (16<<20)+1))
+}
+
 type field struct {
 	number int
 	wire   uint64
@@ -163,12 +201,8 @@ func DecodeVectorTile(data []byte) (VectorTile, error) {
 		return out, errors.New("tile exceeds 16 MiB")
 	}
 	if len(data) > 2 && data[0] == 0x1f && data[1] == 0x8b {
-		r, err := gzip.NewReader(bytes.NewReader(data))
-		if err != nil {
-			return out, err
-		}
-		defer r.Close()
-		data, err = io.ReadAll(io.LimitReader(r, (16<<20)+1))
+		var err error
+		data, err = expandVectorGzip(data)
 		if err != nil {
 			return out, err
 		}

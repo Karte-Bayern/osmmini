@@ -99,11 +99,9 @@ public struct Route: Codable, Sendable {
     case toSnapM = "to_snap_m"
   }
   public func geoJSON() throws -> Data {
-    try JSONSerialization.data(
-      withJSONObject: [
-        "type": "Feature", "properties": ["distance_m": distanceM, "duration_s": durationS],
-        "geometry": ["type": "LineString", "coordinates": path.map { [$0.lon, $0.lat] }],
-      ], options: [.sortedKeys])
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    return try encoder.encode(RouteGeoJSONFeature(route: self))
   }
   public func gpx() -> Data {
     var data = Data()
@@ -121,6 +119,44 @@ public struct Route: Codable, Sendable {
     return data
   }
 }
+
+private struct RouteGeoJSONFeature: Encodable {
+  let route: Route
+  enum CodingKeys: String, CodingKey { case type, properties, geometry }
+
+  func encode(to encoder: any Encoder) throws {
+    var feature = encoder.container(keyedBy: CodingKeys.self)
+    try feature.encode("Feature", forKey: .type)
+    try feature.encode(
+      Properties(distanceM: route.distanceM, durationS: route.durationS), forKey: .properties)
+    try feature.encode(Geometry(path: route.path), forKey: .geometry)
+  }
+
+  private struct Properties: Encodable {
+    let distanceM: Double, durationS: Double
+    enum CodingKeys: String, CodingKey {
+      case distanceM = "distance_m"
+      case durationS = "duration_s"
+    }
+  }
+
+  private struct Geometry: Encodable {
+    let path: [Coordinate]
+    enum CodingKeys: String, CodingKey { case type, coordinates }
+
+    func encode(to encoder: any Encoder) throws {
+      var geometry = encoder.container(keyedBy: CodingKeys.self)
+      try geometry.encode("LineString", forKey: .type)
+      var coordinates = geometry.nestedUnkeyedContainer(forKey: .coordinates)
+      for coordinate in path {
+        var position = coordinates.nestedUnkeyedContainer()
+        try position.encode(coordinate.lon)
+        try position.encode(coordinate.lat)
+      }
+    }
+  }
+}
+
 public struct VectorFeature: Codable, Sendable {
   public let layer: String, kind: Int, extent: Int
   public let `class`: String?, name: String?

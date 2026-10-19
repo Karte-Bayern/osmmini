@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	osm "simonwaldherr.de/go/osmmini"
@@ -72,6 +73,11 @@ func TestImportReleasesDestinationAfterCancellation(t *testing.T) {
 
 func fixture(t *testing.T) string {
 	t.Helper()
+	return fixtureWithStreetName(t, "Teststraße")
+}
+
+func fixtureWithStreetName(t *testing.T, streetName string) string {
+	t.Helper()
 	uv := func(v uint64) []byte { return binary.AppendUvarint(nil, v) }
 	field := func(n int, v uint64) []byte { return append(uv(uint64(n<<3)), uv(v)...) }
 	message := func(n int, b []byte) []byte {
@@ -80,7 +86,7 @@ func fixture(t *testing.T) string {
 		return append(out, b...)
 	}
 	zig := func(v int64) uint64 { return uint64(v<<1) ^ uint64(v>>63) }
-	strings := []string{"", "highway", "residential", "name", "Teststraße", "amenity", "cafe", "Café Test", "addr:street", "addr:housenumber", "7"}
+	strings := []string{"", "highway", "residential", "name", streetName, "amenity", "cafe", "Café Test", "addr:street", "addr:housenumber", "7"}
 	var table, group []byte
 	for _, s := range strings {
 		table = append(table, message(1, []byte(s))...)
@@ -179,6 +185,55 @@ func TestCancelledAndBoundedImport(t *testing.T) {
 	o.MaxImportNodes = 100
 	if _, err := Import(t.Context(), o, nil); err != nil {
 		t.Fatalf("resume failed: %v", err)
+	}
+}
+
+func TestMapImportFitsLargeTilesWithinTheConfiguredBudget(t *testing.T) {
+	// A high-entropy name produces a large compressed tile. A 1,000-row
+	// batch exceeds 16 MiB even though the tile itself easily fits the budget.
+	random := rand.New(rand.NewPCG(1, 2))
+	const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	name := make([]byte, 48<<10)
+	for i := range name {
+		name[i] = alphabet[random.IntN(len(alphabet))]
+	}
+	destination := filepath.Join(t.TempDir(), "region")
+	var phases []Progress
+	m, err := Import(t.Context(), ImportOptions{
+		PBF: fixtureWithStreetName(t, string(name)), Destination: destination,
+		MinZoom: 14, MaxZoom: 14, TileMemoryBytes: 16 << 20,
+	}, func(p Progress) { phases = append(phases, p) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Nodes != 3 || m.Edges != 4 {
+		t.Fatalf("graph changed: %+v", m)
+	}
+	previous := 0.0
+	published := false
+	for _, p := range phases {
+		if p.Fraction < previous || p.Fraction > 1 {
+			t.Fatalf("nonmonotonic progress: %+v after %f", p, previous)
+		}
+		previous = p.Fraction
+		if p.Phase == "map_published" {
+			published = true
+			if p.Fraction != 0.85 {
+				t.Fatalf("publication progress: %+v", p)
+			}
+		}
+	}
+	if !published || previous != 1 {
+		t.Fatalf("import never completed: %+v", phases)
+	}
+	engine, err := Open(t.Context(), destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	streets := engine.router.AllStreets()
+	if len(streets) != 1 || streets[0].Name != string(name) {
+		t.Fatal("large street name was lost during import")
 	}
 }
 func TestVectorDecoderRejectsMalformedData(t *testing.T) {

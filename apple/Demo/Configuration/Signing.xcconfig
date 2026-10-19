@@ -1,0 +1,3 @@
+// Shared by the demo target in Debug and Release.
+// Missing personal configuration is allowed for unsigned and simulator builds.
+#include? "Signing.local.xcconfig"

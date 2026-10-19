@@ -40,7 +40,9 @@ private func framePath(_ feature: VectorFeature, offset: CGPoint) -> Path {
   #expect(prepared.features[0].style == .water)
   #expect(prepared.features[1].style == .road(major: true))
   #expect(prepared.features[1].name == "Teststraße")
-  #expect(prepared.features[1].labelPoint == CGPoint.zero)
+  let roadLabel = try #require(prepared.features[1].labelPoint)
+  #expect(roadLabel.x > 128 && roadLabel.x < 256)
+  #expect(roadLabel.y > 64 && roadLabel.y < 256)
   #expect(prepared.features[0].labelPoint == nil)
   #expect(prepared.features[0].path.contains(CGPoint(x: 10, y: 10), eoFill: true))
   #expect(!prepared.features[0].path.contains(CGPoint(x: 128, y: 128), eoFill: true))
@@ -57,6 +59,19 @@ private func framePath(_ feature: VectorFeature, offset: CGPoint) -> Path {
       #expect(translated == reference)
     }
   }
+}
+
+@Test func preparedLabelsUseTheLongestRoadMidpointAndKeepSettlementPoints() throws {
+  let road = mapFeature(paths: [
+    [[0, 0], [100, 0]], [[1000, 1000], [3000, 1000], [3000, 2000]],
+  ])
+  let place = mapFeature(
+    "place", kind: 1, classification: "town", name: "Dingolfing", paths: [[[2048, 1024]]])
+  let prepared = try PreparedMapTile(VectorTile(features: [road, place]))
+  #expect(prepared.features[0].labelPoint == CGPoint(x: 156.25, y: 62.5))
+  #expect(prepared.features[1].style == .place(kind: "town"))
+  #expect(prepared.features[1].name == "Dingolfing")
+  #expect(prepared.features[1].labelPoint == CGPoint(x: 128, y: 64))
 }
 
 @Test func preparedMapSkipsUnusedLayersAndKeepsDrawOrderAndStyles() throws {

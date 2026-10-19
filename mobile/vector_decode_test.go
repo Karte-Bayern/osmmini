@@ -2,9 +2,11 @@ package mobile
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/binary"
 	"encoding/json"
 	"reflect"
+	"sync"
 	"testing"
 )
 
@@ -196,8 +198,79 @@ func TestVectorGzipChecksumAndMultistream(t *testing.T) {
 	}
 }
 
+func TestVectorGzipResetAfterCorruptStreams(t *testing.T) {
+	data := vectorTestTile(vectorTestFeature(vectorPacked(9, 6, 10)))
+	want, err := DecodeVectorTile(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var metadata bytes.Buffer
+	w := gzip.NewWriter(&metadata)
+	w.Name, w.Comment = "named-tile", "optional gzip fields"
+	w.Extra = bytes.Repeat([]byte{42}, 4096)
+	if _, err = w.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err = w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	compressed := vectorGzip(t, data)
+	badChecksum := bytes.Clone(compressed)
+	badChecksum[len(badChecksum)-8] ^= 1
+	for round := 0; round < 4; round++ {
+		for _, corrupt := range [][]byte{{0x1f, 0x8b, 0xff}, compressed[:len(compressed)/2], badChecksum} {
+			if _, err = DecodeVectorTile(corrupt); err == nil {
+				t.Fatal("accepted corrupt gzip")
+			}
+			// Failure in a header, body or checksum must not contaminate the
+			// next tile's stream, dictionaries or optional header fields.
+			for _, valid := range [][]byte{metadata.Bytes(), compressed} {
+				got, err := DecodeVectorTile(valid)
+				if err != nil || !reflect.DeepEqual(got, want) {
+					t.Fatalf("valid gzip after corrupt stream: %+v, %v; want %+v", got, err, want)
+				}
+			}
+			both := append(bytes.Clone(compressed), compressed...)
+			got, err := DecodeVectorTile(both)
+			if err != nil || len(got.Features) != 2 || !reflect.DeepEqual(got.Features[0], want.Features[0]) || !reflect.DeepEqual(got.Features[1], want.Features[0]) {
+				t.Fatalf("gzip members after reuse: %+v, %v", got, err)
+			}
+		}
+	}
+}
+
+func TestVectorGzipConcurrentDecodingKeepsResultsIndependent(t *testing.T) {
+	var compressed [][]byte
+	var want []VectorTile
+	for _, point := range [][2]int{{3, 5}, {-120, 87}, {4096, -4096}} {
+		data := vectorTestTile(vectorTestFeature(vectorPacked(9, vectorZigzag(point[0]), vectorZigzag(point[1]))))
+		tile, err := DecodeVectorTile(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want = append(want, tile)
+		compressed = append(compressed, vectorGzip(t, data))
+	}
+	var group sync.WaitGroup
+	for worker := 0; worker < 16; worker++ {
+		group.Go(func() {
+			for round := 0; round < 30; round++ {
+				for i, data := range compressed {
+					got, err := DecodeVectorTile(data)
+					if err != nil || !reflect.DeepEqual(got, want[i]) {
+						t.Errorf("concurrent tile %d: %+v, %v; want %+v", i, got, err, want[i])
+						return
+					}
+				}
+			}
+		})
+	}
+	group.Wait()
+}
+
 func FuzzDecodeVectorTile(f *testing.F) {
 	f.Add(vectorBenchmarkTile())
+	f.Add(vectorGzip(f, vectorBenchmarkTile()))
 	f.Add(vectorTestTile(vectorTestFeature(vectorPacked(9, 0, 0))))
 	f.Add([]byte{0x1a, 0xff})
 	f.Fuzz(func(t *testing.T, data []byte) {

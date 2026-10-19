@@ -38,3 +38,7 @@ bindings/apple/build/
 *.xcuserstate
 xcuserdata/
 !apple/Tests/OSMminiTests/Fixtures/region.osm.pbf
+!apple/Tests/OSMminiDemoTests/Fixtures/region.osm.pbf
+
+# Personal Xcode signing settings.
+/apple/Demo/Configuration/Signing.local.xcconfig

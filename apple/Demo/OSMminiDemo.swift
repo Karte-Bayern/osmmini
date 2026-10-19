@@ -3,335 +3,302 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 @main struct OSMminiDemoApp: App {
-  var body: some Scene { WindowGroup { DemoView() } }
-}
-
-@MainActor final class DemoModel: ObservableObject {
-  @Published var engine: OfflineEngine?
-  @Published var installed: [URL] = []
-  @Published var regions: [GeofabrikRegion] = []
-  @Published var catalogQuery = "Niederbayern"
-  @Published var query = ""
-  @Published var results: [SearchResult] = []
-  @Published var route: Route?
-  @Published var start: Coordinate?
-  @Published var destination: Coordinate?
-  @Published var status = "Region herunterladen oder eine lokale PBF importieren."
-  @Published var fraction: Double = 0
-  @Published var busy = false
-  @Published var pending: ImportOptions?
-  var operation: Task<Void, Never>?
-  private var searchTask: Task<Void, Never>?
-  let root: URL
-  let geofabrik: Geofabrik
-  init() {
-    let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[
-      0]
-    root =
-      ProcessInfo.processInfo.environment["OSMMINI_DEMO_DIRECTORY"].map { URL(fileURLWithPath: $0) }
-      ?? support.appendingPathComponent("OSMminiDemo", isDirectory: true)
-    geofabrik = Geofabrik(directory: root.appendingPathComponent("downloads", isDirectory: true))
-    try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    if let data = UserDefaults.standard.data(forKey: "pendingImport") {
-      pending = try? JSONDecoder().decode(ImportOptions.self, from: data)
-    }
-    refreshInstalled()
-  }
-  func refreshInstalled() {
-    installed =
-      ((try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil))
-      ?? [])
-      .filter {
-        FileManager.default.fileExists(atPath: $0.appendingPathComponent("manifest.json").path)
-      }.sorted { $0.lastPathComponent < $1.lastPathComponent }
-  }
-  func loadCatalog(refresh: Bool = false) async {
-    do { regions = try await geofabrik.regions(refresh: refresh) } catch {
-      if engine == nil {
-        status =
-          "Geofabrik: \(error.localizedDescription). Lokale Regionen funktionieren weiterhin offline."
-      }
-    }
-  }
-  func run(_ work: @escaping @MainActor () async throws -> Void) {
-    guard !busy else { return }
-    busy = true
-    operation = Task {
-      defer {
-        busy = false
-        refreshInstalled()
-      }
-      do { try await work() } catch is CancellationError {
-        status = "Abgebrochen. Downloads und abgeschlossene Importphasen können fortgesetzt werden."
-      } catch { status = error.localizedDescription }
-    }
-  }
-  func open(_ url: URL) async throws {
-    status = "Offline-Region wird geöffnet …"
-    let next = try await OfflineEngine.open(url)
-    searchTask?.cancel()
-    searchTask = nil
-    let previous = engine
-    engine = next
-    route = nil
-    results = []
-    start = nil
-    destination = nil
-    UserDefaults.standard.set(url.path, forKey: "lastRegion")
-    if let previous { await previous.close() }
-    status =
-      "\(next.manifest.name) bereit · \(next.manifest.nodes.formatted()) Straßenknoten · vollständig lokal"
-  }
-  func download(_ region: GeofabrikRegion) {
-    run { [self] in
-      status = "\(region.name) wird von Geofabrik geladen …"
-      fraction = 0
-      let source = try await geofabrik.download(region) { [weak self] bytes, total in
-        Task { @MainActor in
-          self?.fraction = total > 0 ? Double(bytes) / Double(total) : 0
-          self?.status =
-            "Download: \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))"
-        }
-      }
-      try await prepare(source, name: region.name)
-    }
-  }
-  func importFile(_ source: URL) {
-    run { [self] in
-      guard source.pathExtension.lowercased() == "pbf" else {
-        throw OSMminiError.native("Eine .osm.pbf-Datei auswählen.")
-      }
-      let access = source.startAccessingSecurityScopedResource()
-      defer { if access { source.stopAccessingSecurityScopedResource() } }
-      let copy = root.appendingPathComponent("source-\(UUID().uuidString).osm.pbf")
-      status = "PBF wird in den lokalen App-Speicher übernommen …"
-      try await Task.detached(priority: .utility) {
-        try FileManager.default.copyItem(at: source, to: copy)
-      }.value
-      try await prepare(copy, name: source.deletingPathExtension().lastPathComponent)
-    }
-  }
-  func prepare(_ source: URL, name: String) async throws {
-    let options = ImportOptions(
-      pbf: source,
-      destination: root.appendingPathComponent(
-        "\(name.replacingOccurrences(of: "/", with: "-"))-\(UUID().uuidString.prefix(8))"),
-      name: name)
-    pending = options
-    UserDefaults.standard.set(try JSONEncoder().encode(options), forKey: "pendingImport")
-    try await resumeImport(options)
-  }
-  func resumeImport(_ options: ImportOptions) async throws {
-    _ = try await OfflineEngine.importPBF(options) { [weak self] progress in
-      Task { @MainActor in
-        self?.fraction = progress.fraction
-        self?.status = Self.phaseLabel(progress.phase)
-      }
-    }
-    pending = nil
-    UserDefaults.standard.removeObject(forKey: "pendingImport")
-    try await open(URL(fileURLWithPath: options.destination))
-  }
-  private static func phaseLabel(_ phase: String) -> String {
-    switch phase {
-    case "checking": "Quelldatei wird geprüft …"
-    case "building_graph": "Straßennetz wird aufbereitet …"
-    case "loading_graph": "Vorbereitetes Straßennetz wird fortgesetzt …"
-    case "indexing_search": "Adressen und Orte werden für die Suche aufbereitet …"
-    case "validating": "Offline-Region wird abschließend geprüft …"
-    case "ready": "Offline-Region ist bereit."
-    default: "Lokale Karte wird erzeugt …"
-    }
-  }
-  func select(_ coordinate: Coordinate) {
-    if start == nil || destination != nil {
-      start = coordinate
-      destination = nil
-      route = nil
-      status = "Start gesetzt. Jetzt das Ziel auswählen."
-    } else {
-      destination = coordinate
-      calculate()
-    }
-  }
-  func calculate() {
-    guard let engine, let start, let destination else { return }
-    run { [self] in
-      route = try await engine.route(RouteRequest(from: start, to: destination))
-      status =
-        "Route: \(((route?.distanceM ?? 0) / 1000).formatted(.number.precision(.fractionLength(1)))) km · \(((route?.durationS ?? 0) / 60).formatted(.number.precision(.fractionLength(0)))) min"
-    }
-  }
-  func search() {
-    searchTask?.cancel()
-    let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard let engine, !query.isEmpty else {
-      results = []
-      return
-    }
-    searchTask = Task {
-      do {
-        try await Task.sleep(for: .milliseconds(200))
-        let found = try await engine.search(query)
-        try Task.checkCancellation()
-        guard self.engine === engine else { return }
-        results = found
-      } catch is CancellationError {} catch {
-        guard !Task.isCancelled, self.engine === engine else { return }
-        status = error.localizedDescription
-      }
-    }
-  }
-}
-
-struct RouteDocument: FileDocument {
-  static var readableContentTypes: [UTType] { [.data] }
-  var data: Data
-  init(data: Data) { self.data = data }
-  init(configuration: ReadConfiguration) throws {
-    data = configuration.file.regularFileContents ?? Data()
-  }
-  func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-    FileWrapper(regularFileWithContents: data)
-  }
+  @State private var model = DemoModel()
+  var body: some Scene { WindowGroup { DemoView(model: model) } }
 }
 
 struct DemoView: View {
-  @StateObject private var model = DemoModel()
+  let model: DemoModel
+  @State private var location = DemoLocation()
+  @Environment(\.scenePhase) private var scenePhase
   @State private var importing = false
-  @State private var exporting = false
-  @State private var document: RouteDocument?
-  @State private var exportName = "route.geojson"
+  @State private var columns = NavigationSplitViewVisibility.all
+  @State private var preferredColumn = NavigationSplitViewColumn.sidebar
+  @State private var fileError: String?
+
   var body: some View {
-    NavigationSplitView {
-      List {
-        if model.busy {
-          Section("Fortschritt") {
-            ProgressView(value: model.fraction)
-            Text(model.status)
-            Button("Abbrechen") { model.operation?.cancel() }
-          }
-        }
-        Section("Offline-Regionen") {
-          ForEach(model.installed, id: \.path) { url in
-            Button(url.lastPathComponent) { model.run { try await model.open(url) } }.disabled(
-              model.busy)
-          }
-          Button("Lokale PBF importieren", systemImage: "square.and.arrow.down") {
-            importing = true
-          }.disabled(model.busy)
-          if let pending = model.pending {
-            Button("Import fortsetzen: \(pending.name)") {
-              model.run { try await model.resumeImport(pending) }
-            }.disabled(model.busy)
-          }
-        }
-        Section("Geofabrik") {
-          TextField("Region suchen", text: $model.catalogQuery)
-          ForEach(
-            model.regions.filter {
-              model.catalogQuery.isEmpty
-                || $0.name.localizedCaseInsensitiveContains(model.catalogQuery)
-                || $0.id.localizedCaseInsensitiveContains(model.catalogQuery)
-            }.prefix(50)
-          ) { region in
-            Button {
-              model.download(region)
-            } label: {
-              VStack(alignment: .leading) {
-                Text(region.name)
-                Text(region.parent ?? region.id).font(.caption).foregroundStyle(.secondary)
-              }
-            }.disabled(model.busy)
-          }
-          Button("Katalog aktualisieren") { Task { await model.loadCatalog(refresh: true) } }
-          Text(
-            "Download benötigt Internet. Karte, Suche und Routing funktionieren nach dem Import offline. Für den ersten Test eine kleine Region wählen."
-          ).font(.caption).foregroundStyle(.secondary)
-        }
-        if model.engine != nil {
-          Section("Lokale Suche") {
-            TextField("Adresse, Straße oder POI", text: $model.query).onChange(of: model.query) {
-              _, _ in model.search()
-            }
-            ForEach(model.results, id: \.identity) { result in
-              Button(result.label) { model.select(result.coordinate) }
-            }
-          }
-        }
-      }.navigationTitle("OSMmini")
+    NavigationSplitView(columnVisibility: $columns, preferredCompactColumn: $preferredColumn) {
+      DemoSidebar(model: model, importing: $importing) { preferredColumn = .detail }
+        .navigationTitle("OSMmini")
+        .navigationSplitViewColumnWidth(min: 280, ideal: 330, max: 440)
     } detail: {
-      VStack(spacing: 0) {
-        if let engine = model.engine {
-          OfflineMap(
-            engine: engine, route: model.route,
-            markers: [model.start, model.destination].compactMap { $0 },
-            focus: model.destination ?? model.start, onSelect: model.select
-          ).id(ObjectIdentifier(engine))
-        } else {
-          ContentUnavailableView(
-            "Deine Region offline", systemImage: "map",
-            description: Text(
-              "Eine PBF von Geofabrik laden oder eine Datei importieren. Die Region bleibt nach dem Neustart verfügbar."
-            ))
-        }
-        VStack(alignment: .leading, spacing: 8) {
-          if model.busy {
-            ProgressView(value: model.fraction)
-            Button("Abbrechen") { model.operation?.cancel() }
-          }
-          Text(model.status).font(.callout).textSelection(.enabled)
-          if model.engine != nil {
-            Text("Zwei Kartenpunkte oder Suchtreffer wählen: Start, dann Ziel.").font(.caption)
-              .foregroundStyle(.secondary)
-            HStack {
-              Button("Route zurücksetzen") {
-                model.start = nil
-                model.destination = nil
-                model.route = nil
-              }
-              if let route = model.route {
-                Menu("Route exportieren") {
-                  Button("GeoJSON") {
-                    if let data = try? route.geoJSON() {
-                      document = RouteDocument(data: data)
-                      exportName = "route.geojson"
-                      exporting = true
-                    }
-                  }
-                  Button("GPX") {
-                    document = RouteDocument(data: route.gpx())
-                    exportName = "route.gpx"
-                    exporting = true
-                  }
-                }
-              }
-            }
-          }
-        }.padding().frame(maxWidth: .infinity, alignment: .leading).background(.regularMaterial)
-      }.navigationTitle(model.engine?.manifest.name ?? "Offline-Karte")
+      DemoMapScreen(model: model, location: location) {
+        preferredColumn = .sidebar
+        columns = .all
+      }
     }
     .fileImporter(isPresented: $importing, allowedContentTypes: [.data]) { result in
       switch result {
       case .success(let url): model.importFile(url)
-      case .failure(let error): model.status = error.localizedDescription
+      case .failure(let error): fileError = FileDialogError.message(for: error)
       }
     }
-    .fileExporter(
-      isPresented: $exporting, document: document, contentType: .data, defaultFilename: exportName
-    ) { result in if case .failure(let error) = result { model.status = error.localizedDescription }
+    .alert(
+      "Datei konnte nicht geöffnet werden",
+      isPresented: Binding(
+        get: { fileError != nil }, set: { if !$0 { fileError = nil } }
+      )
+    ) {
+      Button("OK") { fileError = nil }
+    } message: {
+      Text(fileError ?? "")
     }
-    .task {
-      let arguments = CommandLine.arguments
-      let explicitRegion = arguments.firstIndex(of: "--region").flatMap {
-        $0 + 1 < arguments.count ? arguments[$0 + 1] : nil
+    .onChange(of: model.activeDirectory, initial: true) { _, directory in
+      if directory == nil {
+        location.stop()
+        preferredColumn = .sidebar
+      } else {
+        preferredColumn = .detail
       }
-      if let path = explicitRegion ?? UserDefaults.standard.string(forKey: "lastRegion"),
-        model.engine == nil
-      {
-        model.run { try await model.open(URL(fileURLWithPath: path)) }
+    }
+    .onChange(of: scenePhase) { _, phase in
+      if phase == .background { location.stop() }
+    }
+    .onDisappear { location.stop() }
+    .task { await model.start() }
+  }
+}
+
+private struct DemoSidebar: View {
+  let model: DemoModel
+  @Binding var importing: Bool
+  let showMap: () -> Void
+  @State private var restartingImport = false
+  @State private var removingImport = false
+  @State private var deletingRegion: InstalledRegion?
+  @State private var clearingDownloads = false
+
+  var body: some View {
+    List {
+      if model.busy {
+        Section("Fortschritt") { ActivityProgress(model: model) }
       }
-      if !arguments.contains("--offline") { await model.loadCatalog() }
+      if !model.busy, let failure = model.importFailure {
+        Section {
+          Text(failure.message).foregroundStyle(.red).textSelection(.enabled)
+          if let phase = failure.phase {
+            Text("Phase: \(phase)").font(.caption).foregroundStyle(.secondary)
+          }
+          if failure.details != failure.message {
+            DisclosureGroup("Fehlerdetails") {
+              Text(failure.details).font(.caption).textSelection(.enabled)
+            }
+          }
+        } header: {
+          Label("Import nicht abgeschlossen", systemImage: "exclamationmark.triangle")
+        }
+      }
+      Section("Offline-Regionen") {
+        if model.installed.isEmpty {
+          Text("Noch keine Region installiert.").foregroundStyle(.secondary)
+        }
+        ForEach(model.installed) { region in
+          Button {
+            if model.activeDirectory == region.directory {
+              showMap()
+            } else {
+              model.openRegion(region.directory)
+            }
+          } label: {
+            HStack {
+              VStack(alignment: .leading) {
+                Text(region.name)
+                Text(
+                  "\(region.nodes.formatted()) Straßenknoten · \(region.byteCount.formatted(.byteCount(style: .file)))"
+                )
+                .font(.caption).foregroundStyle(.secondary)
+                if let date = region.importedAt {
+                  Text("Importiert \(date.formatted(date: .abbreviated, time: .omitted))")
+                    .font(.caption2).foregroundStyle(.secondary)
+                }
+              }
+              Spacer()
+              if model.activeDirectory == region.directory {
+                Image(systemName: "checkmark.circle.fill")
+                  .accessibilityLabel("Geöffnete Region")
+              }
+            }
+          }.disabled(model.busy)
+            .contextMenu {
+              Button("Region löschen", systemImage: "trash", role: .destructive) {
+                deletingRegion = region
+              }
+              .disabled(model.busy)
+            }
+            .swipeActions {
+              Button("Löschen", systemImage: "trash", role: .destructive) {
+                deletingRegion = region
+              }
+              .disabled(model.busy)
+            }
+        }
+        if !model.installed.isEmpty {
+          Text("Offline-Karten: \(model.installedBytes.formatted(.byteCount(style: .file)))")
+            .font(.caption).foregroundStyle(.secondary)
+        }
+        if let error = model.regionError {
+          Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled)
+        }
+        if let error = model.storageError {
+          Text(error).font(.caption).foregroundStyle(.red)
+        }
+        Button("Lokale PBF importieren", systemImage: "square.and.arrow.down") {
+          importing = true
+        }.disabled(model.busy || model.pending != nil)
+        if let pending = model.pending {
+          Text("Unterbrochener Import: \(pending.name)").font(.callout)
+          if !model.busy, model.importFailure == nil, let phase = model.lastImportPhase {
+            Text("Zuletzt: \(phase)").font(.caption).foregroundStyle(.secondary)
+          }
+          Button("Import fortsetzen", systemImage: "play.fill") { model.resumePendingImport() }
+            .disabled(model.busy)
+          Menu("Weitere Importoptionen") {
+            Button("Mit vorhandener PBF neu beginnen") { restartingImport = true }
+            Button("Fortsetzung aus Liste entfernen") { removingImport = true }
+          }.disabled(model.busy)
+          Text(
+            "Vor einem weiteren Import diese Aufbereitung fortsetzen oder die Fortsetzung aus der Liste entfernen."
+          )
+          .font(.caption).foregroundStyle(.secondary)
+        }
+      }
+      if model.downloadBytes > 0 {
+        Section("Quelldateien") {
+          Text("PBF-Downloads: \(model.downloadBytes.formatted(.byteCount(style: .file)))")
+          Button("Downloads entfernen", systemImage: "trash", role: .destructive) {
+            clearingDownloads = true
+          }
+          .disabled(model.busy || model.pending != nil)
+          Text(
+            model.pending == nil
+              ? "Installierte Offline-Karten benötigen die heruntergeladenen PBF-Dateien nicht mehr."
+              : "Die PBF wird noch für den unterbrochenen Import benötigt."
+          )
+          .font(.caption).foregroundStyle(.secondary)
+        }
+      }
+      CatalogPicker(model: model)
+    }
+    .confirmationDialog(
+      "Offline-Region löschen?",
+      isPresented: Binding(
+        get: { deletingRegion != nil }, set: { if !$0 { deletingRegion = nil } }),
+      titleVisibility: .visible
+    ) {
+      if let region = deletingRegion {
+        Button("\(region.name) löschen", role: .destructive) {
+          model.deleteRegion(region)
+          deletingRegion = nil
+        }
+      }
+      Button("Abbrechen", role: .cancel) { deletingRegion = nil }
+    } message: {
+      Text(
+        "Die Offline-Karte wird vom Gerät entfernt. Für die spätere Nutzung muss sie erneut importiert werden."
+      )
+    }
+    .confirmationDialog(
+      "PBF-Downloads entfernen?", isPresented: $clearingDownloads, titleVisibility: .visible
+    ) {
+      Button("Downloads entfernen", role: .destructive) { model.clearDownloads() }
+      Button("Abbrechen", role: .cancel) {}
+    } message: {
+      Text(
+        "Entfernt heruntergeladene PBF-Dateien und angefangene Downloads. Installierte Offline-Karten bleiben verfügbar."
+      )
+    }
+    .confirmationDialog(
+      "Import neu beginnen?", isPresented: $restartingImport, titleVisibility: .visible
+    ) {
+      Button("Mit vorhandener PBF neu aufbereiten") { model.restartPendingImport() }
+      Button("Abbrechen", role: .cancel) {}
+    } message: {
+      Text(
+        "Verwendet dieselbe PBF in einem neuen Arbeitsverzeichnis. Bisherige Importdateien bleiben erhalten."
+      )
+    }
+    .confirmationDialog(
+      "Fortsetzung aus Liste entfernen?", isPresented: $removingImport, titleVisibility: .visible
+    ) {
+      Button("Aus Liste entfernen", role: .destructive) { model.removePendingImportFromList() }
+      Button("Abbrechen", role: .cancel) {}
+    } message: {
+      Text(
+        "Entfernt nur den Fortsetzungseintrag. Quelldatei und angefangene Importdaten bleiben gespeichert und belegen weiterhin Speicherplatz."
+      )
+    }
+  }
+}
+
+private struct CatalogPicker: View {
+  @Bindable var model: DemoModel
+  var body: some View {
+    Section("Geofabrik") {
+      TextField("Region suchen", text: $model.catalogQuery)
+        .autocorrectionDisabled()
+      if model.catalogLoading { ProgressView("Katalog wird geladen …") }
+      if let error = model.catalogError {
+        Text("Katalog konnte nicht aktualisiert werden: \(error)").font(.caption).foregroundStyle(
+          .red)
+      }
+      if !model.catalogLoaded, !model.catalogLoading, model.catalogError == nil {
+        Text("Katalog laden und eine Region für den Download auswählen.")
+          .font(.caption).foregroundStyle(.secondary)
+      }
+      if model.catalogLoaded, model.catalogMatchCount == 0 {
+        let query = model.catalogQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        Text(
+          query.isEmpty
+            ? "Der Katalog enthält keine verfügbaren Regionen."
+            : "Keine Region für „\(query)“ gefunden."
+        )
+        .font(.callout).foregroundStyle(.secondary)
+        if !query.isEmpty { Button("Alle Regionen anzeigen") { model.catalogQuery = "" } }
+      }
+      ForEach(model.filteredRegions) { region in
+        Button {
+          model.download(region)
+        } label: {
+          HStack {
+            VStack(alignment: .leading) {
+              Text(region.name)
+              Text(region.parent ?? region.id).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Image(systemName: "arrow.down.circle")
+          }
+        }
+        .accessibilityHint("Region herunterladen und für die Offline-Nutzung aufbereiten.")
+        .disabled(model.busy || model.pending != nil)
+      }
+      if model.catalogMatchCount > model.filteredRegions.count {
+        Text("\(model.catalogMatchCount) Treffer · Suche für weitere Regionen eingrenzen.")
+          .font(.caption).foregroundStyle(.secondary)
+      }
+      Button(
+        model.catalogLoaded ? "Online aktualisieren" : "Regionenkatalog laden",
+        systemImage: "arrow.clockwise"
+      ) {
+        Task { await model.loadCatalog(refresh: model.catalogLoaded) }
+      }.disabled(model.catalogLoading)
+      Text(
+        "Download benötigt Internet. Nach dem Import funktionieren Karte, Suche und Routing offline. Für den ersten Test eine kleine Region wählen."
+      )
+      .font(.caption).foregroundStyle(.secondary)
+    }
+  }
+}
+
+struct ActivityProgress: View {
+  let model: DemoModel
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      if let fraction = model.fraction { ProgressView(value: fraction) } else { ProgressView() }
+      Text(model.cancelling ? "Vorgang wird abgebrochen …" : model.status)
+        .font(.callout).textSelection(.enabled)
+      if model.canCancel {
+        Button("Abbrechen", role: .cancel) { model.cancel() }.disabled(model.cancelling)
+      }
     }
   }
 }

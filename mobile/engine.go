@@ -193,7 +193,25 @@ func Import(ctx context.Context, o ImportOptions, progress func(Progress)) (Mani
 		}
 	}
 	report("building_map", 0.5)
-	_, err = tinytiles.BuildPBF(ctx, tinytiles.PBFBuildOptions{PBFInputs: []string{o.PBF}, ArtifactPath: filepath.Join(stage, "basemap.ttiles"), MinZoom: o.MinZoom, MaxZoom: o.MaxZoom, Concurrency: 1, MaxMemoryBytes: o.TileMemoryBytes, MinFreeBytes: 1, ReplaceExisting: true, Progress: func(p tinytiles.PBFBuildProgress) { report("map_"+p.Phase, 0.6) }})
+	_, err = tinytiles.BuildPBF(ctx, tinytiles.PBFBuildOptions{
+		PBFInputs: []string{o.PBF}, ArtifactPath: filepath.Join(stage, "basemap.ttiles"),
+		MinZoom: o.MinZoom, MaxZoom: o.MaxZoom, Concurrency: 1,
+		// tinySQL budgets a batch at the largest tile's size. The upstream
+		// 1,000-row default exceeds 256 MiB even for Niederbayern. Small
+		// batches preserve the caller's budget without increasing its limit.
+		BatchSize: 32, MaxMemoryBytes: o.TileMemoryBytes, MinFreeBytes: 1,
+		ReplaceExisting: true,
+		Progress: func(p tinytiles.PBFBuildProgress) {
+			fraction := 0.6
+			if p.Import != nil && p.Import.TotalRows > 0 {
+				fraction += 0.25 * min(1, max(0, float64(p.Import.RowsWritten)/float64(p.Import.TotalRows)))
+			}
+			if p.Phase == "published" {
+				fraction = 0.85
+			}
+			report("map_"+p.Phase, fraction)
+		},
+	})
 	if err != nil {
 		return manifest, err
 	}
@@ -280,6 +298,7 @@ type Engine struct {
 	router   *osm.Router
 	search   *searchReader
 	tiles    *tinytiles.Dataset
+	places   placeIndex
 	Manifest Manifest
 	closed   bool
 }
@@ -321,13 +340,19 @@ func Open(ctx context.Context, path string) (*Engine, error) {
 		r.Close()
 		return nil, err
 	}
+	places, err := loadPlaces(ctx, search)
+	if err != nil {
+		r.Close()
+		search.close()
+		return nil, err
+	}
 	tiles, err := tinytiles.Open(ctx, filepath.Join(path, "basemap.ttiles"), tinytiles.OpenOptions{Readers: 2, MaxMemoryBytes: 16 << 20})
 	if err != nil {
 		r.Close()
 		search.close()
 		return nil, err
 	}
-	return &Engine{router: r, search: search, tiles: tiles, Manifest: manifest}, nil
+	return &Engine{router: r, search: search, tiles: tiles, places: places, Manifest: manifest}, nil
 }
 func (e *Engine) Close() error {
 	e.mu.Lock()
@@ -336,6 +361,7 @@ func (e *Engine) Close() error {
 		return nil
 	}
 	e.closed = true
+	e.places = nil
 	e.search.close()
 	_ = e.tiles.Close()
 	return e.router.Close()
@@ -401,11 +427,17 @@ func (e *Engine) Tile(ctx context.Context, z, x, y int) (VectorTile, error) {
 		return VectorTile{}, err
 	}
 	data, err := e.tiles.GetTileXYZ(z, x, y)
+	var tile VectorTile
 	if errors.Is(err, tinytiles.ErrTileNotFound) {
-		return VectorTile{Features: []VectorFeature{}}, nil
-	}
-	if err != nil {
+		tile = VectorTile{Features: []VectorFeature{}}
+	} else if err != nil {
 		return VectorTile{}, err
+	} else {
+		tile, err = DecodeVectorTile(data)
+		if err != nil {
+			return VectorTile{}, err
+		}
 	}
-	return DecodeVectorTile(data)
+	tile.Features = append(tile.Features, e.places.features(z, x, y)...)
+	return tile, nil
 }

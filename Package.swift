@@ -13,7 +13,8 @@ let package = Package(
         .target(name: "OSMmini", dependencies: ["COSMmini"], path: "apple/Sources/OSMmini", linkerSettings: [
             .linkedFramework("CoreFoundation"), .linkedFramework("Security"), .linkedLibrary("resolv"),
         ]),
-        .executableTarget(name: "OSMminiDemoCLI", dependencies: ["OSMmini"], path: "apple/Demo", exclude: ["OSMminiDemo.xcodeproj", "Info.plist"]),
+        .executableTarget(name: "OSMminiDemoCLI", dependencies: ["OSMmini"], path: "apple/Demo", exclude: ["OSMminiDemo.xcodeproj", "Info.plist", "Assets.xcassets", "Configuration"]),
         .testTarget(name: "OSMminiTests", dependencies: ["OSMmini"], path: "apple/Tests/OSMminiTests", resources: [.copy("Fixtures")]),
+        .testTarget(name: "OSMminiDemoTests", dependencies: ["OSMminiDemoCLI"], path: "apple/Tests/OSMminiDemoTests", resources: [.copy("Fixtures")]),
     ], swiftLanguageModes: [.v6]
 )

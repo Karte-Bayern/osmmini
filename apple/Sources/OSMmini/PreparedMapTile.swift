@@ -10,6 +10,7 @@ struct PreparedMapTile: Sendable {
   enum Style: Sendable, Equatable {
     case water, forest, landcover, building
     case road(major: Bool)
+    case place(kind: String?)
   }
 
   struct Feature: Sendable {
@@ -33,6 +34,7 @@ struct PreparedMapTile: Sendable {
       case "building": style = .building
       case "transportation":
         style = .road(major: ["motorway", "trunk", "primary"].contains(feature.class ?? ""))
+      case "place": style = .place(kind: feature.class)
       default: continue
       }
       guard feature.extent > 0 else { continue }
@@ -49,15 +51,64 @@ struct PreparedMapTile: Sendable {
         if feature.kind == 3 { path.closeSubpath() }
       }
       let labelPoint: CGPoint?
-      if case .road = style, let point = feature.paths.first?.first, point.count >= 2 {
-        labelPoint = CGPoint(x: Double(point[0]) * scale, y: Double(point[1]) * scale)
-      } else {
+      switch style {
+      case .road:
+        labelPoint = try Self.roadLabelPoint(feature.paths, scale: scale)
+      case .place:
+        if let point = feature.paths.first?.first, point.count >= 2 {
+          labelPoint = CGPoint(x: Double(point[0]) * scale, y: Double(point[1]) * scale)
+        } else {
+          labelPoint = nil
+        }
+      default:
         labelPoint = nil
       }
       prepared.append(
-        Feature(path: path, style: style, name: feature.name, labelPoint: labelPoint))
+        Feature(
+          path: path, style: style, name: feature.name,
+          labelPoint: (feature.name?.utf8.count ?? 0) <= 256 ? labelPoint : nil))
     }
     features = prepared
+  }
+
+  /// Place the name halfway along the longest line, away from clipped tile
+  /// boundaries. Preparing this once avoids path scans during map drawing.
+  private static func roadLabelPoint(_ paths: [[[Int]]], scale: Double) throws -> CGPoint? {
+    var longest: [[Int]] = []
+    var length = 0.0
+    for ring in paths {
+      var previous: CGPoint?
+      var candidate = 0.0
+      for (index, point) in ring.enumerated() where point.count >= 2 {
+        if index.isMultiple(of: 1024) { try Task.checkCancellation() }
+        let current = CGPoint(x: Double(point[0]) * scale, y: Double(point[1]) * scale)
+        if let previous { candidate += hypot(current.x - previous.x, current.y - previous.y) }
+        previous = current
+      }
+      if candidate > length {
+        longest = ring
+        length = candidate
+      }
+    }
+    guard length > 0 else { return nil }
+    var remaining = length / 2
+    var previous: CGPoint?
+    for (index, point) in longest.enumerated() where point.count >= 2 {
+      if index.isMultiple(of: 1024) { try Task.checkCancellation() }
+      let current = CGPoint(x: Double(point[0]) * scale, y: Double(point[1]) * scale)
+      if let previous {
+        let segment = hypot(current.x - previous.x, current.y - previous.y)
+        if segment > 0, remaining <= segment {
+          let fraction = remaining / segment
+          return CGPoint(
+            x: previous.x + (current.x - previous.x) * fraction,
+            y: previous.y + (current.y - previous.y) * fraction)
+        }
+        remaining -= segment
+      }
+      previous = current
+    }
+    return previous
   }
 
   /// Detached preparation keeps SwiftUI's main actor free. Cancellation is
@@ -102,5 +153,129 @@ struct PreparedMapTileCache {
   mutating func insert(_ tile: PreparedMapTile, for key: MapTileKey, owner: ObjectIdentifier) {
     guard self.owner == owner, needed.contains(key) else { return }
     tiles[key] = tile
+  }
+}
+
+/// Routes use immutable zoom-zero geometry, prepared once rather than projecting
+/// every coordinate on each drag or GPS update. Small overlapping chunks let
+/// drawing skip distant sections without dropping segments at chunk boundaries.
+struct PreparedMapRoute: Sendable {
+  static let pointsPerChunk = 128
+
+  struct Chunk: Sendable {
+    let path: Path
+    let origin: CGPoint
+    let bounds: CGRect
+    let pointCount: Int
+  }
+
+  struct Placement {
+    let index: Int
+    let origin: CGPoint
+    let scale: CGFloat
+  }
+
+  let chunks: [Chunk]
+
+  init(_ coordinates: [Coordinate]) throws {
+    var chunks: [Chunk] = []
+    var points: [CGPoint] = []
+    points.reserveCapacity(Self.pointsPerChunk)
+    var previous: CGPoint?
+    func flush() {
+      guard points.count > 1 else { return }
+      let origin = points[0]
+      var path = Path()
+      var minX = CGFloat.infinity
+      var maxX = -CGFloat.infinity
+      var minY = CGFloat.infinity
+      var maxY = -CGFloat.infinity
+      for (index, point) in points.enumerated() {
+        // SwiftUI Path can compress coordinates to floats. Keeping them local
+        // avoids magnifying world-coordinate rounding when zooming far in.
+        let local = CGPoint(x: point.x - origin.x, y: point.y - origin.y)
+        if index == 0 { path.move(to: local) } else { path.addLine(to: local) }
+        minX = min(minX, point.x)
+        maxX = max(maxX, point.x)
+        minY = min(minY, point.y)
+        maxY = max(maxY, point.y)
+      }
+      chunks.append(
+        Chunk(
+          path: path, origin: origin,
+          bounds: CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY),
+          pointCount: points.count))
+    }
+    for (index, coordinate) in coordinates.enumerated() {
+      if index.isMultiple(of: 1024) { try Task.checkCancellation() }
+      guard coordinate.lat.isFinite, coordinate.lon.isFinite else {
+        flush()
+        points.removeAll(keepingCapacity: true)
+        previous = nil
+        continue
+      }
+      var point = WebMercator.world(
+        Coordinate(lat: coordinate.lat, lon: coordinate.lon.truncatingRemainder(dividingBy: 360)),
+        zoom: 0)
+      if let previous {
+        // Unwrap consecutive points, so a crossing of ±180° stays connected
+        // locally instead of producing a line across the entire map.
+        point.x += ((previous.x - point.x) / 256).rounded() * 256
+      }
+      points.append(point)
+      previous = point
+      if points.count == Self.pointsPerChunk {
+        flush()
+        points.removeAll(keepingCapacity: true)
+        points.append(point)
+      }
+    }
+    try Task.checkCancellation()
+    flush()
+    self.chunks = chunks
+  }
+
+  /// Only chunk bounds and one camera projection are examined during a frame.
+  /// World copies keep routes aligned with wrapped tiles on either dateline side.
+  func visible(
+    center: Coordinate, zoom: Int, size: CGSize, translation: CGSize = .zero
+  ) -> [Placement] {
+    guard center.lat.isFinite, center.lon.isFinite, (0...30).contains(zoom),
+      size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0,
+      translation.width.isFinite, translation.height.isFinite
+    else { return [] }
+    let scale = exp2(Double(zoom))
+    let center = WebMercator.world(
+      Coordinate(lat: center.lat, lon: center.lon.truncatingRemainder(dividingBy: 360)), zoom: 0)
+    let origin = CGPoint(
+      x: size.width / 2 + translation.width - center.x * scale,
+      y: size.height / 2 + translation.height - center.y * scale)
+    let padding = 4 / scale
+    let viewport = CGRect(
+      x: -origin.x / scale, y: -origin.y / scale,
+      width: min(size.width / scale, 256 * CGFloat(PreparedMapTileCache.capacity)),
+      height: min(size.height / scale, 256 * CGFloat(PreparedMapTileCache.capacity)))
+    var placements: [Placement] = []
+    for (index, chunk) in chunks.enumerated() {
+      let bounds = chunk.bounds.insetBy(dx: -padding, dy: -padding)
+      guard bounds.minY <= viewport.maxY, bounds.maxY >= viewport.minY else { continue }
+      let firstCopy = ceil((viewport.minX - bounds.maxX) / 256)
+      let lastCopy = floor((viewport.maxX - bounds.minX) / 256)
+      guard firstCopy.isFinite, lastCopy.isFinite, firstCopy <= lastCopy else { continue }
+      // At most a viewport's worth of world copies can be visible. Keeping this
+      // bounded also protects callers that supply an unreasonably large canvas.
+      for copy
+        in 0...min(PreparedMapTileCache.capacity + Self.pointsPerChunk, Int(lastCopy - firstCopy))
+      {
+        placements.append(
+          Placement(
+            index: index,
+            origin: CGPoint(
+              x: origin.x + (chunk.origin.x + (firstCopy + CGFloat(copy)) * 256) * scale,
+              y: origin.y + chunk.origin.y * scale),
+            scale: scale))
+      }
+    }
+    return placements
   }
 }

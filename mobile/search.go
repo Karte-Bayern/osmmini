@@ -23,6 +23,7 @@ type SearchResult struct {
 	Label      string    `json:"label"`
 	Coordinate osm.Coord `json:"coordinate"`
 	Category   string    `json:"category,omitempty"`
+	Place      string    `json:"place,omitempty"`
 	Text       string    `json:"text,omitempty"`
 }
 
@@ -147,7 +148,7 @@ func buildSearch(ctx context.Context, path string, r *osm.Router, source string)
 		if city := tags["addr:city"]; city != "" {
 			label += " · " + city
 		}
-		return SearchResult{ID: id, Kind: kind, Label: label, Coordinate: c, Category: category(tags), Text: address + " " + tags["addr:postcode"] + " " + tags["brand"]}
+		return SearchResult{ID: id, Kind: kind, Label: label, Coordinate: c, Category: category(tags), Place: tags["place"], Text: address + " " + tags["addr:postcode"] + " " + tags["brand"]}
 	}
 	opts := osm.Options{Context: ctx, EmitWayNodeIDs: true, TaggedWayKey: func(k string) bool { return poiKey(k) || strings.HasPrefix(k, "addr:") }, KeepTag: func(k string) bool { return k == "name" || k == "brand" || poiKey(k) || strings.HasPrefix(k, "addr:") }}
 	err = osm.ExtractFile(source, opts, osm.Callbacks{TaggedNode: func(n osm.Node) error {

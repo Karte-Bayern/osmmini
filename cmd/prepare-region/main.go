@@ -17,7 +17,7 @@ func main() {
 	pbf := flag.String("pbf", "", "OSM PBF source")
 	output := flag.String("output", "", "new region directory (required)")
 	name := flag.String("name", "", "display name")
-	maxNodes := flag.Int("max-import-nodes", 8_000_000, "coordinate import limit; increase for large desktop builds")
+	maxNodes := flag.Int("max-import-nodes", 8_000_000, "road-node import limit; increase for large desktop builds")
 	minZoom := flag.Int("min-zoom", 5, "first map zoom (5…14)")
 	maxZoom := flag.Int("max-zoom", 14, "last map zoom (5…14)")
 	memory := flag.Int64("tile-memory-mb", 256, "tinySQL tile import cache budget in MiB; not a total process limit")

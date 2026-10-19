@@ -306,7 +306,8 @@ type mapLabelCandidate struct {
 type BuildOptions struct {
 	// SkipAddresses is useful for importers that build a separate disk search index.
 	SkipAddresses bool
-	// MaxNodes limits coordinates retained during import; zero is unlimited.
+	// MaxNodes limits referenced road nodes; unrelated OSM nodes do not count.
+	// With a Window, only retained coordinates count. Zero is unlimited.
 	MaxNodes      int
 	Context       context.Context
 	Window        *CoordWindow
@@ -318,7 +319,10 @@ func BuildRouterWithAddresses(path string) (*Router, []AddressEntry, error) {
 }
 
 // BuildRouterWithAddressesOptions parses a PBF, builds a highway graph and collects address nodes.
-// If Window is set, nodes/addresses are filtered to Window expanded by WindowBufferM.
+// Whole-region imports read roads before their coordinates, so unrelated OSM
+// nodes never enter the graph's coordinate map. A spatial Window instead limits
+// coordinates/addresses in one pass, expanded by WindowBufferM, without retaining
+// a reference set for all the roads outside that window.
 func BuildRouterWithAddressesOptions(path string, bo BuildOptions) (*Router, []AddressEntry, error) {
 	var filterWin *CoordWindow
 	if bo.Window != nil && bo.Window.Valid() {
@@ -333,8 +337,15 @@ func BuildRouterWithAddressesOptions(path string, bo BuildOptions) (*Router, []A
 	if bo.MaxNodes > 0 {
 		initialNodes = min(1<<16, bo.MaxNodes)
 	}
-	coordsAll := make(map[int64]Coord, initialNodes)
-	addrs := make([]AddressEntry, 0, 1<<16)
+	var referenced map[int64]struct{}
+	if filterWin == nil {
+		referenced = make(map[int64]struct{}, initialNodes)
+	}
+	var coordsAll map[int64]Coord
+	var addrs []AddressEntry
+	if !bo.SkipAddresses {
+		addrs = make([]AddressEntry, 0, 1<<16)
+	}
 	highways := make([]highwayWay, 0, 1<<18)
 	streets := make(map[string]streetEntry, 1<<18)
 
@@ -360,11 +371,16 @@ func BuildRouterWithAddressesOptions(path string, bo BuildOptions) (*Router, []A
 
 	cb := Callbacks{
 		Node: func(id int64, lat, lon float64) error {
+			if filterWin == nil {
+				if _, needed := referenced[id]; !needed {
+					return nil
+				}
+			}
 			c := Coord{Lat: lat, Lon: lon}
 			if filterWin != nil && !filterWin.Contains(c) {
 				return nil
 			}
-			if bo.MaxNodes > 0 && len(coordsAll) >= bo.MaxNodes {
+			if _, exists := coordsAll[id]; !exists && bo.MaxNodes > 0 && len(coordsAll) >= bo.MaxNodes {
 				return fmt.Errorf("graph import exceeds %d nodes; choose a smaller region or increase MaxNodes", bo.MaxNodes)
 			}
 			coordsAll[id] = c
@@ -413,6 +429,17 @@ func BuildRouterWithAddressesOptions(path string, bo BuildOptions) (*Router, []A
 
 			ids := make([]int64, len(w.NodeIDs))
 			copy(ids, w.NodeIDs)
+			if filterWin == nil {
+				for _, id := range ids {
+					if _, exists := referenced[id]; exists {
+						continue
+					}
+					if bo.MaxNodes > 0 && len(referenced) >= bo.MaxNodes {
+						return fmt.Errorf("graph import exceeds %d road nodes; choose a smaller region or increase MaxNodes", bo.MaxNodes)
+					}
+					referenced[id] = struct{}{}
+				}
+			}
 			highways = append(highways, highwayWay{
 				nodes:      ids,
 				hwyType:    strings.ToLower(strings.TrimSpace(hwy)),
@@ -438,12 +465,35 @@ func BuildRouterWithAddressesOptions(path string, bo BuildOptions) (*Router, []A
 	if bo.SkipAddresses {
 		cb.AddressNode = nil
 	}
-	if err := ExtractFile(path, opts, cb); err != nil {
-		return nil, nil, err
+	if filterWin != nil {
+		coordsAll = make(map[int64]Coord, initialNodes)
+		if err := ExtractFile(path, opts, cb); err != nil {
+			return nil, nil, err
+		}
+		referenced = make(map[int64]struct{})
+	} else {
+		if err := ExtractFile(path, opts, Callbacks{HighwayWay: cb.HighwayWay}); err != nil {
+			return nil, nil, err
+		}
+		coordsAll = make(map[int64]Coord, len(referenced))
+		cb.HighwayWay = nil
+		opts.EmitWayNodeIDs = false
+		if err := ExtractFile(path, opts, cb); err != nil {
+			return nil, nil, err
+		}
 	}
+	// Reuse the reference set to mark actual edge endpoints. Coordinates with
+	// missing neighbours must be pruned, including sinks of one-way roads.
+	clear(referenced)
 
-	adj := make(map[int64][]Edge, 1<<20)
+	adjCapacity := len(coordsAll)
+	if filterWin != nil {
+		adjCapacity = min(adjCapacity, 1<<20)
+	}
+	adj := make(map[int64][]Edge, adjCapacity)
 	addEdge := func(from, to int64, dist float64, hw highwayWay) {
+		referenced[from] = struct{}{}
+		referenced[to] = struct{}{}
 		adj[from] = append(adj[from], Edge{
 			To:         to,
 			DistM:      dist,
@@ -486,14 +536,18 @@ func BuildRouterWithAddressesOptions(path string, bo BuildOptions) (*Router, []A
 	}
 
 	// prune coords to nodes that actually have edges
-	coords := make(map[int64]Coord, len(adj))
-	for id, edges := range adj {
-		if c, ok := coordsAll[id]; ok {
-			coords[id] = c
+	coords := coordsAll
+	if filterWin != nil {
+		// Window imports temporarily keep all coordinates in their bounds;
+		// compact them so non-road map capacity does not outlive the import.
+		coords = make(map[int64]Coord, len(referenced))
+		for id := range referenced {
+			coords[id] = coordsAll[id]
 		}
-		for _, edge := range edges {
-			if c, ok := coordsAll[edge.To]; ok {
-				coords[edge.To] = c
+	} else {
+		for id := range coords {
+			if _, used := referenced[id]; !used {
+				delete(coords, id)
 			}
 		}
 	}

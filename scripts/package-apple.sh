@@ -13,7 +13,13 @@ mkdir -p "$stage/OSMmini"
 cp -R "$root/apple/Sources" "$root/apple/Tests" "$root/apple/COSMmini.xcframework" "$stage/OSMmini/"
 # Copy the shared demo project without local Xcode user state or workspace data.
 mkdir -p "$stage/OSMmini/Demo/OSMminiDemo.xcodeproj"
-cp "$root/apple/Demo/OSMminiDemo.swift" "$root/apple/Demo/Info.plist" "$stage/OSMmini/Demo/"
+cp "$root/apple/Demo/"*.swift "$root/apple/Demo/Info.plist" "$stage/OSMmini/Demo/"
+cp -R "$root/apple/Demo/Assets.xcassets" "$stage/OSMmini/Demo/"
+# Select shared signing configuration explicitly; never package personal settings.
+mkdir -p "$stage/OSMmini/Demo/Configuration"
+cp "$root/apple/Demo/Configuration/Signing.xcconfig" \
+   "$root/apple/Demo/Configuration/Signing.local.xcconfig.example" \
+   "$stage/OSMmini/Demo/Configuration/"
 cp "$root/apple/Demo/OSMminiDemo.xcodeproj/project.pbxproj" "$stage/OSMmini/Demo/OSMminiDemo.xcodeproj/"
 cp -R "$root/apple/Demo/OSMminiDemo.xcodeproj/xcshareddata" "$stage/OSMmini/Demo/OSMminiDemo.xcodeproj/"
 cp "$root/apple/Package.swift" "$root/apple/README.md" "$root/apple/NOTICE" "$root/apple/LICENSE" "$stage/OSMmini/"
