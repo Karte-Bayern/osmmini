@@ -553,6 +553,40 @@ go test -run '^$' -bench '^BenchmarkDecodeVectorTile$' -benchmem ./mobile
 OSMMINI_BENCH_REGION=/path/to/region go test -run '^$' -bench '^BenchmarkDecodeVectorTileRegion$' -benchmem ./mobile
 ```
 
+#### Imported edge cleanup
+
+The 2026-10-18 Niederbayern extract contained **54 bit-identical duplicate
+directed edges among 4,307,507 edges**. Imports now retain the first such edge
+in source order. A complete reimport produced **4,307,453 edges**, reducing
+`graph.bin` from 163,091,235 to 163,090,371 bytes: **864 bytes saved**. This is a
+small cleanup, with no claim of a substantial RAM or routing-speed reduction.
+The audit found no self-loops; all 74 parallel edges with different routing
+attributes remain.
+
+A streaming comparison verified every node coordinate, retained edge attribute
+and order, one-way sink, and street metadata entry. Car routes from Passau Hbf
+to Landshut Hbf retained identical node-ID paths, distances, durations and costs
+for both distance and duration objectives. Explicit junction penalties can
+change where duplicate edges previously inflated the outgoing degree; cleanup
+corrects that artificial junction classification.
+
+Two-way road segments need edges in both directions. Also, 82.4% of the original
+graph's nodes have two outgoing edges, largely retaining road shape points.
+Removing these requires a representation that preserves geometry, directions
+and routing attributes. Existing regions and import checkpoints remain
+readable; a fresh import applies the cleanup.
+
+Run the optional audit and original-versus-reimport comparison on existing
+files; neither command downloads or imports data:
+
+```sh
+OSMMINI_REAL_GRAPH=/path/to/reimport/graph.bin \
+  go test -run '^TestRealGraphEdgeRedundancy$' -count=1 -v .
+OSMMINI_ORIGINAL_GRAPH=/path/to/original/graph.bin \
+  OSMMINI_REAL_GRAPH=/path/to/reimport/graph.bin \
+  go test -run '^TestRealGraphDedupEquivalence$' -count=1 -v .
+```
+
 Large JSON and GeoJSON API responses use pooled, best-speed gzip when the
 client accepts it. Responses below 1 KiB normally stay uncompressed; only that small
 prefix is buffered. Binary tiles, range/HEAD responses, existing encodings,

@@ -524,6 +524,9 @@ func BuildRouterWithAddressesOptions(path string, bo BuildOptions) (*Router, []A
 	if err := visitHighwayEdges(bo.Context, coordsAll, highways, addEdge); err != nil {
 		return nil, nil, err
 	}
+	if _, err := deduplicateImportedEdges(bo.Context, adj); err != nil {
+		return nil, nil, err
+	}
 
 	// prune coords to nodes that actually have edges
 	coords := coordsAll
