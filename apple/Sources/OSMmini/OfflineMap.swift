@@ -412,7 +412,7 @@ public struct OfflineMap: View {
       let point = screen(coordinate, size: size)
       obstacles.append(CGRect(x: point.x - 16, y: point.y - 16, width: 32, height: 32))
     }
-    var layout = OfflineMapLabelLayout(obstacles: obstacles)
+    var layout = OfflineMapLabelLayout(obstacles: obstacles, viewport: size)
     for label in labels.sorted(by: { $0.priority < $1.priority }) {
       guard layout.canPlace(name: label.name, at: label.point, viewport: size) else { continue }
       let text = context.resolve(

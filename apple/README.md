@@ -79,6 +79,10 @@ Settlement labels are derived from the region's existing search index when it
 opens, so previously imported regions gain names without importing the PBF
 again. Road labels use the midpoint of their longest path; collision checks
 prioritize settlement names and avoid duplicate labels.
+Label collision checks use a bounded grid in screen coordinates to inspect
+nearby occupied rectangles. Exact rectangle tests still decide placement;
+candidate order, duplicate-name rules and spacing around controls are preserved.
+Layouts with fewer than 16 occupied rectangles keep the linear scan.
 
 The map initially fits the region. **Region anzeigen** and **Ganze Route** fit
 the corresponding bounds, including after resizing; manual navigation keeps its
@@ -178,6 +182,11 @@ Selecting a Geofabrik region opens a download/import summary with a persistent
 primary action. Catalog search matches multiple words across names and ancestor
 regions, ignores accents and ranks exact names first. Technical error details
 remain available in disclosures while recovery actions stay visible.
+The demo prepares normalized catalog search fields and display order once per
+catalog load on a worker. Typing filters those records and counts all matches
+while retaining only the first 50 display results. A successful refresh publishes
+the prepared catalog in one step; a failed refresh leaves the previous results
+usable. Normalized search text remains cached until the next catalog load.
 
 The route panel can collapse while keeping directions and export available.
 Start and destination offer search, an explicit cancellable map-picking mode,
@@ -276,14 +285,16 @@ original feature range without allocating a selection array. Bitmap tests
 compare indexed and complete drawing at multiple zooms, including polygon
 holes, overlapping features, tile edges and road strokes entering the viewport.
 
-Optional Release microbenchmarks report native buffer transfer and path
-preparation/reuse times without timing assertions:
+Optional Release microbenchmarks report native buffer transfer, map
+preparation/rendering and catalog filtering times without timing assertions:
 
 ```sh
 OSMMINI_BENCHMARKS=1 swift test --package-path apple -c release --filter nativeBufferTransferBenchmark
 OSMMINI_MAP_BENCHMARK=1 swift test --package-path apple -c release --filter mapGeometryReplayBenchmark
 OSMMINI_MAP_BENCHMARK=1 swift test --package-path apple -c release --filter offlineMapLoadingBenchmark
 OSMMINI_MAP_BENCHMARK=1 swift test --package-path apple -c release --filter mapCullingReplayBenchmark
+OSMMINI_MAP_BENCHMARK=1 swift test --package-path apple -c release --filter mapLabelLayoutBenchmark
+OSMMINI_BENCHMARKS=1 swift test --package-path apple -c release --filter catalogPreparedSearchBenchmark
 ```
 
 The map benchmark measures CPU geometry work and CoreGraphics replay; it does
@@ -306,6 +317,20 @@ On macOS arm64 in Release mode (2026-10-19), median CPU replay time fell from
 (about 79% less elapsed time in the latter case). Over those 120 overzoomed
 frames, submitted geometries fell from 123,480 to 8,160. These are synthetic
 CoreGraphics measurements; physical-device rendering still needs profiling.
+The label benchmark compares placement with the previous linear scan across
+120 frames for sparse phones, dense phones, repeated road names and tablets.
+Each frame builds the layout and collision index anew; all accepted-label counts
+must agree. It measures layout CPU work rather than text drawing or GPU output.
+The catalog benchmark compares 150 mixed queries over 1,000 synthetic regions
+with the previous normalization/hierarchy/sort algorithm and reports one-time
+preparation separately. Both benchmarks alternate execution order over three
+passes and avoid timing assertions.
+On macOS arm64 in Release mode (2026-10-19), median label-layout time over
+120 frames fell from 32.9 to 23.6 ms for 500 phone candidates per frame (28%),
+and from 843 to 467 ms for 3,000 tablet candidates per frame (45%). Sparse
+phone layout remained under 1 ms for the complete 120-frame run. Median catalog
+filtering time for all 150 queries fell from 1,203 to 155 ms (87%), with 7.8 ms
+of one-time preparation. These figures describe synthetic CPU workloads on a Mac.
 
 `Geofabrik` retains its decoded catalog in memory after the first load. Overlapping
 catalog refreshes share the result. Concurrent downloads of the same PBF URL

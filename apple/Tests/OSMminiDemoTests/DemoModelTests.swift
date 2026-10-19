@@ -1,8 +1,8 @@
 import Foundation
-import OSMmini
 import Observation
 import Testing
 
+@testable import OSMmini
 @testable import OSMminiDemoCLI
 
 private final class ChangeCounter: @unchecked Sendable {
@@ -17,6 +17,64 @@ private final class ChangeCounter: @unchecked Sendable {
     lock.lock()
     defer { lock.unlock() }
     return value
+  }
+}
+
+private final class DemoCatalogURLProtocol: URLProtocol, @unchecked Sendable {
+  final class State: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+    private var status = 200
+    private var delay: TimeInterval = 0
+    private var requests = 0
+
+    func configure(_ data: Data, status: Int = 200, delay: TimeInterval = 0) {
+      lock.lock()
+      defer { lock.unlock() }
+      self.data = data
+      self.status = status
+      self.delay = delay
+      requests = 0
+    }
+
+    func response() -> (Data, Int, TimeInterval) {
+      lock.lock()
+      defer { lock.unlock() }
+      requests += 1
+      return (data, status, delay)
+    }
+
+    var count: Int {
+      lock.lock()
+      defer { lock.unlock() }
+      return requests
+    }
+  }
+
+  static let state = State()
+  private let lock = NSRecursiveLock()
+  private var stopped = false
+
+  override class func canInit(with request: URLRequest) -> Bool { true }
+  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+  override func startLoading() {
+    let (data, status, delay) = Self.state.response()
+    DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [self] in
+      lock.lock()
+      defer { lock.unlock() }
+      guard !stopped, let url = request.url,
+        let response = HTTPURLResponse(
+          url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: nil)
+      else { return }
+      client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+      client?.urlProtocol(self, didLoad: data)
+      client?.urlProtocolDidFinishLoading(self)
+    }
+  }
+  override func stopLoading() {
+    lock.lock()
+    stopped = true
+    lock.unlock()
   }
 }
 
@@ -39,6 +97,18 @@ private final class ChangeCounter: @unchecked Sendable {
   private func fixture() throws -> URL {
     try #require(
       Bundle.module.url(forResource: "region", withExtension: "osm.pbf", subdirectory: "Fixtures"))
+  }
+
+  private func catalogData(_ entries: [(String, String, String?)]) throws -> Data {
+    let features = entries.map { id, name, parent -> [String: Any] in
+      var properties: [String: Any] = [
+        "id": id, "name": name,
+        "urls": ["pbf": "https://download.geofabrik.de/\(id).osm.pbf"],
+      ]
+      if let parent { properties["parent"] = parent }
+      return ["properties": properties]
+    }
+    return try JSONSerialization.data(withJSONObject: ["features": features])
   }
 
   private func readyModel() async throws -> DemoModel {
@@ -194,6 +264,111 @@ private final class ChangeCounter: @unchecked Sendable {
     model.catalogQuery = "Ohne Elternregion"
     let orphan = try #require(model.filteredRegions.first)
     #expect(model.catalogContext(for: orphan).isEmpty)
+  }
+
+  @Test func catalogSearchKeepsNaturalOrderTiesAndExactMatchesBeyondTheDisplayLimit() throws {
+    let entries: [(String, String, String?)] = [
+      ("same-z", "Region 2", nil), ("same-a", "Region 2", nil),
+      ("region-10", "Region 10", nil), ("region-1", "Region 1", nil),
+      ("region", "ZZZ Region", nil),
+    ]
+    let regions = try Geofabrik.decodeCatalog(catalogData(entries))
+    let search = try DemoCatalogSearch(regions)
+    let ordered = ["region-1", "same-a", "same-z", "region-10", "region"]
+    #expect(search.matches("").regions.map(\.id) == ordered)
+    #expect(search.matches("  · /  ").regions.map(\.id) == ordered)
+    #expect(search.matches("REGION").regions.map(\.id) == ["region"] + Array(ordered.dropLast()))
+
+    let many = entries + (20..<100).map { ("region-\($0)", "Region \($0)", nil as String?) }
+    let limited = try DemoCatalogSearch(Geofabrik.decodeCatalog(catalogData(many))).matches(
+      "region")
+    #expect(limited.count == 85)
+    #expect(limited.regions.count == 50)
+    #expect(limited.regions.first?.id == "region")
+    #expect(limited.regions.dropFirst().prefix(4).map(\.id) == ordered.dropLast())
+  }
+
+  @Test func catalogRefreshReplacesPreparedNamesAndParentsAndKeepsOldResultsOnFailure() async throws
+  {
+    defer { cleanup() }
+    let downloads = root.appendingPathComponent("downloads")
+    try FileManager.default.createDirectory(at: downloads, withIntermediateDirectories: true)
+    try catalogData([
+      ("parent", "Alter Kontinent", nil), ("child", "Alte Region", "parent"),
+    ]).write(to: downloads.appendingPathComponent("geofabrik-index.json"))
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [DemoCatalogURLProtocol.self]
+    configuration.urlCache = nil
+    let session = URLSession(configuration: configuration)
+    defer { session.invalidateAndCancel() }
+    let geofabrik = Geofabrik(
+      directory: downloads, catalogSession: session,
+      downloadConfiguration: { .ephemeral })
+    let model = DemoModel(root: root, defaults: defaults, geofabrik: geofabrik)
+    await model.loadCatalog()
+    model.catalogQuery = "alte"
+    #expect(model.filteredRegions.map(\.id) == ["child", "parent"])
+    let oldChild = try #require(model.filteredRegions.first)
+
+    DemoCatalogURLProtocol.state.configure(
+      try catalogData([
+        ("parent", "Neuer Kontinent", nil), ("child", "Neue Region", "parent"),
+      ]), delay: 0.05)
+    let loading = Task { await model.loadCatalog(refresh: true) }
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(5))
+    while DemoCatalogURLProtocol.state.count == 0, clock.now < deadline {
+      try await Task.sleep(for: .milliseconds(1))
+    }
+    #expect(DemoCatalogURLProtocol.state.count == 1)
+    model.catalogQuery = "neue kontinent"
+    await loading.value
+    #expect(model.filteredRegions.map(\.id) == ["child", "parent"])
+    #expect(model.filteredRegions.first?.name == "Neue Region")
+    #expect(model.catalogContext(for: oldChild) == "Neuer Kontinent")
+    let external = try #require(
+      Geofabrik.decodeCatalog(
+        catalogData([("child", "Extern", nil)])
+      ).first)
+    #expect(model.catalogContext(for: external).isEmpty)
+    model.catalogQuery = "alte"
+    #expect(model.filteredRegions.isEmpty)
+    model.catalogQuery = "neue region"
+    #expect(model.filteredRegions.map(\.id) == ["child"])
+
+    DemoCatalogURLProtocol.state.configure(Data(), status: 503)
+    await model.loadCatalog(refresh: true)
+    #expect(model.catalogError != nil)
+    #expect(model.catalogLoaded)
+    #expect(model.catalogMatchCount == 1)
+    #expect(model.filteredRegions.map(\.id) == ["child"])
+    model.catalogQuery = "neuer kontinent"
+    #expect(model.filteredRegions.map(\.id) == ["parent", "child"])
+    #expect(model.catalogContext(for: oldChild) == "Neuer Kontinent")
+  }
+
+  @Test func catalogPreparationAndFilteringKeepMapObservationIsolated() async throws {
+    defer { cleanup() }
+    let downloads = root.appendingPathComponent("downloads")
+    try FileManager.default.createDirectory(at: downloads, withIntermediateDirectories: true)
+    try catalogData([("region", "Region", nil)]).write(
+      to: downloads.appendingPathComponent("geofabrik-index.json"))
+    let model = DemoModel(root: root, defaults: defaults)
+    let changes = ChangeCounter()
+    withObservationTracking {
+      _ = model.engine
+      _ = model.route
+      _ = model.start
+      _ = model.destination
+      _ = model.focus
+      _ = model.focusRequest
+    } onChange: {
+      changes.increment()
+    }
+    await model.loadCatalog()
+    model.catalogQuery = "REGION"
+    #expect(model.filteredRegions.map(\.id) == ["region"])
+    #expect(changes.count == 0)
   }
 
   @Test func downloadAndInputFailuresKeepTheirSpecificRecoveryAdvice() async throws {

@@ -30,6 +30,102 @@ struct DemoImportFailure: Codable, Sendable {
   let phase: String?
 }
 
+/// Normalize catalog text and establish its display order once per load. Query
+/// changes only scan these immutable strings and retain the first 50 matches.
+struct DemoCatalogSearch: Sendable {
+  struct Matches {
+    let regions: [GeofabrikRegion]
+    let count: Int
+  }
+
+  private struct Record: Sendable {
+    let region: GeofabrikRegion
+    let name: String
+    let id: String
+    let context: String
+  }
+
+  private let byID: [String: GeofabrikRegion]
+  private var records: [Record]
+  private(set) var localeIdentifier: String
+
+  init() {
+    byID = [:]
+    records = []
+    localeIdentifier = Locale.current.identifier
+  }
+
+  init(_ regions: [GeofabrikRegion]) throws {
+    let byID = Dictionary(regions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    self.byID = byID
+    records = try regions.map { region in
+      try Task.checkCancellation()
+      let name = Self.words(region.name).joined(separator: " ")
+      let id = Self.words(region.id).joined(separator: " ")
+      let ancestors = Self.words(Self.context(for: region, byID: byID)).joined(separator: " ")
+      return Record(region: region, name: name, id: id, context: name + " " + id + " " + ancestors)
+    }
+    localeIdentifier = Locale.current.identifier
+    sortForCurrentLocale()
+    try Task.checkCancellation()
+  }
+
+  // Keep Foundation's existing localized comparison, including its ID tie break.
+  // A locale change needs only another sort; normalized text uses fixed POSIX rules.
+  mutating func sortForCurrentLocale() {
+    localeIdentifier = Locale.current.identifier
+    records.sort {
+      let order = $0.region.name.localizedStandardCompare($1.region.name)
+      return order == .orderedSame ? $0.region.id < $1.region.id : order == .orderedAscending
+    }
+  }
+
+  func matches(_ query: String) -> Matches {
+    let words = Self.words(query)
+    let query = words.joined(separator: " ")
+    var exact: [GeofabrikRegion] = []
+    var others: [GeofabrikRegion] = []
+    var count = 0
+    for record in records {
+      guard words.allSatisfy({ record.context.contains($0) }) else { continue }
+      count += 1
+      if !query.isEmpty && (record.name == query || record.id == query) {
+        if exact.count < 50 { exact.append(record.region) }
+      } else if others.count < 50 {
+        others.append(record.region)
+      }
+    }
+    exact.append(contentsOf: others.prefix(50 - exact.count))
+    return Matches(regions: exact, count: count)
+  }
+
+  func context(for region: GeofabrikRegion) -> String {
+    Self.context(for: region, byID: byID)
+  }
+
+  private static func context(for region: GeofabrikRegion, byID: [String: GeofabrikRegion])
+    -> String
+  {
+    var names: [String] = []
+    var visited: Set<String> = [region.id]
+    var parent = region.parent
+    while let id = parent, names.count < 16, visited.insert(id).inserted,
+      let ancestor = byID[id]
+    {
+      names.append(ancestor.name)
+      parent = ancestor.parent
+    }
+    return names.reversed().joined(separator: " · ")
+  }
+
+  private static func words(_ value: String) -> [String] {
+    value.folding(
+      options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+      locale: Locale(identifier: "en_US_POSIX")
+    ).split { !$0.isLetter && !$0.isNumber }.map(String.init)
+  }
+}
+
 @MainActor @Observable final class DemoModel {
   enum Activity { case opening, downloading, importing, routing, deleting }
   enum RoutePoint { case start, destination }
@@ -86,8 +182,7 @@ struct DemoImportFailure: Codable, Sendable {
   @ObservationIgnored private var searchNeedsResume = false
   @ObservationIgnored private var searchPresentations: Set<UUID> = []
   @ObservationIgnored private var installedID: UUID?
-  @ObservationIgnored private var regions: [GeofabrikRegion] = []
-  @ObservationIgnored private var catalogByID: [String: GeofabrikRegion] = [:]
+  @ObservationIgnored private var catalogSearch = DemoCatalogSearch()
   @ObservationIgnored private var started = false
   let root: URL
   let geofabrik: Geofabrik
@@ -168,52 +263,31 @@ struct DemoImportFailure: Codable, Sendable {
     catalogError = nil
     defer { catalogLoading = false }
     do {
-      regions = try await geofabrik.regions(refresh: refresh)
-      catalogByID = Dictionary(regions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+      let regions = try await geofabrik.regions(refresh: refresh)
+      let preparation = Task.detached(priority: .utility) { try DemoCatalogSearch(regions) }
+      let prepared = try await withTaskCancellationHandler {
+        try await preparation.value
+      } onCancel: {
+        preparation.cancel()
+      }
+      try Task.checkCancellation()
+      catalogSearch = prepared
       catalogLoaded = true
       filterCatalog()
     } catch is CancellationError {} catch { catalogError = error.localizedDescription }
   }
 
   private func filterCatalog() {
-    let words = Self.catalogWords(catalogQuery)
-    let query = words.joined(separator: " ")
-    let matches = regions.compactMap { region -> (GeofabrikRegion, Int)? in
-      let name = Self.catalogWords(region.name).joined(separator: " ")
-      let id = Self.catalogWords(region.id).joined(separator: " ")
-      let context =
-        name + " " + id + " "
-        + Self.catalogWords(catalogContext(for: region)).joined(separator: " ")
-      guard words.allSatisfy({ context.contains($0) }) else { return nil }
-      let rank = !query.isEmpty && (name == query || id == query) ? 0 : 1
-      return (region, rank)
-    }.sorted {
-      if $0.1 != $1.1 { return $0.1 < $1.1 }
-      let order = $0.0.name.localizedStandardCompare($1.0.name)
-      return order == .orderedSame ? $0.0.id < $1.0.id : order == .orderedAscending
+    if catalogSearch.localeIdentifier != Locale.current.identifier {
+      catalogSearch.sortForCurrentLocale()
     }
+    let matches = catalogSearch.matches(catalogQuery)
     catalogMatchCount = matches.count
-    filteredRegions = matches.prefix(50).map(\.0)
+    filteredRegions = matches.regions
   }
 
   func catalogContext(for region: GeofabrikRegion) -> String {
-    var names: [String] = []
-    var visited: Set<String> = [region.id]
-    var parent = region.parent
-    while let id = parent, names.count < 16, visited.insert(id).inserted,
-      let ancestor = catalogByID[id]
-    {
-      names.append(ancestor.name)
-      parent = ancestor.parent
-    }
-    return names.reversed().joined(separator: " · ")
-  }
-
-  private static func catalogWords(_ value: String) -> [String] {
-    value.folding(
-      options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
-      locale: Locale(identifier: "en_US_POSIX")
-    ).split { !$0.isLetter && !$0.isNumber }.map(String.init)
+    catalogSearch.context(for: region)
   }
 
   func run(

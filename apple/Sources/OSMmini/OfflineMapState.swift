@@ -220,15 +220,26 @@ struct OfflineMapMarker {
 struct OfflineMapLabelLayout {
   private var occupied: [CGRect]
   private var names: Set<String> = []
+  private let viewport: CGSize?
+  private var collisionIndex: CollisionIndex?
 
-  init(obstacles: [CGRect] = []) { occupied = obstacles }
+  init(obstacles: [CGRect] = [], viewport: CGSize? = nil) {
+    occupied = obstacles
+    self.viewport = viewport
+    if obstacles.count >= 16, let viewport {
+      collisionIndex = CollisionIndex(obstacles, viewport: viewport)
+    }
+  }
 
   /// Reject cheap cases before resolving and measuring Canvas text.
   func canPlace(name: String, at point: CGPoint, viewport: CGSize) -> Bool {
+    guard point.x.isFinite, point.y.isFinite,
+      CGRect(origin: .zero, size: viewport).insetBy(dx: 6, dy: 6).contains(point),
+      !(collisionIndex?.contains(point, in: occupied)
+        ?? occupied.contains(where: { $0.contains(point) }))
+    else { return false }
     let name = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    return !name.isEmpty && !names.contains(name) && point.x.isFinite && point.y.isFinite
-      && CGRect(origin: .zero, size: viewport).insetBy(dx: 6, dy: 6).contains(point)
-      && !occupied.contains(where: { $0.contains(point) })
+    return !name.isEmpty && !names.contains(name)
   }
 
   /// A viewport-wide layout keeps adjacent tiles from drawing duplicate or
@@ -241,10 +252,115 @@ struct OfflineMapLabelLayout {
       CGRect(origin: .zero, size: viewport).insetBy(dx: 6, dy: 6).contains(frame)
     else { return false }
     let footprint = frame.insetBy(dx: -4, dy: -3)
-    guard !occupied.contains(where: { $0.intersects(footprint) }) else { return false }
+    guard
+      !(collisionIndex?.intersects(footprint, in: occupied)
+        ?? occupied.contains(where: { $0.intersects(footprint) }))
+    else { return false }
     occupied.append(footprint)
+    if collisionIndex != nil {
+      collisionIndex?.insert(footprint, at: occupied.count - 1)
+    } else if occupied.count == 16, let viewport = self.viewport {
+      collisionIndex = CollisionIndex(occupied, viewport: viewport)
+    }
     names.insert(name)
     return true
+  }
+
+  /// Small layouts keep their linear scan. Larger ones use a bounded grid with
+  /// flat linked lists, retaining each exact rectangle only once. Rectangles
+  /// outside the grid remain in a fallback list, including unusual obstacles.
+  private struct CollisionIndex {
+    private struct Entry {
+      let rectangle: UInt32
+      let next: UInt32
+    }
+
+    private let bounds: CGRect
+    private let cellSize: CGFloat
+    private let columns: Int
+    private let rows: Int
+    private var heads: [UInt32]
+    private var entries: [Entry] = []
+    private var fallback: [Int] = []
+
+    init?(_ rectangles: [CGRect], viewport: CGSize) {
+      guard viewport.width.isFinite, viewport.height.isFinite,
+        viewport.width > 0, viewport.height > 0
+      else { return nil }
+      bounds = CGRect(origin: .zero, size: viewport)
+      // At most 32 × 32 heads, even for unusually large viewports.
+      cellSize = max(64, ceil(max(viewport.width, viewport.height) / 32))
+      columns = max(1, Int(ceil(viewport.width / cellSize)))
+      rows = max(1, Int(ceil(viewport.height / cellSize)))
+      heads = Array(repeating: .max, count: columns * rows)
+      entries.reserveCapacity(rectangles.count * 2)
+      for (index, rectangle) in rectangles.enumerated() { insert(rectangle, at: index) }
+    }
+
+    private func cells(for rectangle: CGRect) -> (x: ClosedRange<Int>, y: ClosedRange<Int>)? {
+      let minX = rectangle.minX
+      let minY = rectangle.minY
+      let maxX = rectangle.maxX
+      let maxY = rectangle.maxY
+      guard minX.isFinite, minY.isFinite, maxX.isFinite, maxY.isFinite,
+        minX >= 0, minY >= 0, maxX <= bounds.width, maxY <= bounds.height,
+        minX <= maxX, minY <= maxY
+      else { return nil }
+      return (
+        min(columns - 1, Int(minX / cellSize))...min(columns - 1, Int(maxX / cellSize)),
+        min(rows - 1, Int(minY / cellSize))...min(rows - 1, Int(maxY / cellSize))
+      )
+    }
+
+    mutating func insert(_ rectangle: CGRect, at index: Int) {
+      guard let rectangleIndex = UInt32(exactly: index), let cells = cells(for: rectangle),
+        entries.count <= Int(UInt32.max) - cells.x.count * cells.y.count
+      else {
+        fallback.append(index)
+        return
+      }
+      for y in cells.y {
+        for x in cells.x {
+          let cell = y * columns + x
+          entries.append(Entry(rectangle: rectangleIndex, next: heads[cell]))
+          heads[cell] = UInt32(entries.count - 1)
+        }
+      }
+    }
+
+    func contains(_ point: CGPoint, in rectangles: [CGRect]) -> Bool {
+      guard point.x.isFinite, point.y.isFinite,
+        point.x >= 0, point.y >= 0, point.x <= bounds.width, point.y <= bounds.height
+      else { return rectangles.contains(where: { $0.contains(point) }) }
+      if fallback.contains(where: { rectangles[$0].contains(point) }) { return true }
+      let x = min(columns - 1, Int(point.x / cellSize))
+      let y = min(rows - 1, Int(point.y / cellSize))
+      var entry = heads[y * columns + x]
+      while entry != .max {
+        let node = entries[Int(entry)]
+        if rectangles[Int(node.rectangle)].contains(point) { return true }
+        entry = node.next
+      }
+      return false
+    }
+
+    func intersects(_ rectangle: CGRect, in rectangles: [CGRect]) -> Bool {
+      guard let cells = cells(for: rectangle) else {
+        return rectangles.contains(where: { $0.intersects(rectangle) })
+      }
+      if fallback.contains(where: { rectangles[$0].intersects(rectangle) }) { return true }
+      for y in cells.y {
+        for x in cells.x {
+          var entry = heads[y * columns + x]
+          while entry != .max {
+            let node = entries[Int(entry)]
+            if rectangles[Int(node.rectangle)].intersects(rectangle) { return true }
+            entry = node.next
+          }
+        }
+      }
+      return false
+    }
   }
 }
 
