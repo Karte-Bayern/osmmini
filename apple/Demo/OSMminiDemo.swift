@@ -83,17 +83,30 @@ private struct DemoSidebar: View {
         installedRegions
       } else if !model.busy, model.pending == nil {
         Section {
-          VStack(alignment: .leading, spacing: 10) {
-            Label("Deine erste Offline-Karte", systemImage: "map")
-              .font(.headline)
+          VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+              Image(systemName: "map.fill")
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(.tint)
+                .frame(width: 48, height: 48)
+                .background(
+                  Color.accentColor.opacity(0.12),
+                  in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+                )
+                .accessibilityHidden(true)
+              Text("Deine erste Offline-Karte")
+                .font(.title3.bold())
+                .accessibilityAddTraits(.isHeader)
+            }
             Text(
-              "Wähle unten eine Region. Nach der einmaligen Aufbereitung kannst du Karte, Suche und Routing ohne Internet nutzen."
+              "Lade eine Region und nutze Karte, Suche und Routen nach der Aufbereitung ohne Internet."
             )
+            .font(.callout)
             .foregroundStyle(.secondary)
-            Text("Für den Einstieg eine kleine Region wählen.")
-              .font(.callout)
+            Text("Starte mit einer kleinen Region. Sie ist schneller bereit.")
+              .font(.callout.weight(.medium))
           }
-          .padding(.vertical, 6)
+          .padding(.vertical, 10)
         }
       }
       if let error = model.regionError {
@@ -114,7 +127,7 @@ private struct DemoSidebar: View {
         Button("Lokale PBF importieren", systemImage: "doc.badge.plus") {
           importing = true
         }
-        .frame(minHeight: 32, alignment: .leading)
+        .frame(minHeight: 44, alignment: .leading)
         .disabled(model.busy || model.pending != nil)
         .accessibilityHint("Eine bereits gespeicherte .osm.pbf-Datei auf diesem Gerät auswählen.")
       } header: {
@@ -128,6 +141,7 @@ private struct DemoSidebar: View {
         sourceStorage
       }
     }
+    .scrollDismissesKeyboard(.interactively)
     .confirmationDialog(
       "Offline-Region löschen?",
       isPresented: Binding(
@@ -256,7 +270,7 @@ private struct DemoSidebar: View {
         Button("Mit vorhandener PBF neu beginnen") { restartingImport = true }
         Button("Fortsetzung aus Liste entfernen", role: .destructive) { removingImport = true }
       }
-      .frame(minHeight: 32, alignment: .leading)
+      .frame(minHeight: 44, alignment: .leading)
     } header: {
       Label("Unterbrochener Import", systemImage: "pause.circle")
     } footer: {
@@ -326,6 +340,7 @@ private struct CatalogPicker: View {
         Image(systemName: "magnifyingglass").foregroundStyle(.secondary).accessibilityHidden(true)
         TextField("Region oder Land suchen", text: $model.catalogQuery)
           .autocorrectionDisabled()
+          .accessibilityLabel("Region oder Land suchen")
           .focused($searchFocused)
           .submitLabel(.search)
           .onSubmit { searchFocused = false }
@@ -404,7 +419,7 @@ private struct CatalogPicker: View {
         searchFocused = false
         Task { await model.loadCatalog(refresh: model.catalogLoaded) }
       }
-      .frame(minHeight: 32, alignment: .leading)
+      .frame(minHeight: 44, alignment: .leading)
       .disabled(model.catalogLoading)
     } header: {
       Text("Region von Geofabrik laden")
@@ -464,7 +479,12 @@ private struct CatalogDownloadSheet: View {
       #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
       #endif
-      .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Abbrechen") { dismiss() } } }
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Abbrechen") { dismiss() }
+            .frame(minHeight: 44)
+        }
+      }
     }
     .presentationDetents([.medium, .large])
     #if os(macOS)
@@ -519,7 +539,7 @@ struct ActivityProgress: View {
             ? "Import unterbrechen" : "Abbrechen",
           role: .cancel
         ) { model.cancel() }
-        .frame(minHeight: 32, alignment: .leading)
+        .frame(minHeight: 44, alignment: .leading)
         .disabled(model.cancelling)
       }
     }

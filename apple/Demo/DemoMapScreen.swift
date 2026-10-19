@@ -22,20 +22,23 @@ struct DemoMapScreen: View {
 
   var body: some View {
     GeometryReader { geometry in
+      let maximumInspectorHeight = min(
+        dynamicTypeSize.isAccessibilitySize ? 520 : 340,
+        geometry.size.height * (dynamicTypeSize.isAccessibilitySize ? 0.65 : 0.45))
       DemoMapCanvas(model: model, location: location, onSelect: selectMapPoint)
         .safeAreaInset(edge: .bottom, spacing: 0) {
           ScrollView {
-            inspector(availableWidth: geometry.size.width)
-              .background {
-                GeometryReader { inspectorGeometry in
-                  Color.clear.preference(
-                    key: InspectorHeightKey.self, value: inspectorGeometry.size.height)
-                }
+            inspector
+              .onGeometryChange(for: CGFloat.self) {
+                $0.size.height
+              } action: {
+                inspectorHeight = $0
               }
           }
           .scrollBounceBehavior(.basedOnSize)
-          .frame(height: min(inspectorHeight, min(340, geometry.size.height * 0.45)))
-          .onPreferenceChange(InspectorHeightKey.self) { inspectorHeight = $0 }
+          // A zero-height scroll view never measures its content on iOS.
+          // Keep a positive proposal so opening a panel can establish its height.
+          .frame(height: min(max(1, inspectorHeight), maximumInspectorHeight))
           .background(.regularMaterial)
         }
     }
@@ -114,14 +117,14 @@ struct DemoMapScreen: View {
     }
   }
 
-  private func inspector(availableWidth: CGFloat) -> some View {
+  private var inspector: some View {
     VStack(spacing: 0) {
       if let mapTarget {
         mapSelectionCard(mapTarget)
       } else if let place = model.inspectedPlace {
         placeCard(place).padding()
       } else if planning {
-        routeCard(availableWidth: availableWidth).padding()
+        routeCard.padding()
       } else if model.busy {
         ActivityProgress(model: model).padding()
       } else if model.start != nil || model.destination != nil {
@@ -136,10 +139,16 @@ struct DemoMapScreen: View {
           .font(.callout).frame(maxWidth: .infinity, minHeight: 44)
         }.buttonStyle(.plain).padding(.horizontal)
       } else if model.engine != nil {
-        HStack {
-          Label("Karte antippen oder Ort suchen", systemImage: "hand.tap")
-          Spacer(minLength: 8)
-          Label("Offline", systemImage: "checkmark.circle")
+        ViewThatFits(in: .horizontal) {
+          HStack(spacing: 12) {
+            Label("Karte antippen oder Ort suchen", systemImage: "hand.tap")
+            Spacer(minLength: 8)
+            Label("Offline", systemImage: "checkmark.circle")
+          }.fixedSize(horizontal: true, vertical: false)
+          VStack(alignment: .leading, spacing: 6) {
+            Label("Karte antippen oder Ort suchen", systemImage: "hand.tap")
+            Label("Offline verfügbar", systemImage: "checkmark.circle")
+          }
         }
         .font(.caption).foregroundStyle(.secondary).padding(12)
         .frame(maxWidth: .infinity)
@@ -177,12 +186,18 @@ struct DemoMapScreen: View {
       ).font(.headline)
       Text("Karte verschieben und die gewünschte Stelle antippen.")
         .font(.caption).foregroundStyle(.secondary)
-      HStack {
-        Button("Stattdessen suchen", systemImage: "magnifyingglass") { openSearch(for: point) }
-        Spacer()
-        Button("Abbrechen", role: .cancel) { mapTarget = nil }
-      }.font(.callout).frame(minHeight: 44)
+      ViewThatFits(in: .horizontal) {
+        HStack(spacing: 12) { mapSelectionActions(point) }
+          .fixedSize(horizontal: true, vertical: false)
+        VStack(alignment: .leading, spacing: 8) { mapSelectionActions(point) }
+      }.font(.callout).buttonStyle(.bordered)
     }.padding().frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  @ViewBuilder private func mapSelectionActions(_ point: DemoModel.RoutePoint) -> some View {
+    Button("Stattdessen suchen", systemImage: "magnifyingglass") { openSearch(for: point) }
+      .frame(minHeight: 44)
+    Button("Abbrechen", role: .cancel) { mapTarget = nil }.frame(minHeight: 44)
   }
 
   private func showLocation() {
@@ -302,7 +317,7 @@ struct DemoMapScreen: View {
     return "\(kilometers) km · \(minutes) Min."
   }
 
-  private func routeCard(availableWidth: CGFloat) -> some View {
+  private var routeCard: some View {
     VStack(alignment: .leading, spacing: 10) {
       HStack(alignment: .top) {
         Button {
@@ -310,7 +325,7 @@ struct DemoMapScreen: View {
         } label: {
           HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 3) {
-              Text(model.route == nil ? "Autoroute planen" : routeSummary).font(.headline)
+              Text(model.route == nil ? "Route planen" : routeSummary).font(.headline)
               if !routeDetailsExpanded {
                 Text(model.route == nil ? "Start und Ziel wählen" : "Routendetails und Export")
                   .font(.caption).foregroundStyle(.secondary)
@@ -335,19 +350,24 @@ struct DemoMapScreen: View {
         }.accessibilityLabel("Routenplanung ausblenden").buttonStyle(.plain)
       }
       if routeDetailsExpanded {
-        VStack(spacing: 4) {
-          endpoint(.start, name: model.startLabel, title: "Start wählen", image: "a.circle.fill")
-          HStack {
-            Spacer()
-            Button("Start und Ziel tauschen", systemImage: "arrow.up.arrow.down") {
-              model.swapRoutePoints()
-            }
-            .font(.caption).frame(minHeight: 44)
-            .disabled(model.busy || model.start == nil || model.destination == nil)
+        HStack(spacing: 10) {
+          VStack(spacing: 8) {
+            endpoint(.start, name: model.startLabel, title: "Start wählen", image: "a.circle.fill")
+            endpoint(
+              .destination, name: model.destinationLabel, title: "Ziel wählen",
+              image: "b.circle.fill"
+            )
           }
-          endpoint(
-            .destination, name: model.destinationLabel, title: "Ziel wählen", image: "b.circle.fill"
-          )
+          Button {
+            model.swapRoutePoints()
+          } label: {
+            Image(systemName: "arrow.up.arrow.down").frame(width: 44, height: 44)
+          }
+          .buttonStyle(.plain)
+          .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+          .accessibilityLabel("Start und Ziel tauschen")
+          .help("Start und Ziel tauschen")
+          .disabled(model.busy || model.start == nil || model.destination == nil)
         }
         Picker(
           "Autoroute",
@@ -373,11 +393,7 @@ struct DemoMapScreen: View {
         }
       }
       if let route = model.route {
-        let layout =
-          availableWidth >= 360 && dynamicTypeSize <= .large
-          ? AnyLayout(HStackLayout(spacing: 8))
-          : AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
-        layout { routeActions(route) }.buttonStyle(.bordered)
+        AdaptiveActionLayout { routeActions(route) }.buttonStyle(.bordered)
         if routeDetailsExpanded, max(route.fromSnapM, route.toSnapM) > 100 {
           Text("Die Route beginnt oder endet an einer nahegelegenen befahrbaren Straße.")
             .font(.caption).foregroundStyle(.secondary)
@@ -458,9 +474,30 @@ struct DemoMapScreen: View {
   }
 }
 
-private struct InspectorHeightKey: PreferenceKey {
-  static let defaultValue: CGFloat = 0
-  static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+/// Measure the actions' real width, keeping one instance of each child when
+/// switching orientation. In particular, an active route export keeps its state.
+private struct AdaptiveActionLayout: Layout {
+  func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    let layout = fitting(proposal.width, subviews: subviews)
+    var layoutCache = layout.makeCache(subviews: subviews)
+    return layout.sizeThatFits(proposal: proposal, subviews: subviews, cache: &layoutCache)
+  }
+
+  func placeSubviews(
+    in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()
+  ) {
+    let layout = fitting(bounds.width, subviews: subviews)
+    var layoutCache = layout.makeCache(subviews: subviews)
+    layout.placeSubviews(in: bounds, proposal: proposal, subviews: subviews, cache: &layoutCache)
+  }
+
+  private func fitting(_ width: CGFloat?, subviews: Subviews) -> AnyLayout {
+    let horizontal = AnyLayout(HStackLayout(spacing: 8))
+    var cache = horizontal.makeCache(subviews: subviews)
+    let size = horizontal.sizeThatFits(proposal: .unspecified, subviews: subviews, cache: &cache)
+    if size.width <= (width ?? .infinity) { return horizontal }
+    return AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+  }
 }
 
 private struct DemoMapCanvas: View {
@@ -551,6 +588,20 @@ private struct DemoPlaceSearch: View {
   }
 
   @ViewBuilder private var searchContent: some View {
+    if !trimmedQuery.isEmpty, !model.searching, model.searchError == nil, !model.results.isEmpty {
+      searchResults
+    } else {
+      GeometryReader { geometry in
+        ScrollView {
+          searchStatus.frame(maxWidth: .infinity, minHeight: geometry.size.height)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .scrollDismissesKeyboard(.interactively)
+      }
+    }
+  }
+
+  @ViewBuilder private var searchStatus: some View {
     if trimmedQuery.isEmpty {
       ContentUnavailableView {
         Label("Was suchst du?", systemImage: "magnifyingglass")
@@ -584,33 +635,35 @@ private struct DemoPlaceSearch: View {
       } actions: {
         Button("Suchbegriff ändern") { focused = true }.buttonStyle(.bordered)
       }
-    } else {
-      List {
-        Section("\(model.results.count) Treffer in der Offline-Region") {
-          ForEach(model.results, id: \.identity) { result in
-            Button {
-              focused = false
-              selected(result)
-            } label: {
-              HStack(alignment: .center, spacing: 12) {
-                VStack(alignment: .leading, spacing: 4) {
-                  Text(result.label).foregroundStyle(.primary)
-                  Text(DemoPlaceText.category(result.category, kind: result.kind))
-                    .font(.caption).foregroundStyle(.secondary)
-                }.frame(maxWidth: .infinity, alignment: .leading)
-                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
-              }.padding(.vertical, 4).frame(minHeight: 44)
-            }
-            .disabled(model.busy)
-            .accessibilityHint(
-              target == .start
-                ? "Als Start übernehmen"
-                : target == .destination ? "Als Ziel übernehmen" : "Auf der Karte anzeigen"
-            )
-          }
-        }
-      }.listStyle(.plain).scrollDismissesKeyboard(.interactively)
     }
+  }
+
+  private var searchResults: some View {
+    List {
+      Section("\(model.results.count) Treffer in der Offline-Region") {
+        ForEach(model.results, id: \.identity) { result in
+          Button {
+            focused = false
+            selected(result)
+          } label: {
+            HStack(alignment: .center, spacing: 12) {
+              VStack(alignment: .leading, spacing: 4) {
+                Text(result.label).foregroundStyle(.primary)
+                Text(DemoPlaceText.category(result.category, kind: result.kind))
+                  .font(.caption).foregroundStyle(.secondary)
+              }.frame(maxWidth: .infinity, alignment: .leading)
+              Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+            }.padding(.vertical, 4).frame(minHeight: 44)
+          }
+          .disabled(model.busy)
+          .accessibilityHint(
+            target == .start
+              ? "Als Start übernehmen"
+              : target == .destination ? "Als Ziel übernehmen" : "Auf der Karte anzeigen"
+          )
+        }
+      }
+    }.listStyle(.plain).scrollDismissesKeyboard(.interactively)
   }
 }
 

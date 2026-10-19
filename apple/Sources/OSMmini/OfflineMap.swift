@@ -268,6 +268,7 @@ public struct OfflineMap: View {
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Maßstab: \(scale.label)")
+            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
           }
           let failed = tileLoader.failures(owner: request.owner, keys: keys)
           if failed > 0 {
@@ -280,7 +281,7 @@ public struct OfflineMap: View {
           Link(
             "© OpenStreetMap contributors · ODbL",
             destination: URL(string: "https://www.openstreetmap.org/copyright")!
-          ).font(.caption2)
+          ).font(.caption2).dynamicTypeSize(...DynamicTypeSize.xxxLarge)
         }.padding(6).background(.regularMaterial)
       }
       .task(id: request) {
@@ -335,6 +336,7 @@ public struct OfflineMap: View {
     @Environment(\.isEnabled) private var isEnabled
     func makeBody(configuration: Configuration) -> some View {
       configuration.label
+        .font(.system(size: 18, weight: .medium))
         .foregroundStyle(.primary)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
         .overlay {

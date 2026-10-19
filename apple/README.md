@@ -198,6 +198,16 @@ window can keep using the shared query. Reopening resumes an interrupted query
 without clearing settled results. The shared map supports double-tap zoom at
 the tapped position, a latitude-aware metric scale, and compact zoom/fit controls.
 
+The bottom panel measures its content directly, so route planning and place
+selection appear reliably when a region opens. Start and destination share a
+compact two-row group with a separate swap button. Route actions use their
+measured width to switch between a row and a column, preserving an active export
+while the layout changes. Accessibility text sizes receive more panel space;
+map-control icons stay inside their 44-point buttons, while the map scale and
+attribution grow up to the largest standard text size. Search status and error
+views scroll with the keyboard open. The region list also supports interactive
+keyboard dismissal and uses at least 44-point targets for its primary actions.
+
 Demo regression tests run with `swift test --package-path apple --filter DemoModelTests`.
 They use a tiny local PBF and cached catalog fixtures. Observation checks verify
 invalidation boundaries; they do not measure frame rate on an iPhone.
