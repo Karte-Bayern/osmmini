@@ -8,12 +8,14 @@ import (
 	"errors"
 	"io"
 	"math"
+	"slices"
 	"strings"
 )
 
 // Settlement labels are derived from the existing search file at opening, so
 // previously imported regions gain labels without another PBF import. Only
-// settlement names/coordinates remain in memory, grouped into zoom-8 cells.
+// settlement labels and exact-name search results remain in memory. The labels
+// are grouped into zoom-8 cells; exact matches never scan address/POI records.
 type placeLabel struct {
 	x, y    float64
 	name    string
@@ -22,6 +24,14 @@ type placeLabel struct {
 }
 
 type placeIndex map[uint32][]placeLabel
+type exactPlaceIndex map[string][]SearchResult
+
+type placeCatalog struct {
+	labels placeIndex
+	exact  exactPlaceIndex
+}
+
+const maxExactPlacesPerName = 100 // The public search limit cannot exceed 100.
 
 func placeMinZoom(kind string) int {
 	switch kind {
@@ -42,7 +52,15 @@ func placeMinZoom(kind string) int {
 }
 
 func loadPlaces(ctx context.Context, search *searchReader) (placeIndex, error) {
-	index := placeIndex{}
+	catalog, err := loadPlaceCatalog(ctx, search)
+	if err != nil {
+		return nil, err
+	}
+	return catalog.labels, nil
+}
+
+func loadPlaceCatalog(ctx context.Context, search *searchReader) (*placeCatalog, error) {
+	index := &placeCatalog{labels: placeIndex{}, exact: exactPlaceIndex{}}
 	var data io.Reader = io.NewSectionReader(search.data, 0, search.dataBytes)
 	if search.compressedData {
 		scratch := searchScratchPool.Get().(*searchScratch)
@@ -82,7 +100,8 @@ func loadPlaces(ctx context.Context, search *searchReader) (placeIndex, error) {
 				x := math.Mod((lon+180)/360, 1)
 				y := max(0, min(math.Nextafter(1, 0), (1-math.Asinh(math.Tan(lat))/math.Pi)/2))
 				key := uint32(int(y*256)*256 + int(x*256))
-				index[key] = append(index[key], placeLabel{x: x, y: y, name: name, kind: kind, minZoom: zoom})
+				index.labels[key] = append(index.labels[key], placeLabel{x: x, y: y, name: name, kind: kind, minZoom: zoom})
+				index.exact.add(record)
 			}
 		}
 		if err != nil {
@@ -94,8 +113,88 @@ func loadPlaces(ctx context.Context, search *searchReader) (placeIndex, error) {
 	}
 }
 
+// Prefer larger settlements when unrelated places share one exact name. Kind
+// and signed OSM ID break ties independently of map iteration or source order.
+func compareExactPlaces(a, b SearchResult) int {
+	priority := func(result SearchResult) int {
+		kind := result.Place
+		if kind == "" {
+			kind = result.Category
+		}
+		switch kind {
+		case "city":
+			return 0
+		case "town":
+			return 1
+		case "village":
+			return 2
+		case "hamlet":
+			return 3
+		case "suburb":
+			return 4
+		case "quarter":
+			return 5
+		case "neighbourhood":
+			return 6
+		default: // isolated_dwelling
+			return 7
+		}
+	}
+	if difference := priority(a) - priority(b); difference != 0 {
+		return difference
+	}
+	if difference := strings.Compare(a.Kind, b.Kind); difference != 0 {
+		return difference
+	}
+	if a.ID < b.ID {
+		return -1
+	}
+	if a.ID > b.ID {
+		return 1
+	}
+	return 0
+}
+
+func (index exactPlaceIndex) add(result SearchResult) {
+	key := normalized(result.Label)
+	if key == "" {
+		return
+	}
+	result.Text = ""
+	matches := index[key]
+	for _, existing := range matches {
+		if existing.Kind == result.Kind && existing.ID == result.ID {
+			return
+		}
+	}
+	position, _ := slices.BinarySearchFunc(matches, result, compareExactPlaces)
+	if position >= maxExactPlacesPerName {
+		return
+	}
+	matches = slices.Insert(matches, position, result)
+	if len(matches) > maxExactPlacesPerName {
+		matches[maxExactPlacesPerName] = SearchResult{}
+		matches = matches[:maxExactPlacesPerName]
+	}
+	index[key] = matches
+}
+
+func (index exactPlaceIndex) matches(query string) []SearchResult {
+	if index == nil {
+		return nil
+	}
+	query = normalized(query)
+	// These whole-query aliases belong to disk search. An unusually named
+	// settlement must not intercept an existing category lookup.
+	switch query {
+	case "apotheke", "tankstelle", "krankenhaus", "supermarkt", "feuerwehr":
+		return nil
+	}
+	return index[query]
+}
+
 func (index placeIndex) features(z, x, y int) []VectorFeature {
-	if z < 5 || z > 22 || x < 0 || y < 0 || x >= 1<<z || y >= 1<<z {
+	if index == nil || z < 5 || z > 22 || x < 0 || y < 0 || x >= 1<<z || y >= 1<<z {
 		return nil
 	}
 	scale := math.Exp2(float64(z))

@@ -578,4 +578,59 @@ private actor PendingMapViewport {
     OfflineMapFocusRequest(coordinate: coordinate, id: nil)
       == OfflineMapFocusRequest(coordinate: coordinate, id: nil))
   #expect(request != OfflineMapFocusRequest(coordinate: nil, id: firstID))
+  let closer = OfflineMapFocusRequest(coordinate: coordinate, id: firstID, minimumZoom: 14)
+  #expect(request != closer)
+  #expect(
+    closer == OfflineMapFocusRequest(coordinate: coordinate, id: firstID, minimumZoom: 14))
+  #expect(
+    closer != OfflineMapFocusRequest(coordinate: coordinate, id: firstID, minimumZoom: 15))
+}
+
+@Test func offlineMapFocusingBringsOverviewsCloserAndPreservesExistingDetail() throws {
+  let coordinate = Coordinate(lat: 48.573, lon: 13.457)
+  for (currentZoom, minimumZoom, expectedZoom) in [
+    (7, 14, 14), (14, 14, 14), (17, 14, 17),
+  ] {
+    let viewport = try #require(
+      OfflineMapViewport.focusing(
+        coordinate, currentZoom: currentZoom, minimumZoom: minimumZoom,
+        minZoom: 5, maxZoom: 18))
+    #expect(viewport.center == coordinate)
+    #expect(viewport.zoom == expectedZoom)
+  }
+  let unchanged = try #require(
+    OfflineMapViewport.focusing(coordinate, currentZoom: 7, minZoom: 5, maxZoom: 18))
+  #expect(unchanged.center == coordinate)
+  #expect(unchanged.zoom == 7)
+}
+
+@Test func offlineMapFocusingRespectsDisplayLimitsAndRejectsInvalidRequests() throws {
+  let coordinate = Coordinate(lat: 48.573, lon: 13.457)
+  for (currentZoom, minimumZoom, minZoom, maxZoom, expectedZoom) in [
+    (7, Int.max, 5, 18, 18), (7, Int.min, 5, 18, 7),
+    (7, 14, 16, 18, 16), (17, 14, 5, 12, 12), (7, 14, 10, 10, 10),
+  ] {
+    let viewport = try #require(
+      OfflineMapViewport.focusing(
+        coordinate, currentZoom: currentZoom, minimumZoom: minimumZoom,
+        minZoom: minZoom, maxZoom: maxZoom))
+    #expect(viewport.center == coordinate)
+    #expect(viewport.zoom == expectedZoom)
+  }
+  for invalid in [
+    nil, Coordinate(lat: .nan, lon: 13), Coordinate(lat: 48, lon: .infinity),
+    Coordinate(lat: 91, lon: 13), Coordinate(lat: -91, lon: 13),
+  ] as [Coordinate?] {
+    #expect(
+      OfflineMapViewport.focusing(
+        invalid, currentZoom: 7, minimumZoom: 14, minZoom: 5, maxZoom: 18) == nil)
+  }
+  for (currentZoom, minZoom, maxZoom) in [
+    (-1, 5, 18), (31, 5, 18), (7, -1, 18), (7, 18, 5), (7, 5, 31),
+  ] {
+    #expect(
+      OfflineMapViewport.focusing(
+        coordinate, currentZoom: currentZoom, minimumZoom: 14,
+        minZoom: minZoom, maxZoom: maxZoom) == nil)
+  }
 }

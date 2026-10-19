@@ -90,6 +90,17 @@ position. Display zoom extends to at least level 18 by enlarging existing local
 vector tiles, without generating additional detail or requesting missing zooms.
 Start and destination use explicit A/B markers, including when a destination is
 chosen first. Repeated focus requests can recenter the same coordinate.
+The optional `focusMinimumZoom` brings a focused point closer while retaining
+any existing nearer zoom. The demo requests level 14 for a place-search
+selection, so selecting a city from the regional overview reveals local streets;
+map taps retain their current scale. Completed routes still fit both endpoints.
+If the nearest endpoint pair has no route, the SDK tries up to eight alternative
+pairs from the three nearest nodes within 250 meters of each selected point,
+ordered by their combined snapping distance. Existing successful routes retain
+their original endpoints. Every attempt uses the same vehicle profile and
+routing restrictions, and returns the actual snapping distances. This handles
+small disconnected service-road segments near a searched place without
+requiring an import or changing graph connectivity.
 Missing tiles no longer stop
 the remaining viewport from loading; **Erneut laden** retries missing tiles
 while keeping successful ones. This is a deliberately small
@@ -207,6 +218,8 @@ map-control icons stay inside their 44-point buttons, while the map scale and
 attribution grow up to the largest standard text size. Search status and error
 views scroll with the keyboard open. The region list also supports interactive
 keyboard dismissal and uses at least 44-point targets for its primary actions.
+The map's accessibility description belongs to its Canvas, so zoom controls,
+the scale and the attribution link retain their individual VoiceOver labels.
 
 Demo regression tests run with `swift test --package-path apple --filter DemoModelTests`.
 They use a tiny local PBF and cached catalog fixtures. Observation checks verify
@@ -239,6 +252,12 @@ let gpx = route.gpx()
 let geoJSON = try route.geoJSON()
 await engine.close()
 ```
+
+Exact settlement names are returned before address and POI matches, including
+with `limit: 1`. A small name lookup is prepared during the existing settlement
+scan when opening a region; queries do not scan the complete catalog. Results
+retain their original OSM identity, and duplicates are removed before applying
+the limit. Prefix, multiword and category searches keep their existing behavior.
 
 Use `OfflineMap(engine: engine, route: route)` in a SwiftUI view, or supply your
 own renderer with `engine.tile(z:x:y:)`. A host renderer may also be implemented
@@ -306,6 +325,19 @@ OSMMINI_MAP_BENCHMARK=1 swift test --package-path apple -c release --filter mapC
 OSMMINI_MAP_BENCHMARK=1 swift test --package-path apple -c release --filter mapLabelLayoutBenchmark
 OSMMINI_BENCHMARKS=1 swift test --package-path apple -c release --filter catalogPreparedSearchBenchmark
 ```
+
+An opt-in integration check uses an already prepared, complete Niederbayern
+region without downloading or importing data:
+
+```sh
+OSMMINI_REAL_REGION=/path/to/niederbayern swift test --package-path apple -c release --filter niederbayernRealRegionIntegration
+```
+
+It checks Passau, Landshut, Deggendorf and Straubing, routes Passau–Landshut by
+distance and duration, and reads twelve city views at display zooms 12, 14 and
+18 (using z14 source tiles for overzoom). Output separates native tile fetching,
+geometry preparation and CPU feature selection, with no timing assertions or
+GPU frame-rate claims. Files and OS caches remain in place between samples.
 
 The map benchmark measures CPU geometry work and CoreGraphics replay; it does
 not measure GPU frame rate or physical-device memory use.
@@ -501,7 +533,7 @@ search, a 1,144 m route and a tile containing 3,304 vector features. These queri
 succeeded after deleting the downloaded PBF. This was a macOS check with zoom
 14 tiles, not an iPhone memory or large-region benchmark. iOS device/simulator
 and macOS application builds were checked without signing; a physical-device
-run and visual interaction review remain necessary.
+run remains necessary.
 
 The Niederbayern extract was also checked on macOS on 2026-10-18 at zooms 5–14:
 2,096,300 graph nodes and 4,307,251 directed edges, with graph, search and map
@@ -510,6 +542,28 @@ publication completed. The prior importer reproducibly stopped at the
 1,000-row tile batch independently failed its 256 MiB budget. The road filter
 and smaller publication batches address both failures. This is a desktop
 integration check, not a physical-iPhone memory measurement.
+
+The full [Geofabrik Niederbayern extract](https://download.geofabrik.de/europe/germany/bayern/niederbayern.html)
+dated 2026-10-18 was checked again on 2026-10-19 (source SHA-256
+`aa3ebd4abc87effb460c5c7b984c6d6496247cfaa966590f6929faae791b7cb4`).
+Its 95.4 MB PBF produced a 267.6 MB format-3 package with 2,096,430 nodes and
+4,307,507 edges at zooms 5–14. The Mac import took 38.2 seconds, with about
+2.01 GiB maximum RSS. The opt-in Swift Release check opened it in 0.60 seconds;
+100-result searches in the four cities had medians of 1.6–2.9 ms over three
+samples. Coordinates near Passau and Landshut stations took about 1.8 seconds
+for distance optimization (109.6 km) and 1.0 second for duration optimization
+(120.0 km). The actual city search results also produced a 109.5 km car route;
+the snapped endpoints were about 86 and 32 meters from the selected places.
+All twelve city map views passed, including z18 display using z14 data.
+These are macOS measurements with existing files and retained OS caches;
+they do not establish physical-iPhone import memory or rendering performance.
+
+The same complete package also passed an iPhone SE simulator interaction check
+on iOS 26.4: Passau and Landshut appeared as the first city results, the route,
+directions and GPX/GeoJSON menu worked, and selecting Deggendorf changed the
+visible scale from 50 km to 500 m. Zoom controls and the scale retained their
+individual accessibility labels. Region preparation ran on the Mac; the
+simulator exercised the prepared offline package.
 
 A before/after RAM check on 2026-10-19 used the same Niederbayern PBF, zooms
 5–14, a 256 MiB tile-writer budget and Go 1.27.2 on macOS arm64. Compared with

@@ -42,6 +42,21 @@ struct OfflineMapViewport: Sendable {
   let center: Coordinate
   let zoom: Int
 
+  /// A focus request can bring an overview closer without losing existing detail.
+  /// A missing minimum preserves the current zoom; display limits always apply.
+  static func focusing(
+    _ coordinate: Coordinate?, currentZoom: Int, minimumZoom: Int? = nil,
+    minZoom: Int, maxZoom: Int
+  ) -> Self? {
+    guard let coordinate, coordinate.lat.isFinite, abs(coordinate.lat) <= 90,
+      coordinate.lon.isFinite, (0...30).contains(currentZoom),
+      minZoom >= 0, maxZoom >= minZoom, maxZoom <= 30
+    else { return nil }
+    return Self(
+      center: coordinate,
+      zoom: max(minZoom, min(maxZoom, max(currentZoom, minimumZoom ?? currentZoom))))
+  }
+
   /// Keep the coordinate under a double tap fixed while changing zoom.
   static func zooming(
     center: Coordinate, from oldZoom: Int, to zoom: Int, at anchor: CGPoint, size: CGSize
@@ -189,6 +204,7 @@ struct OfflineMapCameraIntent {
 struct OfflineMapFocusRequest: Equatable {
   let coordinate: Coordinate?
   let id: UUID?
+  var minimumZoom: Int? = nil
 }
 
 struct OfflineMapMarker {

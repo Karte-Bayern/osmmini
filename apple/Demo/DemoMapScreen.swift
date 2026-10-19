@@ -83,7 +83,7 @@ struct DemoMapScreen: View {
     .sheet(isPresented: $searching) {
       DemoPlaceSearch(model: model, target: searchTarget) { result in
         if let searchTarget {
-          model.usePlace(DemoPlace(result), as: searchTarget)
+          model.usePlace(DemoPlace(result), as: searchTarget, minimumZoom: 14)
           planning = true
         } else {
           model.inspect(result)
@@ -509,6 +509,7 @@ private struct DemoMapCanvas: View {
       OfflineMap(
         engine: engine, route: model.route,
         focus: model.focus, focusRequest: model.focusRequest,
+        focusMinimumZoom: model.focusMinimumZoom,
         routeStart: model.start, routeDestination: model.destination,
         selection: model.inspectedPlace?.coordinate, userLocation: location.coordinate,
         userLocationAccuracy: location.horizontalAccuracy, onSelect: onSelect

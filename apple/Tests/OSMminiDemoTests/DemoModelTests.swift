@@ -842,7 +842,9 @@ private final class DemoCatalogURLProtocol: URLProtocol, @unchecked Sendable {
     model.select(place)
     #expect(model.start == place.coordinate)
     #expect(model.startLabel == place.label)
+    #expect(model.focusMinimumZoom == 14)
     model.select(Coordinate(lat: 48.003, lon: 12.003))
+    #expect(model.focusMinimumZoom == nil)
     await model.operation?.value
     model.chooseRoutePoint(.destination)
     model.select(place)
@@ -850,6 +852,7 @@ private final class DemoCatalogURLProtocol: URLProtocol, @unchecked Sendable {
     #expect(model.startLabel == place.label)
     #expect(model.destinationLabel == place.label)
     #expect(model.focus == place.coordinate)
+    #expect(model.focusMinimumZoom == 14)
     await engine.close()
   }
 
@@ -873,6 +876,7 @@ private final class DemoCatalogURLProtocol: URLProtocol, @unchecked Sendable {
     model.inspect(mapPoint)
     #expect(model.inspectedPlace?.coordinate == mapPoint)
     #expect(model.focus == mapPoint)
+    #expect(model.focusMinimumZoom == nil)
     #expect(model.start == start.coordinate)
     #expect(model.destination == destination.coordinate)
     #expect(model.startLabel == start.name)
@@ -888,8 +892,10 @@ private final class DemoCatalogURLProtocol: URLProtocol, @unchecked Sendable {
     #expect(model.inspectedPlace?.name == result.label)
     #expect(model.inspectedPlace?.category == result.category)
     #expect(model.focus == result.coordinate)
+    #expect(model.focusMinimumZoom == 14)
     let initialFocus = try #require(model.focusRequest)
     model.focusOn(result.coordinate)
+    #expect(model.focusMinimumZoom == nil)
     let repeatedFocus = try #require(model.focusRequest)
     #expect(repeatedFocus != initialFocus)
     model.focusOn(result.coordinate)

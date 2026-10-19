@@ -156,6 +156,7 @@ struct DemoCatalogSearch: Sendable {
   private(set) var routeError: String?
   private(set) var focus: Coordinate?
   private(set) var focusRequest: UUID?
+  private(set) var focusMinimumZoom: Int?
   private(set) var inspectedPlace: DemoPlace?
   var routeSelectionHint: String {
     selectedRoutePoint == .start
@@ -465,6 +466,7 @@ struct DemoCatalogSearch: Sendable {
     inspectedPlace = nil
     focus = nil
     focusRequest = nil
+    focusMinimumZoom = nil
     selectedRoutePoint = .start
     query = ""
     defaults.set(DemoStorage.savedPath(directory.path, in: root), forKey: "lastRegion")
@@ -633,7 +635,7 @@ struct DemoCatalogSearch: Sendable {
   }
 
   func select(_ result: SearchResult) {
-    select(result.coordinate, label: result.label)
+    select(result.coordinate, label: result.label, minimumZoom: 14)
   }
 
   func chooseRoutePoint(_ point: RoutePoint) {
@@ -642,11 +644,11 @@ struct DemoCatalogSearch: Sendable {
     status = routeSelectionHint
   }
 
-  private func select(_ coordinate: Coordinate, label: String?) {
+  private func select(_ coordinate: Coordinate, label: String?, minimumZoom: Int? = nil) {
     guard !busy, engine != nil else { return }
     route = nil
     routeError = nil
-    focusOn(coordinate)
+    focusOn(coordinate, minimumZoom: minimumZoom)
     if selectedRoutePoint == .start {
       start = coordinate
       startLabel = label ?? "Punkt auf der Karte"
@@ -673,27 +675,28 @@ struct DemoCatalogSearch: Sendable {
   }
 
   func inspect(_ result: SearchResult) {
-    inspect(DemoPlace(result))
+    inspect(DemoPlace(result), minimumZoom: 14)
   }
 
-  private func inspect(_ place: DemoPlace) {
+  private func inspect(_ place: DemoPlace, minimumZoom: Int? = nil) {
     guard !busy, engine != nil else { return }
     inspectedPlace = place
-    focusOn(place.coordinate)
+    focusOn(place.coordinate, minimumZoom: minimumZoom)
   }
 
   func dismissPlace() { inspectedPlace = nil }
 
-  func usePlace(_ place: DemoPlace, as point: RoutePoint) {
+  func usePlace(_ place: DemoPlace, as point: RoutePoint, minimumZoom: Int? = nil) {
     guard !busy, engine != nil else { return }
     selectedRoutePoint = point
     inspectedPlace = nil
-    select(place.coordinate, label: place.name)
+    select(place.coordinate, label: place.name, minimumZoom: minimumZoom)
   }
 
-  func focusOn(_ coordinate: Coordinate) {
+  func focusOn(_ coordinate: Coordinate, minimumZoom: Int? = nil) {
     guard engine != nil else { return }
     focus = coordinate
+    focusMinimumZoom = minimumZoom
     focusRequest = UUID()
   }
 

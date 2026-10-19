@@ -11,6 +11,9 @@ public struct OfflineMap: View {
   public var focus: Coordinate?
   /// Change this identifier to repeat a focus request at the same coordinate.
   public var focusRequest: UUID?
+  /// Bring a focus request at least this close, retaining any nearer current zoom.
+  /// Nil preserves the current zoom. Requests respect the map's display limits.
+  public var focusMinimumZoom: Int?
   /// Explicit route endpoints retain their A/B identity when only one is set.
   /// Supplying either endpoint replaces the legacy `markers` array.
   public var routeStart: Coordinate?
@@ -46,6 +49,7 @@ public struct OfflineMap: View {
   public init(
     engine: OfflineEngine, route: Route? = nil, center: Coordinate? = nil,
     markers: [Coordinate] = [], focus: Coordinate? = nil, focusRequest: UUID? = nil,
+    focusMinimumZoom: Int? = nil,
     routeStart: Coordinate? = nil, routeDestination: Coordinate? = nil,
     selection: Coordinate? = nil,
     userLocation: Coordinate? = nil, userLocationAccuracy: Double? = nil,
@@ -57,14 +61,20 @@ public struct OfflineMap: View {
     self.markers = markers
     self.focus = focus
     self.focusRequest = focusRequest
+    self.focusMinimumZoom = focusMinimumZoom
     self.routeStart = routeStart
     self.routeDestination = routeDestination
     self.selection = selection
     self.userLocation = userLocation
     self.userLocationAccuracy = userLocationAccuracy
     initialCenter = center
-    _center = State(initialValue: focus ?? center ?? engine.manifest.bounds.center)
-    _zoom = State(initialValue: max(engine.manifest.minZoom, min(11, engine.manifest.maxZoom)))
+    let initialZoom = max(engine.manifest.minZoom, min(11, engine.manifest.maxZoom))
+    let focusedViewport = OfflineMapViewport.focusing(
+      focus, currentZoom: initialZoom, minimumZoom: focusMinimumZoom,
+      minZoom: engine.manifest.minZoom, maxZoom: max(18, engine.manifest.maxZoom))
+    _center = State(
+      initialValue: focusedViewport?.center ?? center ?? engine.manifest.bounds.center)
+    _zoom = State(initialValue: focusedViewport?.zoom ?? initialZoom)
   }
   public var body: some View {
     GeometryReader { geometry in
@@ -195,6 +205,13 @@ public struct OfflineMap: View {
           context.stroke(dot, with: .color(.white), lineWidth: 3)
         }
       }
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel("Offline-Karte von \(engine.manifest.name)")
+      .accessibilityHint(
+        onSelect == nil
+          ? "Doppeltippen oder mit Plus und Minus zoomen. Mit dem Regionsknopf die ganze Region anzeigen."
+          : "Doppeltippen oder mit Plus und Minus zoomen. Antippen wählt einen Ort. A markiert den Start, B das Ziel."
+      )
       .contentShape(Rectangle())
       .gesture(
         DragGesture().updating($drag) { value, state, _ in state = value.translation }
@@ -281,7 +298,9 @@ public struct OfflineMap: View {
           Link(
             "© OpenStreetMap contributors · ODbL",
             destination: URL(string: "https://www.openstreetmap.org/copyright")!
-          ).font(.caption2).dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+          )
+          .font(.caption2).dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+          .accessibilityLabel("© OpenStreetMap contributors · ODbL")
         }.padding(6).background(.regularMaterial)
       }
       .task(id: request) {
@@ -293,9 +312,18 @@ public struct OfflineMap: View {
       .task(id: routeRequest) {
         await routeLoader.load(owner: routeRequest.owner, coordinates: routeRequest.path)
       }
-      .onChange(of: OfflineMapFocusRequest(coordinate: focus, id: focusRequest)) { _, request in
+      .onChange(
+        of: OfflineMapFocusRequest(
+          coordinate: focus, id: focusRequest, minimumZoom: focusMinimumZoom)
+      ) { _, request in
+        guard
+          let viewport = OfflineMapViewport.focusing(
+            request.coordinate, currentZoom: zoom, minimumZoom: request.minimumZoom,
+            minZoom: engine.manifest.minZoom, maxZoom: maximumDisplayZoom)
+        else { return }
         navigate()
-        if let coordinate = request.coordinate { center = coordinate }
+        center = viewport.center
+        zoom = viewport.zoom
       }
       .onChange(
         of: RouteViewportRequest(owner: ObjectIdentifier(engine), path: route?.path), initial: true
@@ -305,21 +333,17 @@ public struct OfflineMap: View {
           hasExplicitCenter: initialCenter != nil || focus != nil)
         viewportFitter.cancel()
         if update == .engine {
-          center = focus ?? initialCenter ?? engine.manifest.bounds.center
-          zoom = max(engine.manifest.minZoom, min(11, engine.manifest.maxZoom))
+          let initialZoom = max(engine.manifest.minZoom, min(11, engine.manifest.maxZoom))
+          let focusedViewport = OfflineMapViewport.focusing(
+            focus, currentZoom: initialZoom, minimumZoom: focusMinimumZoom,
+            minZoom: engine.manifest.minZoom, maxZoom: maximumDisplayZoom)
+          center = focusedViewport?.center ?? initialCenter ?? engine.manifest.bounds.center
+          zoom = focusedViewport?.zoom ?? initialZoom
         }
         updateViewport(size: size)
       }
       .onChange(of: size) { _, _ in updateViewport(size: size) }
       .onDisappear { viewportFitter.cancel() }
-      .accessibilityLabel(
-        "Offline-Karte von \(engine.manifest.name)"
-      )
-      .accessibilityHint(
-        onSelect == nil
-          ? "Doppeltippen oder mit Plus und Minus zoomen. Mit dem Regionsknopf die ganze Region anzeigen."
-          : "Doppeltippen oder mit Plus und Minus zoomen. Antippen wählt einen Ort. A markiert den Start, B das Ziel."
-      )
     }
   }
   private func world(_ c: Coordinate) -> CGPoint {

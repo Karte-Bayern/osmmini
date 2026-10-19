@@ -317,13 +317,14 @@ func fileHash(ctx context.Context, path string) (string, error) {
 }
 
 type Engine struct {
-	mu       sync.RWMutex
-	router   *osm.Router
-	search   *searchReader
-	tiles    *tinytiles.Dataset
-	places   placeIndex
-	Manifest Manifest
-	closed   bool
+	mu          sync.RWMutex
+	router      *osm.Router
+	search      *searchReader
+	tiles       *tinytiles.Dataset
+	places      placeIndex
+	settlements exactPlaceIndex
+	Manifest    Manifest
+	closed      bool
 }
 
 func Open(ctx context.Context, path string) (*Engine, error) {
@@ -363,7 +364,7 @@ func Open(ctx context.Context, path string) (*Engine, error) {
 		r.Close()
 		return nil, err
 	}
-	places, err := loadPlaces(ctx, search)
+	places, err := loadPlaceCatalog(ctx, search)
 	if err != nil {
 		r.Close()
 		search.close()
@@ -375,7 +376,10 @@ func Open(ctx context.Context, path string) (*Engine, error) {
 		search.close()
 		return nil, err
 	}
-	return &Engine{router: r, search: search, tiles: tiles, places: places, Manifest: manifest}, nil
+	return &Engine{
+		router: r, search: search, tiles: tiles, places: places.labels,
+		settlements: places.exact, Manifest: manifest,
+	}, nil
 }
 func (e *Engine) Close() error {
 	e.mu.Lock()
@@ -385,6 +389,7 @@ func (e *Engine) Close() error {
 	}
 	e.closed = true
 	e.places = nil
+	e.settlements = nil
 	e.search.close()
 	_ = e.tiles.Close()
 	return e.router.Close()
@@ -395,7 +400,48 @@ func (e *Engine) Search(ctx context.Context, query string, limit int) ([]SearchR
 	if e.closed {
 		return nil, errors.New("region is closed")
 	}
-	return e.search.search(ctx, query, limit)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if limit < 1 || limit > 100 {
+		limit = 20
+	}
+	exact := e.settlements.matches(query)
+	if len(exact) == 0 {
+		return e.search.search(ctx, query, limit)
+	}
+	// Exact settlement names precede disk results before the limit is applied.
+	// Copy the immutable lookup rows so callers cannot mutate later searches.
+	results := make([]SearchResult, 0, limit)
+	type identity struct {
+		kind string
+		id   int64
+	}
+	seen := make(map[identity]bool, limit)
+	appendUnique := func(candidates []SearchResult) {
+		for _, result := range candidates {
+			key := identity{result.Kind, result.ID}
+			if !seen[key] {
+				results = append(results, result)
+				seen[key] = true
+				if len(results) == limit {
+					return
+				}
+			}
+		}
+	}
+	appendUnique(exact)
+	if len(results) < limit {
+		found, err := e.search.search(ctx, query, limit)
+		if err != nil {
+			return nil, err
+		}
+		appendUnique(found)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return results, nil
 }
 
 type RouteRequest struct {
@@ -434,11 +480,8 @@ func (e *Engine) Route(ctx context.Context, request RouteRequest) (Route, error)
 	if !ok {
 		return Route{}, errors.New("no destination road")
 	}
-	r, err := e.router.RouteWithOptions(ctx, a, b, request.Options)
-	if err != nil {
-		return Route{}, err
-	}
-	return Route{r.PathCoords, r.DistanceM, r.DurationS, sa, sb, e.router.ManeuversForPath(r.Path, request.Options)}, nil
+	return routeWithNearbySnaps(ctx, e.router, request,
+		osm.NodeSnap{ID: a, DistanceM: sa}, osm.NodeSnap{ID: b, DistanceM: sb})
 }
 func (e *Engine) Tile(ctx context.Context, z, x, y int) (VectorTile, error) {
 	e.mu.RLock()
