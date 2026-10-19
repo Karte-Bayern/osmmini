@@ -32,6 +32,7 @@ struct PreparedMapTile: Sendable {
 
   let features: [Feature]
   let labels: [Label]
+  let spatialIndex: PreparedMapTileIndex?
 
   init(_ tile: VectorTile) throws {
     var geometryCount = 0
@@ -106,6 +107,22 @@ struct PreparedMapTile: Sendable {
     }
     features = prepared
     self.labels = labels
+    spatialIndex = try PreparedMapTileIndex(prepared)
+  }
+
+  static func roadWidth(major: Bool, overzoom: Int) -> CGFloat {
+    (major ? 3.5 : 1.8) + CGFloat(overzoom) * 0.5
+  }
+
+  /// The viewport is expressed in tile coordinates. Padding includes the widest
+  /// road casing and antialiasing so lines just beyond the viewport remain visible.
+  func featureIndices(in rect: CGRect, padding: CGFloat = 0) -> PreparedMapFeatureIndices {
+    let visible = rect.intersection(PreparedMapTileIndex.tileBounds)
+    guard !visible.isNull, !visible.isEmpty else { return PreparedMapFeatureIndices(count: 0) }
+    guard let spatialIndex, !visible.contains(PreparedMapTileIndex.tileBounds) else {
+      return PreparedMapFeatureIndices(count: features.count)
+    }
+    return spatialIndex.featureIndices(in: visible.insetBy(dx: -padding, dy: -padding))
   }
 
   private static func labelName(_ name: String?) -> String? {

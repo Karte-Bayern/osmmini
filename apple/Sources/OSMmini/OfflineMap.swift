@@ -89,7 +89,13 @@ public struct OfflineMap: View {
           tileContext.translateBy(x: offset.x, y: offset.y)
           tileContext.scaleBy(x: scale, y: scale)
           tileContext.clip(to: Path(CGRect(x: 0, y: 0, width: 256, height: 256)))
-          for feature in tile.features {
+          let visible = CGRect(
+            x: -offset.x / scale, y: -offset.y / scale,
+            width: canvasSize.width / scale, height: canvasSize.height / scale)
+          let maximumRoadWidth = PreparedMapTile.roadWidth(major: true, overzoom: zoom - key.z)
+          let padding = ((maximumRoadWidth + 1) / 2 + 1) / scale
+          for index in tile.featureIndices(in: visible, padding: padding) {
+            let feature = tile.features[index]
             switch feature.style {
             case .water:
               tileContext.fill(
@@ -107,7 +113,7 @@ public struct OfflineMap: View {
                 feature.path, with: .color(Color(red: 0.83, green: 0.79, blue: 0.75)),
                 style: FillStyle(eoFill: true))
             case .road(let major):
-              let width = (major ? 3.5 : 1.8) + CGFloat(zoom - key.z) * 0.5
+              let width = PreparedMapTile.roadWidth(major: major, overzoom: zoom - key.z)
               tileContext.stroke(
                 feature.path, with: .color(.gray.opacity(0.45)),
                 style: StrokeStyle(

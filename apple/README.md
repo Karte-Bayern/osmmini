@@ -264,6 +264,18 @@ bytes. A 1,024-building tile therefore uses 40,960 rather than 106,496 bytes of
 record storage, excluding paths and cache overhead. Named roads additionally
 use a 40-byte label record. Geometry precision and detail are unchanged.
 
+Dense tiles also prepare a small spatial index on the worker. When panning or
+zooming into part of a tile, the renderer skips geometry in invisible cells
+before submitting paths to Canvas. Features retain their original paint order;
+crossing polygons and roads stay in a containing cell, and selection includes
+road casings and antialiasing at viewport edges. The index stores one 32-bit
+reference per feature plus 86 32-bit offsets (4,460 bytes for the 1,029-feature
+test tile, excluding array overhead). Tiles with fewer than 128 features, or
+only paths spanning the entire tile, retain no index. Full-tile views use the
+original feature range without allocating a selection array. Bitmap tests
+compare indexed and complete drawing at multiple zooms, including polygon
+holes, overlapping features, tile edges and road strokes entering the viewport.
+
 Optional Release microbenchmarks report native buffer transfer and path
 preparation/reuse times without timing assertions:
 
@@ -271,6 +283,7 @@ preparation/reuse times without timing assertions:
 OSMMINI_BENCHMARKS=1 swift test --package-path apple -c release --filter nativeBufferTransferBenchmark
 OSMMINI_MAP_BENCHMARK=1 swift test --package-path apple -c release --filter mapGeometryReplayBenchmark
 OSMMINI_MAP_BENCHMARK=1 swift test --package-path apple -c release --filter offlineMapLoadingBenchmark
+OSMMINI_MAP_BENCHMARK=1 swift test --package-path apple -c release --filter mapCullingReplayBenchmark
 ```
 
 The map benchmark measures CPU geometry work and CoreGraphics replay; it does
@@ -283,6 +296,16 @@ measure native tile reads, disk I/O, iPhone frame rate or peak device memory.
 On macOS arm64 in Release mode (2026-10-19), these three passes took 567–569 ms
 serially and 252–270 ms with the bounded loader: median 568 ms versus 256 ms,
 about 55% less elapsed time for this synthetic workload.
+The culling benchmark replays a synthetic dense tile into a 390 × 600 pixel
+CoreGraphics bitmap for 120 moving frames, comparing complete and indexed
+drawing at native zoom and four levels of overzoom. It includes index queries
+and paint submission, alternates order over three passes, and reports submitted
+geometry counts. It does not measure Canvas/GPU frame rate or iPhone power use.
+On macOS arm64 in Release mode (2026-10-19), median CPU replay time fell from
+125 to 102 ms at native zoom and from 128 to 27 ms at four levels of overzoom
+(about 79% less elapsed time in the latter case). Over those 120 overzoomed
+frames, submitted geometries fell from 123,480 to 8,160. These are synthetic
+CoreGraphics measurements; physical-device rendering still needs profiling.
 
 `Geofabrik` retains its decoded catalog in memory after the first load. Overlapping
 catalog refreshes share the result. Concurrent downloads of the same PBF URL
