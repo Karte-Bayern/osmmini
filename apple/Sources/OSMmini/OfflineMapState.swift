@@ -401,6 +401,23 @@ struct OfflineMapTilePlacement: Hashable {
     return placements.compactMap { seen.insert($0.key).inserted ? $0.key : nil }
   }
 
+  /// Load the center first, while leaving drawing order and task identity stable.
+  /// Distance uses the displayed world copy, including across the date line.
+  static func loadingKeys(in placements: [Self], center: Coordinate) -> [MapTileKey] {
+    guard let zoom = placements.first?.key.z else { return [] }
+    let origin = WebMercator.world(
+      Coordinate(lat: center.lat, lon: center.lon.truncatingRemainder(dividingBy: 360)), zoom: zoom)
+    var ranked = placements.enumerated().map { index, placement in
+      let dx = (Double(placement.worldX) + 0.5) * 256 - Double(origin.x)
+      let dy = (Double(placement.key.y) + 0.5) * 256 - Double(origin.y)
+      return (placement: placement, distance: dx * dx + dy * dy, index: index)
+    }
+    ranked.sort {
+      $0.distance == $1.distance ? $0.index < $1.index : $0.distance < $1.distance
+    }
+    return keys(in: ranked.map(\.placement))
+  }
+
   static func visible(
     center: Coordinate, zoom: Int, size: CGSize, tileZoom: Int? = nil
   ) -> [Self] {
@@ -434,47 +451,79 @@ struct OfflineMapTilePlacement: Hashable {
 /// A failed tile must not prevent the remaining viewport from loading. Retrying
 /// preserves successfully prepared tiles; a newer load owns all subsequent UI changes.
 @MainActor @Observable final class OfflineMapTileLoader {
+  static let maximumConcurrentLoads = 4
+
+  private enum Outcome: Sendable {
+    case loaded(PreparedMapTile)
+    case failed, cancelled
+  }
+
   private(set) var cache = PreparedMapTileCache()
   private var owner: ObjectIdentifier?
-  private var keys: [MapTileKey] = []
+  private var keys: Set<MapTileKey> = []
   private var revision = 0
   private var failureCount = 0
   private(set) var isLoading = false
 
   func failures(owner: ObjectIdentifier, keys: [MapTileKey]) -> Int {
-    self.owner == owner && self.keys == keys ? failureCount : 0
+    self.owner == owner && self.keys == Set(keys) ? failureCount : 0
   }
 
   func load(
     owner: ObjectIdentifier, keys: [MapTileKey],
-    fetch: (MapTileKey) async throws -> PreparedMapTile
+    fetch: @escaping @MainActor @Sendable (MapTileKey) async throws -> PreparedMapTile
   ) async {
     guard !Task.isCancelled else { return }
     revision += 1
     let currentRevision = revision
     self.owner = owner
-    self.keys = keys
+    self.keys = Set(keys)
     failureCount = 0
-    isLoading = true
     cache.updateViewport(owner: owner, keys: keys)
+    var seen: Set<MapTileKey> = []
+    let missing = keys.prefix(PreparedMapTileCache.capacity).filter {
+      seen.insert($0).inserted && cache.tile(for: $0, owner: owner) == nil
+    }
+    isLoading = !missing.isEmpty
     defer {
       if revision == currentRevision {
         isLoading = false
         if Task.isCancelled { failureCount = 0 }
       }
     }
-    for key in keys where cache.tile(for: key, owner: owner) == nil {
-      guard !Task.isCancelled, revision == currentRevision else { return }
-      do {
-        let tile = try await fetch(key)
-        guard !Task.isCancelled, revision == currentRevision else { return }
-        cache.insert(tile, for: key, owner: owner)
-      } catch is CancellationError {
-        if revision == currentRevision { failureCount = 0 }
-        return
-      } catch {
-        guard !Task.isCancelled, revision == currentRevision else { return }
-        failureCount += 1
+    // Bound both native decoding and detached path preparation. Publish each
+    // completed tile immediately; a slow tile must not hold up its neighbors.
+    await withTaskGroup(of: (MapTileKey, Outcome).self) { group in
+      var pending = missing.makeIterator()
+      func enqueue(_ key: MapTileKey) {
+        group.addTask {
+          do {
+            try Task.checkCancellation()
+            return (key, .loaded(try await fetch(key)))
+          } catch is CancellationError {
+            return (key, .cancelled)
+          } catch {
+            return (key, .failed)
+          }
+        }
+      }
+      for _ in 0..<Self.maximumConcurrentLoads {
+        if let key = pending.next() { enqueue(key) }
+      }
+      while let (key, outcome) = await group.next() {
+        guard !Task.isCancelled, revision == currentRevision else {
+          group.cancelAll()
+          return
+        }
+        switch outcome {
+        case .loaded(let tile): cache.insert(tile, for: key, owner: owner)
+        case .failed: failureCount += 1
+        case .cancelled:
+          failureCount = 0
+          group.cancelAll()
+          return
+        }
+        if let key = pending.next() { enqueue(key) }
       }
     }
   }

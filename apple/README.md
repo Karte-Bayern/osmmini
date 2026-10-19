@@ -245,8 +245,13 @@ byte buffer. GPX export appends to one output buffer. `OfflineMap` prepares
 tile-local drawing paths on a worker once per loaded tile, then reuses them as
 the viewport moves. Its cache retains prepared geometry and label candidates for the current
 viewport (at most 128 tiles), and discards it when the engine changes. Raw
-decoded coordinate arrays are not retained by this cache. Long routes are
-projected once on a worker into bounded path chunks; redraws transform cached
+decoded coordinate arrays are not retained by this cache. Visible tiles load
+with up to four concurrent fetch/preparation jobs at a time, starting nearest
+the displayed map center. Each finished tile appears immediately, even if a
+neighbor is slow. Completed tiles survive retries; cancellation stops active
+jobs and prevents queued work from starting. Changing loading priority alone
+does not change drawing order or restart the current viewport load. Long routes
+are projected once on a worker into bounded path chunks; redraws transform cached
 paths and skip chunks outside the viewport. Cancellation rejects obsolete route
 preparations when the route or region changes. The native vector decoder reuses
 its gzip/Deflate reader state across calls without retaining input tiles or
@@ -265,10 +270,19 @@ preparation/reuse times without timing assertions:
 ```sh
 OSMMINI_BENCHMARKS=1 swift test --package-path apple -c release --filter nativeBufferTransferBenchmark
 OSMMINI_MAP_BENCHMARK=1 swift test --package-path apple -c release --filter mapGeometryReplayBenchmark
+OSMMINI_MAP_BENCHMARK=1 swift test --package-path apple -c release --filter offlineMapLoadingBenchmark
 ```
 
 The map benchmark measures CPU geometry work and CoreGraphics replay; it does
 not measure GPU frame rate or physical-device memory use.
+The loading benchmark compares serial loading with the bounded loader using
+24 synthetic tiles with 32,768 vertices each. It includes worker JSON decoding,
+path preparation and cache publication, alternates execution order across
+three passes, and reports timings without a pass/fail threshold. It does not
+measure native tile reads, disk I/O, iPhone frame rate or peak device memory.
+On macOS arm64 in Release mode (2026-10-19), these three passes took 567–569 ms
+serially and 252–270 ms with the bounded loader: median 568 ms versus 256 ms,
+about 55% less elapsed time for this synthetic workload.
 
 `Geofabrik` retains its decoded catalog in memory after the first load. Overlapping
 catalog refreshes share the result. Concurrent downloads of the same PBF URL

@@ -40,6 +40,19 @@ import Testing
   let y = Int((1 - asinh(tan(48.002 * .pi / 180)) / .pi) / 2 * 16384)
   let tile = try await engine.tile(z: 14, x: x, y: y)
   #expect(!tile.features.isEmpty)
+  // The map now overlaps native reads and path preparation. Exercise that
+  // pipeline against the real C/Go engine, including adjacent empty tiles.
+  let loader = await OfflineMapTileLoader()
+  let keys = [-1, 0, 1].flatMap { dx in
+    [-1, 0, 1].map { dy in MapTileKey(z: 14, x: x + dx, y: y + dy) }
+  }
+  await loader.load(owner: ObjectIdentifier(engine), keys: keys) { key in
+    try await PreparedMapTile.prepare(engine.tile(z: key.z, x: key.x, y: key.y))
+  }
+  let loadedCount = await loader.cache.tiles.count
+  let failures = await loader.failures(owner: ObjectIdentifier(engine), keys: keys)
+  #expect(loadedCount == keys.count)
+  #expect(failures == 0)
   await engine.close()
   do {
     _ = try await engine.search("test")

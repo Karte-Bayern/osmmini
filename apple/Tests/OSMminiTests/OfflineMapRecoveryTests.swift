@@ -18,7 +18,8 @@ private enum TileFailure: Error { case unavailable }
     if key == keys[0] { throw TileFailure.unavailable }
     return tile
   }
-  #expect(fetched == keys)
+  #expect(Set(fetched) == Set(keys))
+  #expect(fetched.count == keys.count)
   #expect(loader.failures(owner: identity, keys: keys) == 1)
   #expect(loader.cache.tiles.count == 2)
   #expect(!loader.isLoading)
@@ -43,6 +44,9 @@ private enum TileFailure: Error { case unavailable }
   let task = Task {
     await loader.load(owner: identity, keys: keys) { key in
       if key == keys[0] { throw TileFailure.unavailable }
+      // Fetches overlap now; let the first result reach the loader before
+      // signalling that this test can inspect its intermediate failure count.
+      while loader.failures(owner: identity, keys: keys) == 0 { await Task.yield() }
       entered.continuation.yield(())
       for await _ in release.stream { break }
       throw TileFailure.unavailable

@@ -278,7 +278,8 @@ public struct OfflineMap: View {
         }.padding(6).background(.regularMaterial)
       }
       .task(id: request) {
-        await tileLoader.load(owner: request.owner, keys: keys) { key in
+        let loadingKeys = OfflineMapTilePlacement.loadingKeys(in: placements, center: center)
+        await tileLoader.load(owner: request.owner, keys: loadingKeys) { [engine] key in
           try await PreparedMapTile.prepare(engine.tile(z: key.z, x: key.x, y: key.y))
         }
       }
