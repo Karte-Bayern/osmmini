@@ -39,11 +39,11 @@ private func framePath(_ feature: VectorFeature, offset: CGPoint) -> Path {
   #expect(prepared.features.count == 2)
   #expect(prepared.features[0].style == .water)
   #expect(prepared.features[1].style == .road(major: true))
-  #expect(prepared.features[1].name == "Teststraße")
-  let roadLabel = try #require(prepared.features[1].labelPoint)
+  #expect(prepared.labels[0].name == "Teststraße")
+  let roadLabel = try #require(prepared.labels.first?.point)
   #expect(roadLabel.x > 128 && roadLabel.x < 256)
   #expect(roadLabel.y > 64 && roadLabel.y < 256)
-  #expect(prepared.features[0].labelPoint == nil)
+  #expect(prepared.labels.count == 1)
   #expect(prepared.features[0].path.contains(CGPoint(x: 10, y: 10), eoFill: true))
   #expect(!prepared.features[0].path.contains(CGPoint(x: 128, y: 128), eoFill: true))
   for offset in [CGPoint.zero, CGPoint(x: -125.5, y: 67.25), CGPoint(x: 512, y: -256)] {
@@ -68,10 +68,13 @@ private func framePath(_ feature: VectorFeature, offset: CGPoint) -> Path {
   let place = mapFeature(
     "place", kind: 1, classification: "town", name: "Dingolfing", paths: [[[2048, 1024]]])
   let prepared = try PreparedMapTile(VectorTile(features: [road, place]))
-  #expect(prepared.features[0].labelPoint == CGPoint(x: 156.25, y: 62.5))
-  #expect(prepared.features[1].style == .place(kind: "town"))
-  #expect(prepared.features[1].name == "Dingolfing")
-  #expect(prepared.features[1].labelPoint == CGPoint(x: 128, y: 64))
+  #expect(prepared.features.count == 1)
+  #expect(prepared.labels.count == 2)
+  #expect(prepared.labels[0].point == CGPoint(x: 156.25, y: 62.5))
+  #expect(prepared.labels[0].style == .road(major: true))
+  #expect(prepared.labels[1].style == .place(.town))
+  #expect(prepared.labels[1].name == "Dingolfing")
+  #expect(prepared.labels[1].point == CGPoint(x: 128, y: 64))
 }
 
 @Test func preparedMapSkipsUnusedLayersAndKeepsDrawOrderAndStyles() throws {
@@ -86,6 +89,65 @@ private func framePath(_ feature: VectorFeature, offset: CGPoint) -> Path {
   ])
   let prepared = try PreparedMapTile(tile)
   #expect(prepared.features.map(\.style) == [.forest, .landcover, .building, .road(major: false)])
+}
+
+/// The previous cache record retained both a string-bearing style and optional
+/// label metadata for every path. This mirrors its layout for a deterministic
+/// comparison, independent of allocator noise or operating-system accounting.
+private enum PreviousMapStyle {
+  case water, forest, landcover, building
+  case road(major: Bool)
+  case place(kind: String?)
+}
+private struct PreviousMapFeature {
+  let path: Path
+  let style: PreviousMapStyle
+  let name: String?
+  let labelPoint: CGPoint?
+}
+
+@Test func mapGeometryDoesNotRetainUnusedLabelsOrPlacePaths() throws {
+  let ring = [[[0, 0], [4096, 0], [4096, 4096], [0, 4096]]]
+  let buildings = (0..<1024).map { index in
+    mapFeature("building", kind: 3, name: "Gebäude \(index)", paths: ring)
+  }
+  let tile = try PreparedMapTile(VectorTile(features: buildings))
+  #expect(tile.features.count == buildings.count)
+  #expect(tile.labels.isEmpty)
+  let previousBytes = buildings.count * MemoryLayout<PreviousMapFeature>.stride
+  let preparedBytes = tile.features.count * MemoryLayout<PreparedMapTile.Feature>.stride
+  #expect(preparedBytes * 2 < previousBytes)
+
+  let places = (0..<256).map { index in
+    mapFeature(
+      "place", kind: 1, classification: "neighbourhood", name: "Ort \(index)",
+      paths: [[[index, index]]])
+  }
+  let placeTile = try PreparedMapTile(VectorTile(features: places))
+  #expect(placeTile.features.isEmpty)
+  #expect(placeTile.labels.count == places.count)
+  #expect(placeTile.labels.allSatisfy { $0.style == .place(.other) })
+  let placeBytes = placeTile.labels.count * MemoryLayout<PreparedMapTile.Label>.stride
+  #expect(placeBytes < places.count * MemoryLayout<PreviousMapFeature>.stride)
+  print(
+    "Map metadata: 1024 buildings \(previousBytes) → \(preparedBytes) bytes; "
+      + "256 places \(places.count * MemoryLayout<PreviousMapFeature>.stride) → \(placeBytes) bytes; "
+      + "path coordinates are unchanged")
+}
+
+@Test func mapLabelsDropUnusableNamesWithoutChangingGeometry() throws {
+  let paths = [[[0, 0], [4096, 4096]]]
+  let tile = try PreparedMapTile(
+    VectorTile(features: [
+      mapFeature(name: nil, paths: paths),
+      mapFeature(name: "", paths: paths),
+      mapFeature(name: String(repeating: "ä", count: 129), paths: paths),
+      mapFeature(name: "Straße", paths: paths),
+      mapFeature("place", kind: 1, name: "", paths: [[[0, 0]]]),
+    ]))
+  #expect(tile.features.count == 4)
+  #expect(tile.labels.count == 1)
+  #expect(tile.labels[0].name == "Straße")
 }
 
 @Test func preparedMapCacheIsBoundedAndRejectsOldRegionOrViewportWork() throws {

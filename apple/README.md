@@ -173,6 +173,22 @@ instead of an Objective-C JSON serialization exception.
 Opening a region or choosing a search result reveals the map in compact layouts
 using [NavigationSplitView's preferred compact column](https://developer.apple.com/documentation/swiftui/navigationsplitview).
 
+Installed maps, unfinished imports and source-file storage have separate sections.
+Selecting a Geofabrik region opens a download/import summary with a persistent
+primary action. Catalog search matches multiple words across names and ancestor
+regions, ignores accents and ranks exact names first. Technical error details
+remain available in disclosures while recovery actions stay visible.
+
+The route panel can collapse while keeping directions and export available.
+Start and destination offer search, an explicit cancellable map-picking mode,
+and an available in-region GPS fix. Endpoint fields and action rows adapt to
+narrow layouts and larger text. A successful GPS fix uses a compact status row;
+permission failures and out-of-region positions retain their recovery controls.
+Closing the last place-search sheet cancels unfinished work; another open
+window can keep using the shared query. Reopening resumes an interrupted query
+without clearing settled results. The shared map supports double-tap zoom at
+the tapped position, a latitude-aware metric scale, and compact zoom/fit controls.
+
 Demo regression tests run with `swift test --package-path apple --filter DemoModelTests`.
 They use a tiny local PBF and cached catalog fixtures. Observation checks verify
 invalidation boundaries; they do not measure frame rate on an iPhone.
@@ -227,7 +243,7 @@ Requests are encoded directly on the worker. Response decoding takes ownership
 of the native UTF-8 buffer, avoiding a temporary Swift string and a second large
 byte buffer. GPX export appends to one output buffer. `OfflineMap` prepares
 tile-local drawing paths on a worker once per loaded tile, then reuses them as
-the viewport moves. Its cache retains only prepared geometry for the current
+the viewport moves. Its cache retains prepared geometry and label candidates for the current
 viewport (at most 128 tiles), and discards it when the engine changes. Raw
 decoded coordinate arrays are not retained by this cache. Long routes are
 projected once on a worker into bounded path chunks; redraws transform cached
@@ -235,6 +251,13 @@ paths and skip chunks outside the viewport. Cancellation rejects obsolete route
 preparations when the route or region changes. The native vector decoder reuses
 its gzip/Deflate reader state across calls without retaining input tiles or
 sharing output buffers between callers.
+
+Geometry and labels use separate compact records. Unnamed features carry no
+name or label-anchor storage; settlements retain just a label, with no drawing
+path. On arm64, geometry metadata occupies 40 bytes per feature instead of 104
+bytes. A 1,024-building tile therefore uses 40,960 rather than 106,496 bytes of
+record storage, excluding paths and cache overhead. Named roads additionally
+use a 40-byte label record. Geometry precision and detail are unchanged.
 
 Optional Release microbenchmarks report native buffer transfer and path
 preparation/reuse times without timing assertions:
@@ -308,6 +331,14 @@ writer budget without increasing that limit. The default upstream 1,000-row
 batch can exceed 256 MiB even for a regional extract. Tile-writing progress
 advances with the number of rows saved.
 
+Search preparation streams way metadata to temporary files and uses compact
+coordinate arrays instead of retaining way tag maps. The prefix index is sorted
+in chunks of 16,384 postings with at most 16 open input runs per merge. Temporary
+files consume additional disk space during import and are cleaned up on success,
+cancellation and retry after termination. Graph and search preparation close
+their graph mapping before map generation begins. The published region format
+and normal query APIs are unchanged; existing regions remain readable.
+
 ## Package publication
 
 ```sh
@@ -346,6 +377,16 @@ publication completed. The prior importer reproducibly stopped at the
 1,000-row tile batch independently failed its 256 MiB budget. The road filter
 and smaller publication batches address both failures. This is a desktop
 integration check, not a physical-iPhone memory measurement.
+
+A before/after RAM check on 2026-10-19 used the same Niederbayern PBF, zooms
+5–14, a 256 MiB tile-writer budget and Go 1.27.2 on macOS arm64. Compared with
+commit `6ad1fa3`, a complete import's maximum RSS (`/usr/bin/time -l`) decreased
+from 2,673,737,728 to 2,428,862,464 bytes (2.49 to 2.26 GiB, about 9%). Wall time
+was about 39 versus 41 seconds in these individual runs. Graph and search files
+were byte-identical, with 2,096,430 nodes and 4,307,507 directed edges. The
+remaining peak is dominated by tinyTiles' in-memory map generation. This is a
+desktop measurement; the 256 MiB writer setting does not cap the total importer
+or establish a safe iPhone region size.
 
 The first SDK operates on one region at a time. Cross-package routing,
 hierarchical long-distance acceleration, a fully disk-streamed PBF importer,

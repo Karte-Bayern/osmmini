@@ -7,26 +7,76 @@ struct MapTileKey: Hashable, Sendable {
 /// Geometry is immutable and expressed in tile pixels. Preparing it drops the
 /// decoded coordinate arrays; frames only translate the graphics context.
 struct PreparedMapTile: Sendable {
+  /// Paint styles contain no names or other strings. Most cached features are
+  /// polygons and unnamed lines, so their records need only a path and one byte.
   enum Style: Sendable, Equatable {
     case water, forest, landcover, building
     case road(major: Bool)
-    case place(kind: String?)
   }
 
   struct Feature: Sendable {
     let path: Path
     let style: Style
-    let name: String?
-    let labelPoint: CGPoint?
+  }
+
+  struct Label: Sendable {
+    enum Style: Sendable, Equatable {
+      enum Place: Sendable { case city, town, village, other }
+      case road(major: Bool)
+      case place(Place)
+    }
+    let name: String
+    let point: CGPoint
+    let style: Style
   }
 
   let features: [Feature]
+  let labels: [Label]
 
   init(_ tile: VectorTile) throws {
-    var prepared: [Feature] = []
-    prepared.reserveCapacity(tile.features.count)
+    var geometryCount = 0
+    var labelCount = 0
     for feature in tile.features {
       try Task.checkCancellation()
+      guard feature.extent > 0 else { continue }
+      switch feature.layer {
+      case "water", "landcover", "building": geometryCount += 1
+      case "transportation":
+        geometryCount += 1
+        if Self.labelName(feature.name) != nil { labelCount += 1 }
+      case "place":
+        if Self.labelName(feature.name) != nil { labelCount += 1 }
+      default: break
+      }
+    }
+    var prepared: [Feature] = []
+    var labels: [Label] = []
+    prepared.reserveCapacity(geometryCount)
+    labels.reserveCapacity(labelCount)
+    for feature in tile.features {
+      try Task.checkCancellation()
+      guard feature.extent > 0 else { continue }
+      let scale = 256 / Double(feature.extent)
+      if feature.layer == "place" {
+        if let name = Self.labelName(feature.name), let point = feature.paths.first?.first,
+          point.count >= 2
+        {
+          let kind: Label.Style.Place =
+            switch feature.class {
+            case "city": .city
+            case "town": .town
+            case "village": .village
+            default: .other
+            }
+          labels.append(
+            Label(
+              name: name, point: CGPoint(x: Double(point[0]) * scale, y: Double(point[1]) * scale),
+              style: .place(kind)))
+        }
+        // Place points are text anchors, not drawable geometry. In particular,
+        // they do not need a retained CoreGraphics path of their own.
+        continue
+      }
       let style: Style
       switch feature.layer {
       case "water": style = .water
@@ -34,11 +84,8 @@ struct PreparedMapTile: Sendable {
       case "building": style = .building
       case "transportation":
         style = .road(major: ["motorway", "trunk", "primary"].contains(feature.class ?? ""))
-      case "place": style = .place(kind: feature.class)
       default: continue
       }
-      guard feature.extent > 0 else { continue }
-      let scale = 256 / Double(feature.extent)
       var path = Path()
       var count = 0
       for ring in feature.paths {
@@ -50,25 +97,20 @@ struct PreparedMapTile: Sendable {
         }
         if feature.kind == 3 { path.closeSubpath() }
       }
-      let labelPoint: CGPoint?
-      switch style {
-      case .road:
-        labelPoint = try Self.roadLabelPoint(feature.paths, scale: scale)
-      case .place:
-        if let point = feature.paths.first?.first, point.count >= 2 {
-          labelPoint = CGPoint(x: Double(point[0]) * scale, y: Double(point[1]) * scale)
-        } else {
-          labelPoint = nil
-        }
-      default:
-        labelPoint = nil
+      prepared.append(Feature(path: path, style: style))
+      if case .road(let major) = style, let name = Self.labelName(feature.name),
+        let point = try Self.roadLabelPoint(feature.paths, scale: scale)
+      {
+        labels.append(Label(name: name, point: point, style: .road(major: major)))
       }
-      prepared.append(
-        Feature(
-          path: path, style: style, name: feature.name,
-          labelPoint: (feature.name?.utf8.count ?? 0) <= 256 ? labelPoint : nil))
     }
     features = prepared
+    self.labels = labels
+  }
+
+  private static func labelName(_ name: String?) -> String? {
+    guard let name, !name.isEmpty, name.utf8.count <= 256 else { return nil }
+    return name
   }
 
   /// Place the name halfway along the longest line, away from clipped tile

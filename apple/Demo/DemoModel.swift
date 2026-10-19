@@ -83,8 +83,11 @@ struct DemoImportFailure: Codable, Sendable {
   @ObservationIgnored private var phaseID: UUID?
   @ObservationIgnored private var searchTask: Task<Void, Never>?
   @ObservationIgnored private var searchID: UUID?
+  @ObservationIgnored private var searchNeedsResume = false
+  @ObservationIgnored private var searchPresentations: Set<UUID> = []
   @ObservationIgnored private var installedID: UUID?
   @ObservationIgnored private var regions: [GeofabrikRegion] = []
+  @ObservationIgnored private var catalogByID: [String: GeofabrikRegion] = [:]
   @ObservationIgnored private var started = false
   let root: URL
   let geofabrik: Geofabrik
@@ -166,19 +169,51 @@ struct DemoImportFailure: Codable, Sendable {
     defer { catalogLoading = false }
     do {
       regions = try await geofabrik.regions(refresh: refresh)
+      catalogByID = Dictionary(regions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
       catalogLoaded = true
       filterCatalog()
     } catch is CancellationError {} catch { catalogError = error.localizedDescription }
   }
 
   private func filterCatalog() {
-    let query = catalogQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-    let matches = regions.filter {
-      query.isEmpty || $0.name.localizedCaseInsensitiveContains(query)
-        || $0.id.localizedCaseInsensitiveContains(query)
+    let words = Self.catalogWords(catalogQuery)
+    let query = words.joined(separator: " ")
+    let matches = regions.compactMap { region -> (GeofabrikRegion, Int)? in
+      let name = Self.catalogWords(region.name).joined(separator: " ")
+      let id = Self.catalogWords(region.id).joined(separator: " ")
+      let context =
+        name + " " + id + " "
+        + Self.catalogWords(catalogContext(for: region)).joined(separator: " ")
+      guard words.allSatisfy({ context.contains($0) }) else { return nil }
+      let rank = !query.isEmpty && (name == query || id == query) ? 0 : 1
+      return (region, rank)
+    }.sorted {
+      if $0.1 != $1.1 { return $0.1 < $1.1 }
+      let order = $0.0.name.localizedStandardCompare($1.0.name)
+      return order == .orderedSame ? $0.0.id < $1.0.id : order == .orderedAscending
     }
     catalogMatchCount = matches.count
-    filteredRegions = Array(matches.prefix(50))
+    filteredRegions = matches.prefix(50).map(\.0)
+  }
+
+  func catalogContext(for region: GeofabrikRegion) -> String {
+    var names: [String] = []
+    var visited: Set<String> = [region.id]
+    var parent = region.parent
+    while let id = parent, names.count < 16, visited.insert(id).inserted,
+      let ancestor = catalogByID[id]
+    {
+      names.append(ancestor.name)
+      parent = ancestor.parent
+    }
+    return names.reversed().joined(separator: " · ")
+  }
+
+  private static func catalogWords(_ value: String) -> [String] {
+    value.folding(
+      options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+      locale: Locale(identifier: "en_US_POSIX")
+    ).split { !$0.isLetter && !$0.isNumber }.map(String.init)
   }
 
   func run(
@@ -284,6 +319,22 @@ struct DemoImportFailure: Codable, Sendable {
 
   private static func importErrorMessage(_ error: any Error) -> String {
     let message = error.localizedDescription
+    if let networkError = error as? URLError {
+      switch networkError.code {
+      case .notConnectedToInternet, .networkConnectionLost:
+        return
+          "Der Download benötigt eine Internetverbindung. Prüfe die Verbindung und versuche es erneut."
+      case .timedOut:
+        return "Der Download hat zu lange nicht geantwortet. Versuche es später erneut."
+      default:
+        return
+          "Der Download konnte nicht abgeschlossen werden. Prüfe die Verbindung und versuche es erneut."
+      }
+    }
+    if message == "Eine .osm.pbf-Datei auswählen." {
+      return
+        "Wähle eine Datei mit der Endung .osm.pbf. Andere Dateiformate können nicht importiert werden."
+    }
     if message.hasPrefix("pending import belongs to another source/options/import version") {
       return
         "Dieser Importstand kann mit dieser Version nicht fortgesetzt werden. Wähle „Mit vorhandener PBF neu beginnen“."
@@ -686,10 +737,32 @@ struct DemoImportFailure: Codable, Sendable {
     }
   }
 
+  // Stop work when the last search sheet closes; another window may still use
+  // the shared query. Preserve settled rows and the query across presentations.
+  func suspendSearch(for presentation: UUID) {
+    guard searchPresentations.remove(presentation) != nil, searchPresentations.isEmpty else {
+      return
+    }
+    searchNeedsResume = searchNeedsResume || searching
+    searchTask?.cancel()
+    searchTask = nil
+    searchID = nil
+    searching = false
+  }
+
+  func resumeSearch(for presentation: UUID) {
+    searchPresentations.insert(presentation)
+    guard searchNeedsResume else { return }
+    search()
+  }
+
+  func retrySearch() { search() }
+
   private func search() {
     searchTask?.cancel()
     searchTask = nil
     searchID = nil
+    searchNeedsResume = false
     results = []
     searchError = nil
     searching = false

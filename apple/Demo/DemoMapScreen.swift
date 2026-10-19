@@ -10,21 +10,32 @@ struct DemoMapScreen: View {
   let location: DemoLocation
   let showRegions: () -> Void
   @Environment(\.openURL) private var openURL
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   @State private var searching = false
   @State private var searchTarget: DemoModel.RoutePoint?
   @State private var planning = false
   @State private var directions = false
   @State private var awaitingLocation = false
+  @State private var mapTarget: DemoModel.RoutePoint?
+  @State private var routeDetailsExpanded = true
+  @State private var inspectorHeight: CGFloat = 0
 
   var body: some View {
     GeometryReader { geometry in
-      DemoMapCanvas(model: model, location: location)
+      DemoMapCanvas(model: model, location: location, onSelect: selectMapPoint)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-          ViewThatFits(in: .vertical) {
-            inspector.fixedSize(horizontal: false, vertical: true)
-            ScrollView { inspector }.scrollBounceBehavior(.basedOnSize)
+          ScrollView {
+            inspector(availableWidth: geometry.size.width)
+              .background {
+                GeometryReader { inspectorGeometry in
+                  Color.clear.preference(
+                    key: InspectorHeightKey.self, value: inspectorGeometry.size.height)
+                }
+              }
           }
-          .frame(maxHeight: min(340, geometry.size.height * 0.45))
+          .scrollBounceBehavior(.basedOnSize)
+          .frame(height: min(inspectorHeight, min(340, geometry.size.height * 0.45)))
+          .onPreferenceChange(InspectorHeightKey.self) { inspectorHeight = $0 }
           .background(.regularMaterial)
         }
     }
@@ -35,19 +46,20 @@ struct DemoMapScreen: View {
     .toolbar {
       ToolbarItemGroup(placement: .primaryAction) {
         Button("Orte suchen", systemImage: "magnifyingglass") {
-          searchTarget = nil
-          searching = true
+          openSearch(for: nil)
         }.disabled(model.engine == nil)
         Button(
           planning ? "Routendetails ausblenden" : "Route planen",
           systemImage: "point.topleft.down.to.point.bottomright.curvepath"
         ) {
+          mapTarget = nil
           if model.inspectedPlace != nil {
             model.dismissPlace()
             planning = true
           } else {
             planning.toggle()
           }
+          routeDetailsExpanded = true
         }.disabled(model.engine == nil)
         Button {
           showLocation()
@@ -91,24 +103,31 @@ struct DemoMapScreen: View {
       searchTarget = nil
       directions = false
       awaitingLocation = false
+      mapTarget = nil
+      routeDetailsExpanded = true
+    }
+    .onChange(of: model.busy) { _, busy in
+      if busy { mapTarget = nil }
     }
     .onChange(of: model.start != nil || model.destination != nil, initial: true) { _, hasPoints in
       planning = hasPoints
     }
   }
 
-  private var inspector: some View {
+  private func inspector(availableWidth: CGFloat) -> some View {
     VStack(spacing: 0) {
-      if location.state != .idle { locationStatus }
-      if let place = model.inspectedPlace {
+      if let mapTarget {
+        mapSelectionCard(mapTarget)
+      } else if let place = model.inspectedPlace {
         placeCard(place).padding()
       } else if planning {
-        routeCard.padding()
+        routeCard(availableWidth: availableWidth).padding()
       } else if model.busy {
         ActivityProgress(model: model).padding()
       } else if model.start != nil || model.destination != nil {
         Button {
           planning = true
+          routeDetailsExpanded = true
         } label: {
           Label(
             model.route == nil ? "Routenplanung fortsetzen" : "Route · \(routeSummary)",
@@ -117,13 +136,53 @@ struct DemoMapScreen: View {
           .font(.callout).frame(maxWidth: .infinity, minHeight: 44)
         }.buttonStyle(.plain).padding(.horizontal)
       } else if model.engine != nil {
-        Label(
-          "Ort antippen oder suchen · Karte und Routing offline", systemImage: "checkmark.circle"
-        )
-        .font(.caption).foregroundStyle(.secondary).padding(10)
+        HStack {
+          Label("Karte antippen oder Ort suchen", systemImage: "hand.tap")
+          Spacer(minLength: 8)
+          Label("Offline", systemImage: "checkmark.circle")
+        }
+        .font(.caption).foregroundStyle(.secondary).padding(12)
         .frame(maxWidth: .infinity)
       }
+      if location.state != .idle, mapTarget == nil { locationStatus }
     }
+  }
+
+  private func openSearch(for point: DemoModel.RoutePoint?) {
+    mapTarget = nil
+    if let point { model.chooseRoutePoint(point) }
+    searchTarget = point
+    searching = true
+  }
+
+  private func selectMapPoint(_ coordinate: Coordinate) {
+    if let mapTarget {
+      guard !model.busy else { return }
+      model.usePlace(
+        DemoPlace(coordinate: coordinate, name: "Punkt auf der Karte", category: nil), as: mapTarget
+      )
+      self.mapTarget = nil
+      planning = true
+      routeDetailsExpanded = true
+    } else {
+      model.inspect(coordinate)
+    }
+  }
+
+  private func mapSelectionCard(_ point: DemoModel.RoutePoint) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Label(
+        point == .start ? "Startpunkt auf Karte wählen" : "Zielpunkt auf Karte wählen",
+        systemImage: point == .start ? "a.circle.fill" : "b.circle.fill"
+      ).font(.headline)
+      Text("Karte verschieben und die gewünschte Stelle antippen.")
+        .font(.caption).foregroundStyle(.secondary)
+      HStack {
+        Button("Stattdessen suchen", systemImage: "magnifyingglass") { openSearch(for: point) }
+        Spacer()
+        Button("Abbrechen", role: .cancel) { mapTarget = nil }
+      }.font(.callout).frame(minHeight: 44)
+    }.padding().frame(maxWidth: .infinity, alignment: .leading)
   }
 
   private func showLocation() {
@@ -135,37 +194,67 @@ struct DemoMapScreen: View {
     }
   }
 
-  private var locationStatus: some View {
-    VStack(alignment: .leading, spacing: 6) {
-      HStack(alignment: .top) {
-        Label(location.status, systemImage: "location")
-          .font(.caption).foregroundStyle(location.error == nil ? Color.secondary : .red)
-        Spacer()
-        if location.isUpdating {
-          Button("Stoppen") { location.stop() }.font(.caption).frame(minHeight: 44)
-        } else if location.coordinate == nil {
-          Button("Erneut versuchen") { showLocation() }.font(.caption).frame(minHeight: 44)
+  @ViewBuilder private var locationStatus: some View {
+    if location.state == .ready, let coordinate = location.coordinate, model.contains(coordinate) {
+      HStack(spacing: 8) {
+        Label(location.status, systemImage: "location.fill")
+          .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+        Spacer(minLength: 0)
+        Menu {
+          Button("Standort auf Karte anzeigen", systemImage: "location") {
+            model.focusOn(coordinate)
+          }
+          Button("Standort als Start verwenden", systemImage: "a.circle.fill") {
+            useLocationAsStart(coordinate)
+          }.disabled(model.busy)
+          #if os(iOS)
+            if !location.hasPreciseLocation,
+              let url = URL(string: UIApplication.openSettingsURLString)
+            {
+              Button("Genauen Standort erlauben", systemImage: "gear") { openURL(url) }
+            }
+          #endif
+          Button("Standort ausschalten", systemImage: "location.slash") { location.stop() }
+        } label: {
+          Image(systemName: "ellipsis.circle").frame(width: 44, height: 44)
+        }.accessibilityLabel("Standortaktionen")
+      }.padding(.horizontal, 12)
+    } else {
+      VStack(alignment: .leading, spacing: 6) {
+        HStack(alignment: .top) {
+          Label(location.status, systemImage: "location")
+            .font(.caption).foregroundStyle(location.error == nil ? Color.secondary : .red)
+          Spacer()
+          if location.isUpdating {
+            Button("Stoppen") { location.stop() }.font(.caption).frame(minHeight: 44)
+          } else if location.coordinate == nil {
+            Button("Erneut versuchen") { showLocation() }.font(.caption).frame(minHeight: 44)
+          }
         }
-      }
-      #if os(iOS)
-        if location.state == .denied, let url = URL(string: UIApplication.openSettingsURLString) {
-          Button("App-Einstellungen öffnen") { openURL(url) }.font(.caption)
+        #if os(iOS)
+          if location.state == .denied, let url = URL(string: UIApplication.openSettingsURLString) {
+            Button("App-Einstellungen öffnen") { openURL(url) }.font(.caption)
+          }
+        #endif
+        if let coordinate = location.coordinate {
+          if !model.contains(coordinate) {
+            Text("Dein Standort liegt außerhalb der geöffneten Offline-Region.")
+              .font(.caption).foregroundStyle(.secondary)
+            Button("Andere Region auswählen", action: showRegions).font(.caption)
+          } else {
+            Button("Standort als Start verwenden") { useLocationAsStart(coordinate) }
+              .font(.caption).disabled(model.busy)
+          }
         }
-      #endif
-      if let coordinate = location.coordinate {
-        if !model.contains(coordinate) {
-          Text("Dein Standort liegt außerhalb der geöffneten Offline-Region.")
-            .font(.caption).foregroundStyle(.secondary)
-          Button("Andere Region auswählen", action: showRegions).font(.caption)
-        } else {
-          Button("Standort als Start verwenden") {
-            model.usePlace(
-              DemoPlace(coordinate: coordinate, name: "Mein Standort", category: nil), as: .start)
-            planning = true
-          }.font(.caption).disabled(model.busy)
-        }
-      }
-    }.padding(10).frame(maxWidth: .infinity, alignment: .leading).background(.regularMaterial)
+      }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
+    }
+  }
+
+  private func useLocationAsStart(_ coordinate: Coordinate) {
+    model.usePlace(
+      DemoPlace(coordinate: coordinate, name: "Mein Standort", category: nil), as: .start)
+    planning = true
+    routeDetailsExpanded = true
   }
 
   private func placeCard(_ place: DemoPlace) -> some View {
@@ -186,17 +275,24 @@ struct DemoMapScreen: View {
             Rectangle())
         }.accessibilityLabel("Auswahl schließen").buttonStyle(.plain)
       }
-      HStack {
-        Button("Als Start", systemImage: "a.circle.fill") {
-          model.usePlace(place, as: .start)
-          planning = true
-        }
-        Button("Als Ziel", systemImage: "b.circle.fill") {
-          model.usePlace(place, as: .destination)
-          planning = true
-        }
+      ViewThatFits(in: .horizontal) {
+        HStack { placeActions(place) }.fixedSize(horizontal: true, vertical: false)
+        VStack(alignment: .leading) { placeActions(place) }
       }.buttonStyle(.bordered).disabled(model.busy)
     }.frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  @ViewBuilder private func placeActions(_ place: DemoPlace) -> some View {
+    Button("Als Start", systemImage: "a.circle.fill") {
+      model.usePlace(place, as: .start)
+      planning = true
+      routeDetailsExpanded = true
+    }.frame(minHeight: 44)
+    Button("Als Ziel", systemImage: "b.circle.fill") {
+      model.usePlace(place, as: .destination)
+      planning = true
+      routeDetailsExpanded = true
+    }.frame(minHeight: 44)
   }
 
   private var routeSummary: String {
@@ -206,88 +302,131 @@ struct DemoMapScreen: View {
     return "\(kilometers) km · \(minutes) Min."
   }
 
-  private var routeCard: some View {
+  private func routeCard(availableWidth: CGFloat) -> some View {
     VStack(alignment: .leading, spacing: 10) {
-      HStack {
-        if let route = model.route {
-          Text("\((route.distanceM / 1000).formatted(.number.precision(.fractionLength(1)))) km")
-            .font(.headline)
-          Text(
-            "\(max(1, route.durationS / 60).formatted(.number.precision(.fractionLength(0)))) Min."
-          )
-          .foregroundStyle(.secondary)
-        } else {
-          Text("Route planen").font(.headline)
+      HStack(alignment: .top) {
+        Button {
+          routeDetailsExpanded.toggle()
+        } label: {
+          HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 3) {
+              Text(model.route == nil ? "Autoroute planen" : routeSummary).font(.headline)
+              if !routeDetailsExpanded {
+                Text(model.route == nil ? "Start und Ziel wählen" : "Routendetails und Export")
+                  .font(.caption).foregroundStyle(.secondary)
+              }
+            }
+            Image(systemName: routeDetailsExpanded ? "chevron.down" : "chevron.up")
+              .font(.caption).foregroundStyle(.secondary)
+          }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
         }
-        Spacer()
+        .buttonStyle(.plain)
+        .accessibilityLabel(
+          routeDetailsExpanded ? "Routendetails reduzieren" : "Routendetails einblenden"
+        )
+        .accessibilityValue(
+          "\(routeDetailsExpanded ? "Erweitert" : "Reduziert"). \(model.route == nil ? "Autoroute planen" : routeSummary)"
+        )
         Button {
           planning = false
         } label: {
           Image(systemName: "xmark.circle.fill").frame(width: 44, height: 44).contentShape(
             Rectangle())
-        }.accessibilityLabel("Routendetails schließen").buttonStyle(.plain)
+        }.accessibilityLabel("Routenplanung ausblenden").buttonStyle(.plain)
       }
-      HStack {
-        endpoint(.start, name: model.startLabel, title: "Start wählen", image: "a.circle.fill")
-        Button {
-          model.swapRoutePoints()
-        } label: {
-          Image(systemName: "arrow.up.arrow.down").frame(width: 44, height: 44).contentShape(
-            Rectangle())
+      if routeDetailsExpanded {
+        VStack(spacing: 4) {
+          endpoint(.start, name: model.startLabel, title: "Start wählen", image: "a.circle.fill")
+          HStack {
+            Spacer()
+            Button("Start und Ziel tauschen", systemImage: "arrow.up.arrow.down") {
+              model.swapRoutePoints()
+            }
+            .font(.caption).frame(minHeight: 44)
+            .disabled(model.busy || model.start == nil || model.destination == nil)
+          }
+          endpoint(
+            .destination, name: model.destinationLabel, title: "Ziel wählen", image: "b.circle.fill"
+          )
         }
-        .accessibilityLabel("Start und Ziel tauschen").disabled(
-          model.busy || model.start == nil || model.destination == nil)
-        endpoint(
-          .destination, name: model.destinationLabel, title: "Ziel wählen", image: "b.circle.fill")
-      }
-      Picker(
-        "Routenberechnung",
-        selection: Binding(
-          get: { model.routeObjective }, set: { model.setRouteObjective($0) }
-        )
-      ) {
-        Text("Auto · kürzeste Strecke").tag(RouteObjective.distance)
-        Text("Auto · schnellste Strecke").tag(RouteObjective.duration)
-      }.pickerStyle(.menu).font(.caption).disabled(model.busy)
-      if model.start != nil || model.destination != nil {
-        Button("Route zurücksetzen", systemImage: "arrow.counterclockwise") { model.clearRoute() }
-          .font(.caption).disabled(model.busy && model.activity != .routing)
+        Picker(
+          "Autoroute",
+          selection: Binding(
+            get: { model.routeObjective }, set: { model.setRouteObjective($0) }
+          )
+        ) {
+          Text("Kürzeste Strecke").tag(RouteObjective.distance)
+          Text("Schnellste Strecke").tag(RouteObjective.duration)
+        }.pickerStyle(.menu).disabled(model.busy)
+        if model.route == nil, !model.busy, model.routeError == nil {
+          Text(model.routeSelectionHint).font(.caption).foregroundStyle(.secondary)
+        }
       }
       if model.busy {
         ActivityProgress(model: model)
       } else if let error = model.routeError {
-        Text(error).font(.callout).foregroundStyle(.red)
-      } else if model.route == nil {
-        Text(model.routeSelectionHint).font(.caption).foregroundStyle(.secondary)
+        Label(error, systemImage: "exclamationmark.triangle")
+          .font(.callout).foregroundStyle(.red)
+        if model.canCalculateRoute {
+          Button("Route erneut berechnen", systemImage: "arrow.clockwise") { model.retryRoute() }
+            .frame(minHeight: 44)
+        }
       }
       if let route = model.route {
-        HStack {
-          if !route.steps.isEmpty {
-            Button("Wegbeschreibung", systemImage: "list.bullet") { directions = true }
-          }
-          RouteExporter(route: route)
-        }
-        if max(route.fromSnapM, route.toSnapM) > 100 {
+        let layout =
+          availableWidth >= 360 && dynamicTypeSize <= .large
+          ? AnyLayout(HStackLayout(spacing: 8))
+          : AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+        layout { routeActions(route) }.buttonStyle(.bordered)
+        if routeDetailsExpanded, max(route.fromSnapM, route.toSnapM) > 100 {
           Text("Die Route beginnt oder endet an einer nahegelegenen befahrbaren Straße.")
             .font(.caption).foregroundStyle(.secondary)
         }
-      } else if model.canCalculateRoute {
-        Button("Route erneut berechnen", systemImage: "arrow.clockwise") { model.retryRoute() }
+      }
+      if routeDetailsExpanded, model.start != nil || model.destination != nil {
+        Button("Route zurücksetzen", systemImage: "arrow.counterclockwise") { model.clearRoute() }
+          .font(.caption).frame(minHeight: 44).disabled(model.busy && model.activity != .routing)
       }
     }.frame(maxWidth: .infinity, alignment: .leading)
+  }
+
+  @ViewBuilder private func routeActions(_ route: Route) -> some View {
+    if !route.steps.isEmpty {
+      Button("Wegbeschreibung", systemImage: "list.bullet") { directions = true }
+        .frame(minHeight: 44)
+    }
+    RouteExporter(route: route).frame(minHeight: 44)
   }
 
   private func endpoint(_ point: DemoModel.RoutePoint, name: String?, title: String, image: String)
     -> some View
   {
-    Button {
-      model.chooseRoutePoint(point)
-      searchTarget = point
-      searching = true
+    Menu {
+      Button("Ort oder Adresse suchen", systemImage: "magnifyingglass") { openSearch(for: point) }
+      Button("Auf der Karte wählen", systemImage: "hand.tap") {
+        model.chooseRoutePoint(point)
+        model.dismissPlace()
+        mapTarget = point
+      }
+      if let coordinate = location.coordinate, model.contains(coordinate) {
+        Button("Meinen Standort verwenden", systemImage: "location") {
+          model.usePlace(
+            DemoPlace(coordinate: coordinate, name: "Mein Standort", category: nil), as: point)
+        }
+      }
     } label: {
-      Label(name ?? title, systemImage: image).font(.subheadline).lineLimit(2)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }.buttonStyle(.bordered).disabled(model.busy)
+      HStack(alignment: .center, spacing: 10) {
+        Image(systemName: image).foregroundStyle(point == .start ? Color.green : .red)
+        VStack(alignment: .leading, spacing: 2) {
+          Text(point == .start ? "Start" : "Ziel").font(.caption).foregroundStyle(.secondary)
+          Text(name ?? title).font(.subheadline).foregroundStyle(.primary).lineLimit(3)
+        }.frame(maxWidth: .infinity, alignment: .leading)
+        Image(systemName: "chevron.down").font(.caption).foregroundStyle(.secondary)
+      }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+    }
+    .buttonStyle(.bordered).disabled(model.busy)
+    .accessibilityLabel("\(point == .start ? "Start" : "Ziel"): \(name ?? "Noch nicht gewählt")")
+    .accessibilityHint("Suche, Kartenpunkt oder eigenen Standort auswählen")
   }
 
   private var directionsSheet: some View {
@@ -319,9 +458,15 @@ struct DemoMapScreen: View {
   }
 }
 
+private struct InspectorHeightKey: PreferenceKey {
+  static let defaultValue: CGFloat = 0
+  static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 private struct DemoMapCanvas: View {
   let model: DemoModel
   let location: DemoLocation
+  let onSelect: (Coordinate) -> Void
   var body: some View {
     if let engine = model.engine {
       OfflineMap(
@@ -329,7 +474,7 @@ private struct DemoMapCanvas: View {
         focus: model.focus, focusRequest: model.focusRequest,
         routeStart: model.start, routeDestination: model.destination,
         selection: model.inspectedPlace?.coordinate, userLocation: location.coordinate,
-        userLocationAccuracy: location.horizontalAccuracy, onSelect: model.inspect
+        userLocationAccuracy: location.horizontalAccuracy, onSelect: onSelect
       ).id(ObjectIdentifier(engine))
     } else {
       ContentUnavailableView {
@@ -349,47 +494,123 @@ private struct DemoPlaceSearch: View {
   let selected: (SearchResult) -> Void
   @Environment(\.dismiss) private var dismiss
   @FocusState private var focused: Bool
+  @State private var presentationID = UUID()
+
+  private var trimmedQuery: String {
+    model.query.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
 
   var body: some View {
     NavigationStack {
       VStack(spacing: 0) {
-        TextField("Ort, Straße, Adresse oder POI", text: $model.query)
-          .textFieldStyle(.roundedBorder).autocorrectionDisabled().submitLabel(.search)
-          .focused($focused).padding().onSubmit { focused = false }
-        List {
-          if model.searching { ProgressView("Suche in der Offline-Region …") }
-          if let error = model.searchError { Text(error).foregroundStyle(.red) }
-          if model.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            Text(
-              "Suche in \(model.engine?.manifest.name ?? "der geöffneten Region"). Es wird keine Internetverbindung benötigt."
-            )
-            .foregroundStyle(.secondary)
-          } else if !model.searching, model.results.isEmpty, model.searchError == nil {
-            ContentUnavailableView.search(text: model.query)
+        VStack(alignment: .leading, spacing: 10) {
+          HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Ort, Straße, Adresse oder POI", text: $model.query)
+              .autocorrectionDisabled().submitLabel(.search)
+              .focused($focused).onSubmit { focused = false }
+              .accessibilityLabel("In der Offline-Region suchen")
+            if !model.query.isEmpty {
+              Button {
+                model.query = ""
+                focused = true
+              } label: {
+                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                  .frame(minWidth: 44, minHeight: 44)
+              }.buttonStyle(.plain).accessibilityLabel("Suchtext löschen")
+            }
           }
-          ForEach(model.results, id: \.identity) { result in
-            Button {
-              selected(result)
-            } label: {
-              VStack(alignment: .leading, spacing: 4) {
-                Text(result.label).foregroundStyle(.primary)
-                Text(DemoPlaceText.category(result.category, kind: result.kind))
-                  .font(.caption).foregroundStyle(.secondary)
-              }.frame(maxWidth: .infinity, alignment: .leading)
-            }.disabled(model.busy)
-          }
-        }.listStyle(.plain)
+          .padding(.leading, 12).frame(minHeight: 48)
+          .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+          Label(
+            model.engine?.manifest.name ?? "Geöffnete Region", systemImage: "checkmark.circle"
+          ).font(.caption).foregroundStyle(.secondary)
+        }.padding()
+        searchContent
       }
       .navigationTitle(
         target == .start ? "Start suchen" : target == .destination ? "Ziel suchen" : "Orte suchen"
       )
-      .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Schließen") { dismiss() } } }
+      #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+      #endif
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) { Button("Schließen") { dismiss() } }
+      }
     }
     #if os(macOS)
       .frame(minWidth: 420, minHeight: 450)
     #endif
-    .presentationDetents([.medium, .large])
-    .task { focused = true }
+    .presentationDetents([.large])
+    .presentationDragIndicator(.visible)
+    .onAppear {
+      model.resumeSearch(for: presentationID)
+      focused = true
+    }
+    .onDisappear { model.suspendSearch(for: presentationID) }
+  }
+
+  @ViewBuilder private var searchContent: some View {
+    if trimmedQuery.isEmpty {
+      ContentUnavailableView {
+        Label("Was suchst du?", systemImage: "magnifyingglass")
+      } description: {
+        Text(
+          "Orte, Straßen, Hausnummern oder zum Beispiel Cafés suchen. Alle Ergebnisse stammen aus der geöffneten Offline-Region."
+        )
+      }
+    } else if model.searching {
+      VStack(spacing: 12) {
+        ProgressView()
+        Text("Offline-Region wird durchsucht …").font(.callout).foregroundStyle(.secondary)
+      }.frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .combine)
+    } else if let error = model.searchError {
+      ContentUnavailableView {
+        Label("Suche nicht möglich", systemImage: "exclamationmark.triangle")
+      } description: {
+        Text(error)
+      } actions: {
+        Button("Erneut suchen", systemImage: "arrow.clockwise") { model.retrySearch() }
+          .buttonStyle(.bordered)
+      }
+    } else if model.results.isEmpty {
+      ContentUnavailableView {
+        Label("Keine passenden Orte", systemImage: "magnifyingglass")
+      } description: {
+        Text(
+          "Für „\(trimmedQuery)“ gibt es hier keine Treffer. Versuche einen kürzeren Namen oder eine andere Schreibweise."
+        )
+      } actions: {
+        Button("Suchbegriff ändern") { focused = true }.buttonStyle(.bordered)
+      }
+    } else {
+      List {
+        Section("\(model.results.count) Treffer in der Offline-Region") {
+          ForEach(model.results, id: \.identity) { result in
+            Button {
+              focused = false
+              selected(result)
+            } label: {
+              HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                  Text(result.label).foregroundStyle(.primary)
+                  Text(DemoPlaceText.category(result.category, kind: result.kind))
+                    .font(.caption).foregroundStyle(.secondary)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
+              }.padding(.vertical, 4).frame(minHeight: 44)
+            }
+            .disabled(model.busy)
+            .accessibilityHint(
+              target == .start
+                ? "Als Start übernehmen"
+                : target == .destination ? "Als Ziel übernehmen" : "Auf der Karte anzeigen"
+            )
+          }
+        }
+      }.listStyle(.plain).scrollDismissesKeyboard(.interactively)
+    }
   }
 }
 

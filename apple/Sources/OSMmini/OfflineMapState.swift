@@ -30,11 +30,36 @@ enum WebMercator {
     if dx < -scale / 2 { dx += scale }
     return CGPoint(x: dx, y: point.y - origin.y)
   }
+
+  static func metersPerPixel(latitude: Double, zoom: Int) -> Double? {
+    guard latitude.isFinite, abs(latitude) <= 90, (0...30).contains(zoom) else { return nil }
+    let latitude = min(maximumLatitude, max(-maximumLatitude, latitude))
+    return cos(latitude * .pi / 180) * 40_075_016.685_578_49 / (256 * exp2(Double(zoom)))
+  }
 }
 
 struct OfflineMapViewport: Sendable {
   let center: Coordinate
   let zoom: Int
+
+  /// Keep the coordinate under a double tap fixed while changing zoom.
+  static func zooming(
+    center: Coordinate, from oldZoom: Int, to zoom: Int, at anchor: CGPoint, size: CGSize
+  ) -> Self? {
+    guard center.lat.isFinite, abs(center.lat) <= 90, center.lon.isFinite,
+      (0...30).contains(oldZoom), (0...30).contains(zoom),
+      anchor.x.isFinite, anchor.y.isFinite, size.width.isFinite, size.height.isFinite,
+      size.width > 0, size.height > 0
+    else { return nil }
+    let offset = CGPoint(x: anchor.x - size.width / 2, y: anchor.y - size.height / 2)
+    let origin = WebMercator.world(center, zoom: oldZoom)
+    let point = WebMercator.coordinate(
+      CGPoint(x: origin.x + offset.x, y: origin.y + offset.y), zoom: oldZoom)
+    let projected = WebMercator.world(point, zoom: zoom)
+    return Self(
+      center: WebMercator.coordinate(
+        CGPoint(x: projected.x - offset.x, y: projected.y - offset.y), zoom: zoom), zoom: zoom)
+  }
 
   /// Region bounds describe an interval, which may cover more than half the world.
   /// Unlike a route, that interval must not be replaced with the shorter longitude arc.
@@ -226,14 +251,33 @@ struct OfflineMapLabelLayout {
 enum OfflineMapLocationAccuracy {
   static func radius(_ accuracy: Double?, latitude: Double, zoom: Int) -> CGFloat? {
     guard let accuracy, accuracy.isFinite, accuracy > 0,
-      latitude.isFinite, abs(latitude) <= 90, (0...30).contains(zoom)
+      let metersPerPixel = WebMercator.metersPerPixel(latitude: latitude, zoom: zoom)
     else { return nil }
-    let latitude = min(WebMercator.maximumLatitude, max(-WebMercator.maximumLatitude, latitude))
-    let metersPerPixel =
-      cos(latitude * .pi / 180) * 40_075_016.685_578_49
-      / (256 * exp2(Double(zoom)))
     let radius = accuracy / metersPerPixel
     return radius.isFinite ? radius : nil
+  }
+}
+
+struct OfflineMapScale {
+  let meters: Double
+  let width: CGFloat
+
+  var label: String {
+    let value = meters >= 1_000 ? meters / 1_000 : meters
+    return
+      "\(value.formatted(.number.precision(.significantDigits(1...3)))) \(meters >= 1_000 ? "km" : "m")"
+  }
+
+  static func make(latitude: Double, zoom: Int, maximumWidth: CGFloat = 112) -> Self? {
+    guard maximumWidth.isFinite, maximumWidth > 0,
+      let metersPerPixel = WebMercator.metersPerPixel(latitude: latitude, zoom: zoom)
+    else { return nil }
+    let available = metersPerPixel * maximumWidth
+    guard available.isFinite, available > 0 else { return nil }
+    let magnitude = pow(10, floor(log10(available)))
+    let factor = [5.0, 2.0, 1.0].first { $0 * magnitude <= available } ?? 1
+    let meters = factor * magnitude
+    return Self(meters: meters, width: meters / metersPerPixel)
   }
 }
 

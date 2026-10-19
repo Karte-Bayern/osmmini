@@ -152,6 +152,70 @@ private final class ChangeCounter: @unchecked Sendable {
     #expect(model.filteredRegions.isEmpty)
   }
 
+  @Test func catalogSearchMatchesHierarchyAndAccentsWithExactRegionsFirst() async throws {
+    defer { cleanup() }
+    let entries: [(String, String, String?)] = [
+      ("europe", "Europa", nil),
+      ("germany", "Deutschland", "europe"),
+      ("bayern", "Bayern", "germany"),
+      ("niederbayern", "Niederbayern", "bayern"),
+      ("oberbayern", "Oberbayern", "bayern"),
+      ("baden-wuerttemberg", "Baden-Württemberg", "germany"),
+      ("cycle-a", "Cycle A", "cycle-b"),
+      ("cycle-b", "Cycle B", "cycle-a"),
+      ("orphan", "Ohne Elternregion", "unavailable"),
+    ]
+    let features = entries.map { id, name, parent -> [String: Any] in
+      var properties: [String: Any] = [
+        "id": id, "name": name,
+        "urls": ["pbf": "https://download.geofabrik.de/\(id).osm.pbf"],
+      ]
+      if let parent { properties["parent"] = parent }
+      return ["properties": properties]
+    }
+    let downloads = root.appendingPathComponent("downloads")
+    try FileManager.default.createDirectory(at: downloads, withIntermediateDirectories: true)
+    try JSONSerialization.data(withJSONObject: ["features": features]).write(
+      to: downloads.appendingPathComponent("geofabrik-index.json"))
+    let model = DemoModel(root: root, defaults: defaults)
+    await model.loadCatalog()
+
+    model.catalogQuery = "BAYERN"
+    #expect(model.filteredRegions.map(\.id) == ["bayern", "niederbayern", "oberbayern"])
+    model.catalogQuery = "  Niederbayern   EUROPA "
+    let niederbayern = try #require(model.filteredRegions.first)
+    #expect(model.filteredRegions.map(\.id) == ["niederbayern"])
+    #expect(model.catalogContext(for: niederbayern) == "Europa · Deutschland · Bayern")
+    model.catalogQuery = "baden wurttemberg"
+    #expect(model.filteredRegions.map(\.id) == ["baden-wuerttemberg"])
+    model.catalogQuery = "Cycle A"
+    let cycle = try #require(model.filteredRegions.first { $0.id == "cycle-a" })
+    #expect(model.catalogContext(for: cycle) == "Cycle B")
+    model.catalogQuery = "Ohne Elternregion"
+    let orphan = try #require(model.filteredRegions.first)
+    #expect(model.catalogContext(for: orphan).isEmpty)
+  }
+
+  @Test func downloadAndInputFailuresKeepTheirSpecificRecoveryAdvice() async throws {
+    defer { cleanup() }
+    let model = DemoModel(root: root, defaults: defaults)
+    let error = URLError(.notConnectedToInternet)
+    model.run(.downloading, status: "Download") { _ in throw error }
+    await model.operation?.value
+    let network = try #require(model.importFailure)
+    #expect(network.message.contains("Internetverbindung"))
+    #expect(network.details == error.localizedDescription)
+    #expect(network.message != network.details)
+    #expect(model.pending == nil)
+
+    model.importFile(root.appendingPathComponent("map.geojson"))
+    await model.operation?.value
+    let input = try #require(model.importFailure)
+    #expect(input.message.contains("Endung .osm.pbf"))
+    #expect(input.message != input.details)
+    #expect(model.pending == nil)
+  }
+
   @Test func routeSelectionIsStableWhileBusyAndResetCancelsRouting() async throws {
     defer { cleanup() }
     let model = try await readyModel()
@@ -193,6 +257,72 @@ private final class ChangeCounter: @unchecked Sendable {
     #expect(!model.searching)
     #expect(model.results.isEmpty)
     #expect(model.searchError == nil)
+    await model.engine?.close()
+  }
+
+  @Test func dismissingAnUnfinishedSearchStopsWorkAndReopeningResumesTheSameQuery() async throws {
+    defer { cleanup() }
+    let model = try await readyModel()
+    let presentation = UUID()
+    model.resumeSearch(for: presentation)
+    model.query = "cafe"
+    #expect(model.searching)
+    model.suspendSearch(for: presentation)
+    #expect(model.query == "cafe")
+    #expect(!model.searching)
+    try await Task.sleep(for: .milliseconds(300))
+    #expect(model.results.isEmpty)
+    #expect(model.searchError == nil)
+
+    model.resumeSearch(for: presentation)
+    #expect(model.searching)
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(5))
+    while model.searching, clock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(!model.searching)
+    #expect(!model.results.isEmpty)
+    let rows = model.results
+    model.suspendSearch(for: presentation)
+    model.resumeSearch(for: presentation)
+    #expect(!model.searching)
+    #expect(model.results.map(\.identity) == rows.map(\.identity))
+
+    model.retrySearch()
+    #expect(model.searching)
+    model.suspendSearch(for: presentation)
+    model.query = ""
+    model.resumeSearch(for: presentation)
+    #expect(!model.searching)
+    #expect(model.results.isEmpty)
+    await model.engine?.close()
+  }
+
+  @Test func closingOneSearchWindowDoesNotCancelAnotherWindowsQuery() async throws {
+    defer { cleanup() }
+    let model = try await readyModel()
+    let first = UUID()
+    let second = UUID()
+    model.resumeSearch(for: first)
+    model.resumeSearch(for: first)
+    model.resumeSearch(for: second)
+    model.query = "cafe"
+    model.suspendSearch(for: first)
+    model.suspendSearch(for: first)
+    #expect(model.searching)
+
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(5))
+    while model.searching, clock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(!model.searching)
+    #expect(!model.results.isEmpty)
+
+    model.query = "school"
+    #expect(model.searching)
+    model.suspendSearch(for: second)
+    #expect(!model.searching)
+    model.resumeSearch(for: first)
+    #expect(model.searching)
+    model.suspendSearch(for: first)
     await model.engine?.close()
   }
 

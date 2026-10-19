@@ -116,16 +116,17 @@ public struct OfflineMap: View {
                 feature.path,
                 with: .color(major ? Color(red: 0.96, green: 0.79, blue: 0.51) : .white),
                 style: StrokeStyle(lineWidth: width / scale, lineCap: .round, lineJoin: .round))
-            case .place: break
             }
-            if let name = feature.name, let p = feature.labelPoint,
-              let style = labelStyle(for: feature.style)
-            {
-              labels.append(
-                MapLabel(
-                  name: name, point: CGPoint(x: p.x * scale + offset.x, y: p.y * scale + offset.y),
-                  size: style.size, priority: style.priority, bold: style.bold))
-            }
+          }
+          for label in tile.labels {
+            guard let style = labelStyle(for: label.style) else { continue }
+            let point = CGPoint(
+              x: label.point.x * scale + offset.x, y: label.point.y * scale + offset.y)
+            guard CGRect(origin: .zero, size: canvasSize).contains(point) else { continue }
+            labels.append(
+              MapLabel(
+                name: label.name, point: point,
+                size: style.size, priority: style.priority, bold: style.bold))
           }
         }
         if let userLocation, userLocation.lon.isFinite,
@@ -199,16 +200,25 @@ public struct OfflineMap: View {
               CGPoint(x: p.x - value.translation.width, y: p.y - value.translation.height))
           }
           .exclusively(
-            before: SpatialTapGesture().onEnded { tap in
-              guard let onSelect else { return }
+            before: SpatialTapGesture(count: 2).onEnded { tap in
               navigate()
-              let p = world(center)
-              let selected = coordinate(
-                CGPoint(
-                  x: p.x + tap.location.x - size.width / 2,
-                  y: p.y + tap.location.y - size.height / 2))
-              onSelect(selected)
-            }
+              guard zoom < maximumDisplayZoom,
+                let viewport = OfflineMapViewport.zooming(
+                  center: center, from: zoom, to: zoom + 1, at: tap.location, size: size)
+              else { return }
+              center = viewport.center
+              zoom = viewport.zoom
+            }.exclusively(
+              before: SpatialTapGesture().onEnded { tap in
+                guard let onSelect else { return }
+                navigate()
+                let p = world(center)
+                let selected = coordinate(
+                  CGPoint(
+                    x: p.x + tap.location.x - size.width / 2,
+                    y: p.y + tap.location.y - size.height / 2))
+                onSelect(selected)
+              })
           )
       )
       .simultaneousGesture(
@@ -224,26 +234,41 @@ public struct OfflineMap: View {
           HStack(spacing: 8) { controls(size: size) }
         }.buttonStyle(MapControlStyle()).padding()
       }
-      .overlay(alignment: .bottomTrailing) {
-        if let route, !route.path.isEmpty {
-          Button {
-            cameraIntent.showRoute()
-            updateViewport(size: size)
-          } label: {
-            Label("Ganze Route", systemImage: "arrow.up.left.and.arrow.down.right")
+      .overlay(alignment: .topLeading) {
+        if tileLoader.isLoading,
+          !keys.contains(where: { tileLoader.cache.tile(for: $0, owner: request.owner) != nil })
+        {
+          HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text("Karte wird geladen …").font(.caption)
           }
-          .buttonStyle(.borderedProminent)
-          .padding(.trailing, 16)
-          .padding(.bottom, 32)
+          .padding(10).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+          .padding()
+          .accessibilityElement(children: .combine)
+          .allowsHitTesting(false)
         }
       }
       .overlay(alignment: .bottomLeading) {
-        VStack(alignment: .leading) {
+        VStack(alignment: .leading, spacing: 6) {
+          if let scale = OfflineMapScale.make(latitude: center.lat, zoom: zoom) {
+            VStack(alignment: .leading, spacing: 2) {
+              Text(scale.label).font(.caption2.monospacedDigit())
+              Path { path in
+                path.move(to: CGPoint(x: 0, y: 0))
+                path.addLine(to: CGPoint(x: 0, y: 4))
+                path.addLine(to: CGPoint(x: scale.width, y: 4))
+                path.addLine(to: CGPoint(x: scale.width, y: 0))
+              }.stroke(lineWidth: 1.5).frame(width: scale.width, height: 5)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Maßstab: \(scale.label)")
+          }
           let failed = tileLoader.failures(owner: request.owner, keys: keys)
           if failed > 0 {
             Text(failed == 1 ? "Eine Kartenkachel fehlt." : "\(failed) Kartenkacheln fehlen.")
               .font(.caption)
             Button("Erneut laden", systemImage: "arrow.clockwise") { retry += 1 }
+              .frame(minHeight: 44)
               .disabled(tileLoader.isLoading)
           }
           Link(
@@ -284,8 +309,8 @@ public struct OfflineMap: View {
       )
       .accessibilityHint(
         onSelect == nil
-          ? "Mit Plus und Minus zoomen. Mit dem Regionsknopf die ganze Region anzeigen."
-          : "Mit Plus und Minus zoomen. Punkte für eine Route auswählen. A markiert den Start, B das Ziel."
+          ? "Doppeltippen oder mit Plus und Minus zoomen. Mit dem Regionsknopf die ganze Region anzeigen."
+          : "Doppeltippen oder mit Plus und Minus zoomen. Antippen wählt einen Ort. A markiert den Start, B das Ziel."
       )
     }
   }
@@ -303,10 +328,14 @@ public struct OfflineMap: View {
     @Environment(\.isEnabled) private var isEnabled
     func makeBody(configuration: Configuration) -> some View {
       configuration.label
-        .foregroundStyle(.white)
-        .background(
-          Color.accentColor.opacity(isEnabled ? (configuration.isPressed ? 0.7 : 1) : 0.35),
-          in: RoundedRectangle(cornerRadius: 8))
+        .foregroundStyle(.primary)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .overlay {
+          RoundedRectangle(cornerRadius: 10)
+            .strokeBorder(.primary.opacity(configuration.isPressed ? 0.3 : 0.12))
+        }
+        .opacity(isEnabled ? (configuration.isPressed ? 0.65 : 1) : 0.4)
+        .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
     }
   }
   @ViewBuilder private func controls(size: CGSize) -> some View {
@@ -316,6 +345,7 @@ public struct OfflineMap: View {
     } label: {
       Image(systemName: "plus").frame(width: 44, height: 44)
     }.accessibilityLabel("Vergrößern")
+      .help("Karte vergrößern")
       .disabled(zoom >= maximumDisplayZoom)
     Button {
       navigate()
@@ -323,6 +353,7 @@ public struct OfflineMap: View {
     } label: {
       Image(systemName: "minus").frame(width: 44, height: 44)
     }.accessibilityLabel("Verkleinern")
+      .help("Karte verkleinern")
       .disabled(zoom <= engine.manifest.minZoom)
     Button {
       cameraIntent.showRegion()
@@ -330,17 +361,27 @@ public struct OfflineMap: View {
     } label: {
       Image(systemName: "scope").frame(width: 44, height: 44)
     }.accessibilityLabel("Ganze Region anzeigen")
+      .help("Ganze Offline-Region anzeigen")
+    if let route, !route.path.isEmpty {
+      Button {
+        cameraIntent.showRoute()
+        updateViewport(size: size)
+      } label: {
+        Image(systemName: "arrow.up.left.and.arrow.down.right").frame(width: 44, height: 44)
+      }.accessibilityLabel("Ganze Route anzeigen")
+        .help("Ganze Route anzeigen")
+    }
   }
-  private func labelStyle(for style: PreparedMapTile.Style) -> (
+  private func labelStyle(for style: PreparedMapTile.Label.Style) -> (
     size: CGFloat, priority: Int, bold: Bool
   )? {
     switch style {
     case .place(let kind):
       switch kind {
-      case "city": return (zoom >= 11 ? 17 : 15, 0, true)
-      case "town": return (zoom >= 12 ? 15 : 13, 1, true)
-      case "village": return (13, 2, true)
-      default: return (12, 3, false)
+      case .city: return (zoom >= 11 ? 17 : 15, 0, true)
+      case .town: return (zoom >= 12 ? 15 : 13, 1, true)
+      case .village: return (13, 2, true)
+      case .other: return (12, 3, false)
       }
     case .road(let major) where zoom >= (major ? 12 : 13):
       return (zoom >= 14 ? 12 : 11, major ? 4 : 5, false)
@@ -348,19 +389,16 @@ public struct OfflineMap: View {
     }
   }
   private func drawLabels(_ labels: [MapLabel], context: inout GraphicsContext, size: CGSize) {
+    let controlLength: CGFloat = route?.path.isEmpty == false ? 232 : 180
     let controlsSize =
-      size.height >= 180
-      ? CGSize(width: 76, height: 180) : CGSize(width: 180, height: 76)
+      size.height >= controlLength
+      ? CGSize(width: 76, height: controlLength) : CGSize(width: controlLength, height: 76)
     var obstacles = [
       CGRect(
         x: max(0, size.width - controlsSize.width), y: 0, width: controlsSize.width,
         height: controlsSize.height),
       CGRect(x: 0, y: max(0, size.height - 80), width: min(size.width, 260), height: 80),
     ]
-    if route != nil {
-      obstacles.append(
-        CGRect(x: max(0, size.width - 200), y: max(0, size.height - 90), width: 200, height: 90))
-    }
     for coordinate in displayedMarkers.map(\.coordinate)
       + [selection, userLocation].compactMap({ $0 })
     where coordinate.lat.isFinite && coordinate.lon.isFinite {
