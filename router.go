@@ -1725,6 +1725,13 @@ func (h *routeHeuristic) estimate(r *Router, from int64) float64 {
 		return 0
 	}
 	a, _ := r.g.coord(from)
+	return h.estimateCoordinate(a)
+}
+
+func (h *routeHeuristic) estimateCoordinate(a Coord) float64 {
+	if h.disabled {
+		return 0
+	}
 	dLat := deg2rad(h.target.Lat - a.Lat)
 	dLon := deg2rad(h.target.Lon - a.Lon)
 	sinLat, sinLon := math.Sin(dLat/2), math.Sin(dLon/2)

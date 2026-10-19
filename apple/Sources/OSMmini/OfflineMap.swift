@@ -141,7 +141,7 @@ public struct OfflineMap: View {
             guard CGRect(origin: .zero, size: canvasSize).contains(point) else { continue }
             labels.append(
               MapLabel(
-                name: label.name, point: point,
+                name: label.name, key: label.key, point: point,
                 size: style.size, priority: style.priority, bold: style.bold))
           }
         }
@@ -351,6 +351,7 @@ public struct OfflineMap: View {
   }
   private struct MapLabel {
     let name: String
+    let key: OfflineMapLabelLayout.Key
     let point: CGPoint
     let size: CGFloat
     let priority: Int
@@ -440,7 +441,7 @@ public struct OfflineMap: View {
     }
     var layout = OfflineMapLabelLayout(obstacles: obstacles, viewport: size)
     for label in labels.sorted(by: { $0.priority < $1.priority }) {
-      guard layout.canPlace(name: label.name, at: label.point, viewport: size) else { continue }
+      guard layout.canPlace(key: label.key, at: label.point, viewport: size) else { continue }
       let text = context.resolve(
         Text(label.name).font(.system(size: label.size, weight: label.bold ? .semibold : .regular))
           .foregroundStyle(.black))
@@ -448,7 +449,7 @@ public struct OfflineMap: View {
       let frame = CGRect(
         x: label.point.x - measured.width / 2, y: label.point.y - measured.height / 2,
         width: measured.width, height: measured.height)
-      guard layout.reserve(name: label.name, frame: frame, viewport: size) else { continue }
+      guard layout.reserve(key: label.key, frame: frame, viewport: size) else { continue }
       context.fill(
         Path(roundedRect: frame.insetBy(dx: -3, dy: -1), cornerRadius: 3),
         with: .color(.white.opacity(label.bold ? 0.92 : 0.86)))

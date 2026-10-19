@@ -150,6 +150,28 @@ private struct PreviousMapFeature {
   #expect(tile.labels[0].name == "Straße")
 }
 
+@Test func preparedLabelKeysKeepDisplayNamesAndCanonicalDuplicates() throws {
+  let names = ["  Straẞe \n", "STRAẞE", "Landshut", " LANDSHUT\t", " \n"]
+  let tile = try PreparedMapTile(
+    VectorTile(
+      features: names.map { name in
+        mapFeature("place", kind: 1, classification: "city", name: name, paths: [[[1024, 1024]]])
+      }))
+  #expect(tile.labels.map(\.name) == names)
+  #expect(tile.labels[0].key == tile.labels[1].key)
+  #expect(tile.labels[2].key == tile.labels[3].key)
+  let viewport = CGSize(width: 390, height: 600)
+  var layout = OfflineMapLabelLayout(viewport: viewport)
+  let reserved = layout.reserve(
+    key: tile.labels[0].key, frame: CGRect(x: 20, y: 20, width: 80, height: 20),
+    viewport: viewport)
+  #expect(reserved)
+  #expect(
+    !layout.canPlace(key: tile.labels[1].key, at: CGPoint(x: 200, y: 200), viewport: viewport))
+  #expect(
+    !layout.canPlace(key: tile.labels[4].key, at: CGPoint(x: 200, y: 200), viewport: viewport))
+}
+
 @Test func preparedMapCacheIsBoundedAndRejectsOldRegionOrViewportWork() throws {
   final class Owner {}
   let first = Owner()

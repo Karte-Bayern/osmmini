@@ -492,6 +492,39 @@ once per query. Turn-aware searches also reuse the incoming bearing and crossing
 cost for all outgoing edges of a search state. These changes apply to both
 in-memory and file-backed graphs.
 
+Node-based queries on compact file graphs now retain their existing 32-bit
+table indices throughout the search. They avoid repeated binary searches from
+OSM IDs to adjacency/coordinate records and use smaller lazy distance and
+predecessor maps. Original OSM IDs are restored in the returned path. Legacy
+graphs, territory-cost policies and turn-aware queries retain their existing
+search paths; profile access, vehicle limits, cancellation and error semantics
+are unchanged. No graph rewrite or new region format is needed.
+
+On the same complete Niederbayern graph, three alternating five-query samples
+compared commit `387d4b8` with the indexed search on an M2 Max. Median full-route
+measurements for Passau Hbf–Landshut Hbf were:
+
+| Query | Before | Indexed | Reduction |
+| --- | ---: | ---: | ---: |
+| Car, distance objective | 177.5 ms | 107.6 ms | 39.4% |
+| Car, duration objective | 272.8 ms | 159.0 ms | 41.7% |
+| Allocated bytes, distance route | 38.04 MB | 28.87 MB | 24.1% |
+
+All returned path IDs, distances, durations and costs matched the previous
+implementation exactly. Bytes are cumulative allocations per query, not peak
+RSS. These warmed desktop samples do not establish iPhone latency. The opt-in
+`BenchmarkRealGraphStorageRouting` below reproduces the query workload.
+
+Swift's prepared map labels also retain their normalized deduplication key.
+Drawing reuses it instead of trimming/lowercasing each candidate every frame.
+The previous label-placement oracle still checks identical accepted labels.
+Three alternating 120-frame Release samples reduced CPU placement time for
+500 phone candidates from 22.61 to 9.27 ms and for 3,000 tablet candidates from
+171.92 to 70.29 ms (about 59%). This excludes Canvas text measurement/drawing
+and GPU work. A cached label retains an additional 16-byte String value plus
+normalized text storage; unlabelled feature records do not grow. See the
+[Swift map benchmarks](apple/README.md) for the command and memory tradeoff.
+
 PBF graph imports count valid outgoing edges first and allocate one exact-sized
 edge buffer, with capped slices per node. This reduces small allocations and
 unused capacity for both server and mobile imports. Mobile search preparation

@@ -32,8 +32,16 @@ private struct LinearLabelLayout {
 
 private struct LabelCandidate {
   let name: String
+  let key: OfflineMapLabelLayout.Key
   let point: CGPoint
   let frame: CGRect
+
+  init(name: String, point: CGPoint, frame: CGRect) {
+    self.name = name
+    key = OfflineMapLabelLayout.Key(name)
+    self.point = point
+    self.frame = frame
+  }
 }
 
 private func labelObstacles(in viewport: CGSize) -> [CGRect] {
@@ -80,13 +88,13 @@ private func labelCandidates(viewport: CGSize, count: Int, duplicateNames: Bool 
           let canPlace = expected.canPlace(
             name: candidate.name, at: candidate.point, viewport: viewport)
           #expect(
-            actual.canPlace(name: candidate.name, at: candidate.point, viewport: viewport)
+            actual.canPlace(key: candidate.key, at: candidate.point, viewport: viewport)
               == canPlace)
           guard canPlace else { continue }
           let reserved = expected.reserve(
             name: candidate.name, frame: candidate.frame, viewport: viewport)
           #expect(
-            actual.reserve(name: candidate.name, frame: candidate.frame, viewport: viewport)
+            actual.reserve(key: candidate.key, frame: candidate.frame, viewport: viewport)
               == reserved)
           if reserved { accepted += 1 }
         }
@@ -157,11 +165,11 @@ private func labelCandidates(viewport: CGSize, count: Int, duplicateNames: Bool 
     for viewport in [configuredViewport, CGSize(width: 800, height: 800)] {
       for (index, candidate) in labelCandidates(viewport: viewport, count: 500).enumerated() {
         #expect(
-          actual.canPlace(name: candidate.name, at: candidate.point, viewport: viewport)
+          actual.canPlace(key: candidate.key, at: candidate.point, viewport: viewport)
             == expected.canPlace(name: candidate.name, at: candidate.point, viewport: viewport))
         // Direct reservations also cover callers that skip the point preflight.
         #expect(
-          actual.reserve(name: candidate.name, frame: candidate.frame, viewport: viewport)
+          actual.reserve(key: candidate.key, frame: candidate.frame, viewport: viewport)
             == expected.reserve(name: candidate.name, frame: candidate.frame, viewport: viewport))
         let duplicate = "  \(candidate.name.uppercased())\n"
         #expect(
@@ -220,17 +228,18 @@ private func labelCandidates(viewport: CGSize, count: Int, duplicateNames: Bool 
     var actual = OfflineMapLabelLayout(obstacles: obstacles, viewport: configuredViewport)
     for candidate in labelCandidates(viewport: viewport, count: 500) {
       #expect(
-        actual.canPlace(name: candidate.name, at: candidate.point, viewport: viewport)
+        actual.canPlace(key: candidate.key, at: candidate.point, viewport: viewport)
           == expected.canPlace(name: candidate.name, at: candidate.point, viewport: viewport))
       #expect(
-        actual.reserve(name: candidate.name, frame: candidate.frame, viewport: viewport)
+        actual.reserve(key: candidate.key, frame: candidate.frame, viewport: viewport)
           == expected.reserve(name: candidate.name, frame: candidate.frame, viewport: viewport))
     }
   }
 }
 
 private func replayLabelLayout(
-  candidates: [LabelCandidate], viewport: CGSize, frames: Int, indexed: Bool
+  candidates: [LabelCandidate], viewport: CGSize, frames: Int, indexed: Bool,
+  cachedKeys: Bool = false
 ) -> Int {
   var accepted = 0
   for frame in 0..<frames {
@@ -243,17 +252,48 @@ private func replayLabelLayout(
       let rectangle = candidate.frame.offsetBy(dx: offset, dy: offset)
       let canPlace =
         indexed
-        ? optimized.canPlace(name: candidate.name, at: point, viewport: viewport)
+        ? (cachedKeys
+          ? optimized.canPlace(key: candidate.key, at: point, viewport: viewport)
+          : optimized.canPlace(name: candidate.name, at: point, viewport: viewport))
         : reference.canPlace(name: candidate.name, at: point, viewport: viewport)
       guard canPlace else { continue }
       let reserved =
         indexed
-        ? optimized.reserve(name: candidate.name, frame: rectangle, viewport: viewport)
+        ? (cachedKeys
+          ? optimized.reserve(key: candidate.key, frame: rectangle, viewport: viewport)
+          : optimized.reserve(name: candidate.name, frame: rectangle, viewport: viewport))
         : reference.reserve(name: candidate.name, frame: rectangle, viewport: viewport)
       if reserved { accepted += 1 }
     }
   }
   return accepted
+}
+
+@Test(.enabled(if: ProcessInfo.processInfo.environment["OSMMINI_MAP_BENCHMARK"] == "1"))
+func mapLabelKeyBenchmark() {
+  let clock = ContinuousClock()
+  for (name, viewport, count, duplicates) in [
+    ("sparse phone", CGSize(width: 390, height: 600), 12, false),
+    ("phone", CGSize(width: 390, height: 600), 500, false),
+    ("phone repeated roads", CGSize(width: 390, height: 600), 500, true),
+    ("dense tablet", CGSize(width: 1024, height: 1366), 3000, false),
+  ] {
+    let candidates = labelCandidates(viewport: viewport, count: count, duplicateNames: duplicates)
+    for pass in 0..<3 {
+      var counts: [Int] = []
+      for cached in pass.isMultiple(of: 2) ? [false, true] : [true, false] {
+        let begin = clock.now
+        counts.append(
+          replayLabelLayout(
+            candidates: candidates, viewport: viewport, frames: 120, indexed: true,
+            cachedKeys: cached))
+        print(
+          "Label keys pass \(pass+1), \(name), cached=\(cached): \(begin.duration(to:clock.now)) / 120 frames"
+        )
+      }
+      #expect(counts[0] == counts[1])
+    }
+  }
 }
 
 @Test(.enabled(if: ProcessInfo.processInfo.environment["OSMMINI_MAP_BENCHMARK"] == "1"))

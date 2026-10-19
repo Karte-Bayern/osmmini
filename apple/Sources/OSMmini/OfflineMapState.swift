@@ -234,8 +234,16 @@ struct OfflineMapMarker {
 }
 
 struct OfflineMapLabelLayout {
+  /// Retain the exact previous normalization, but do it when a tile is prepared
+  /// rather than once or twice per candidate on every drawn frame.
+  struct Key: Hashable, Sendable {
+    fileprivate let value: String
+    init(_ name: String) {
+      value = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+  }
   private var occupied: [CGRect]
-  private var names: Set<String> = []
+  private var names: Set<Key> = []
   private let viewport: CGSize?
   private var collisionIndex: CollisionIndex?
 
@@ -249,20 +257,34 @@ struct OfflineMapLabelLayout {
 
   /// Reject cheap cases before resolving and measuring Canvas text.
   func canPlace(name: String, at point: CGPoint, viewport: CGSize) -> Bool {
+    anchorIsAvailable(point, viewport: viewport) && canUse(Key(name))
+  }
+
+  func canPlace(key: Key, at point: CGPoint, viewport: CGSize) -> Bool {
+    anchorIsAvailable(point, viewport: viewport) && canUse(key)
+  }
+
+  private func canUse(_ key: Key) -> Bool {
+    !key.value.isEmpty && !names.contains(key)
+  }
+
+  private func anchorIsAvailable(_ point: CGPoint, viewport: CGSize) -> Bool {
     guard point.x.isFinite, point.y.isFinite,
       CGRect(origin: .zero, size: viewport).insetBy(dx: 6, dy: 6).contains(point),
       !(collisionIndex?.contains(point, in: occupied)
         ?? occupied.contains(where: { $0.contains(point) }))
     else { return false }
-    let name = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    return !name.isEmpty && !names.contains(name)
+    return true
   }
 
   /// A viewport-wide layout keeps adjacent tiles from drawing duplicate or
   /// overlapping names. Only successfully placed labels claim their name.
   mutating func reserve(name: String, frame: CGRect, viewport: CGSize) -> Bool {
-    let name = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    guard !name.isEmpty, !names.contains(name), frame.origin.x.isFinite,
+    reserve(key: Key(name), frame: frame, viewport: viewport)
+  }
+
+  mutating func reserve(key: Key, frame: CGRect, viewport: CGSize) -> Bool {
+    guard canUse(key), frame.origin.x.isFinite,
       frame.origin.y.isFinite, frame.width.isFinite, frame.height.isFinite,
       frame.width > 0, frame.height > 0,
       CGRect(origin: .zero, size: viewport).insetBy(dx: 6, dy: 6).contains(frame)
@@ -278,7 +300,7 @@ struct OfflineMapLabelLayout {
     } else if occupied.count == 16, let viewport = self.viewport {
       collisionIndex = CollisionIndex(occupied, viewport: viewport)
     }
-    names.insert(name)
+    names.insert(key)
     return true
   }
 

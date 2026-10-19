@@ -337,7 +337,11 @@ name or label-anchor storage; settlements retain just a label, with no drawing
 path. On arm64, geometry metadata occupies 40 bytes per feature instead of 104
 bytes. A 1,024-building tile therefore uses 40,960 rather than 106,496 bytes of
 record storage, excluding paths and cache overhead. Named roads additionally
-use a 40-byte label record. Geometry precision and detail are unchanged.
+use a 56-byte label record, including a prepared name-deduplication key.
+The extra 16-byte String value and normalized text storage avoid repeating
+Foundation trimming/lowercasing in each frame. Key preparation runs with the
+rest of tile preparation on the worker. Display names, geometry precision,
+duplicate-name semantics and detail are unchanged.
 
 Dense tiles also prepare a small spatial index on the worker. When panning or
 zooming into part of a tile, the renderer skips geometry in invisible cells
@@ -360,6 +364,7 @@ OSMMINI_MAP_BENCHMARK=1 swift test --package-path apple -c release --filter mapG
 OSMMINI_MAP_BENCHMARK=1 swift test --package-path apple -c release --filter offlineMapLoadingBenchmark
 OSMMINI_MAP_BENCHMARK=1 swift test --package-path apple -c release --filter mapCullingReplayBenchmark
 OSMMINI_MAP_BENCHMARK=1 swift test --package-path apple -c release --filter mapLabelLayoutBenchmark
+OSMMINI_MAP_BENCHMARK=1 swift test --package-path apple -c release --filter mapLabelKeyBenchmark
 OSMMINI_BENCHMARKS=1 swift test --package-path apple -c release --filter catalogPreparedSearchBenchmark
 ```
 
@@ -410,6 +415,24 @@ and from 843 to 467 ms for 3,000 tablet candidates per frame (45%). Sparse
 phone layout remained under 1 ms for the complete 120-frame run. Median catalog
 filtering time for all 150 queries fell from 1,203 to 155 ms (87%), with 7.8 ms
 of one-time preparation. These figures describe synthetic CPU workloads on a Mac.
+
+The prepared-key benchmark isolates the further name-normalization improvement
+with the same indexed collision layout on both sides. On macOS arm64 in Release
+mode (2026-10-20), three alternating 120-frame samples gave medians of
+22.61 → 9.27 ms for 500 phone candidates and 171.92 → 70.29 ms for 3,000 tablet
+candidates, about 59% less CPU time. Sparse-phone placement remained under
+1 ms for all 120 frames. All accepted-label counts matched. Key construction
+is done once outside these redraw measurements; the retained-label storage
+tradeoff is described above. These are placement measurements, excluding text
+measurement, Canvas/GPU output and whole-app frame rate.
+
+The shared Go router also keeps compact file-graph node indices through
+turn-free searches. On the complete Niederbayern graph, full station-to-station
+car routes decreased from 177.5 to 107.6 ms (distance objective) and from 272.8
+to 159.0 ms (duration objective), with exactly matching paths and metrics.
+Cumulative allocation decreased from about 38 to 29 MB per route. These are
+alternating desktop query samples; see the [Go measurements](../README.md#shared-go-core-performance).
+Existing regions use this search optimization without reimporting.
 
 `Geofabrik` retains its decoded catalog in memory after the first load. Overlapping
 catalog refreshes share the result. Concurrent downloads of the same PBF URL

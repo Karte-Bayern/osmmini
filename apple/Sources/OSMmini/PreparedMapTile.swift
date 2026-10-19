@@ -26,8 +26,16 @@ struct PreparedMapTile: Sendable {
       case place(Place)
     }
     let name: String
+    let key: OfflineMapLabelLayout.Key
     let point: CGPoint
     let style: Style
+
+    init(name: String, point: CGPoint, style: Style) {
+      self.name = name
+      key = OfflineMapLabelLayout.Key(name)
+      self.point = point
+      self.style = style
+    }
   }
 
   let features: [Feature]

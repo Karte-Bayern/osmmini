@@ -14,6 +14,9 @@ func needsTurnState(opt RouteOptions) bool {
 }
 
 func (r *Router) nodeSearch(ctx context.Context, from, to int64, opt RouteOptions, wantPath bool) ([]int64, float64, error) {
+	if r.g.store != nil && r.g.store.compact && opt.TerritoryCost == nil {
+		return r.indexNodeSearch(ctx, from, to, opt, wantPath)
+	}
 	if from == to {
 		if wantPath {
 			return []int64{from}, 0, nil
@@ -38,8 +41,8 @@ func (r *Router) nodeSearch(ctx context.Context, from, to int64, opt RouteOption
 		prev = make(map[int64]int64, min(64, r.NodeCount()))
 	}
 	dist[from] = 0
-	pq := nodeValueHeap{}
-	pq.push(nodeCandidate{id: from, dist: 0, priority: heuristic.estimate(r, from)})
+	pq := nodeValueHeap[int64]{}
+	pq.push(nodeCandidate[int64]{id: from, dist: 0, priority: heuristic.estimate(r, from)})
 	for pops := 0; len(pq) > 0; pops++ {
 		if ctx != nil && pops%256 == 0 {
 			if err := ctx.Err(); err != nil {
@@ -77,20 +80,20 @@ func (r *Router) nodeSearch(ctx context.Context, from, to int64, opt RouteOption
 			if wantPath {
 				prev[edge.To] = current.id
 			}
-			pq.push(nodeCandidate{id: edge.To, dist: cost, priority: cost + heuristic.estimate(r, edge.To)})
+			pq.push(nodeCandidate[int64]{id: edge.To, dist: cost, priority: cost + heuristic.estimate(r, edge.To)})
 		}
 	}
 	return nil, 0, ErrRouteNoPath
 }
 
-type nodeCandidate struct {
-	id             int64
+type nodeCandidate[ID ~int64 | ~uint32] struct {
+	id             ID
 	dist, priority float64
 }
 
-type nodeValueHeap []nodeCandidate
+type nodeValueHeap[ID ~int64 | ~uint32] []nodeCandidate[ID]
 
-func (h *nodeValueHeap) push(v nodeCandidate) {
+func (h *nodeValueHeap[ID]) push(v nodeCandidate[ID]) {
 	*h = append(*h, v)
 	i := len(*h) - 1
 	for i > 0 {
@@ -104,7 +107,7 @@ func (h *nodeValueHeap) push(v nodeCandidate) {
 	(*h)[i] = v
 }
 
-func (h *nodeValueHeap) pop() nodeCandidate {
+func (h *nodeValueHeap[ID]) pop() nodeCandidate[ID] {
 	a := *h
 	out, last := a[0], a[len(a)-1]
 	a = a[:len(a)-1]
