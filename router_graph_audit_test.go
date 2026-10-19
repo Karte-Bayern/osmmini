@@ -93,6 +93,13 @@ func TestRealGraphEdgeRedundancy(t *testing.T) {
 		fmt.Printf("REAL GRAPH duplicate_class %s=%d\n", highway, byHighway[highway])
 	}
 	fmt.Printf("REAL GRAPH duplicate_examples=%v\n", examples)
+	d := router.g.store
+	if d.chainsOffset != 0 {
+		chains, vertices := binary.LittleEndian.Uint64(d.data[80:]), binary.LittleEndian.Uint64(d.data[88:])
+		oldEdgeBytes := d.edgeCount * graphEdgeSize
+		packedEdgeBytes := d.storedEdges*graphEdgeSize + int(chains)*graphChainSize + int(vertices)*graphChainVertexSize
+		fmt.Printf("REAL GRAPH CHAIN STORAGE explicit_directed_edges=%d chain_records=%d chain_vertices=%d logical_directed_edges=%d adjacency_bytes=%d→%d saved_bytes=%d graph_bytes=%d\n", d.storedEdges, chains, vertices, d.edgeCount, oldEdgeBytes, packedEdgeBytes, oldEdgeBytes-packedEdgeBytes, len(d.data))
+	}
 }
 
 type graphAuditEdgeKey struct {

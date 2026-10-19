@@ -483,16 +483,31 @@ temporary files out of the published package.
 
 ## Offline storage
 
-New imports write region format 3, using compact graph, prefix-index and
-compressed search files. Format 1/2 regions remain readable. The Swift query API
+New imports write region format 4, using chain-packed graph, prefix-index and
+compressed search files. Format 1–3 regions remain readable. The Swift query API
 is unchanged; update the native framework together with the Swift sources.
-Older SDKs cannot open format 3 packages.
+Older SDKs cannot open format 4 packages.
 
 The graph stores 32-byte nodes, 16-byte edges and 12-byte spatial entries.
-Edges refer to internal node indices and shared 32-byte attribute records.
+Ordinary edges refer to internal node indices and shared 32-byte attribute records.
+Long bidirectional degree-two chains share 16-byte chain records and 12-byte
+vertices instead of storing two complete edges at every interior node.
+Short chains, branches and road-attribute changes retain ordinary edges.
 Original signed 64-bit OSM IDs and all coordinate/distance/attribute float bits
 are preserved. The graph stays memory-mapped; it does not expand into maps on
 opening. Copying an already file-backed graph preserves its existing format.
+
+The complete Niederbayern reimport on 2026-10-20 reduced the graph from
+163,090,371 to 140,182,031 bytes and the entire zoom-5–14 package from
+267,635,432 to 244,727,092 bytes: **22.91 MB saved**. All 2,096,430 nodes and
+4,307,453 logical directed edges remain available. Explicit edge records fall
+to 1,252,231 by sharing 191,097 chains. Every coordinate/ordered edge bit and
+both Passau Hbf–Landshut Hbf route results matched the previous graph.
+Search checksums stayed identical. Query allocations and routing times remain
+roughly unchanged; this does not establish physical-iPhone RAM savings.
+See the [chain storage measurements](../README.md#lossless-road-chain-storage)
+for exact sizes, compatibility and reproducible comparisons. Reimport into a
+new destination to obtain this representation.
 
 The search index uses byte-prefix terms and varint offsets/lengths in blocks of
 at most 128 postings. A small fixed-width directory stays on disk for binary
@@ -506,7 +521,7 @@ records crossing block boundaries use a query-local buffer capped at 1 MiB.
 Legacy raw JSONL remains readable. Logical JSON records and vector map detail
 are unchanged.
 
-A full import on 2026-10-19 compared commit `0054781` with the compact format,
+A full import on 2026-10-19 compared commit `0054781` with format 3,
 using the same Niederbayern PBF, zooms 5–14 and a 256 MiB tile-writer budget:
 
 | Files | Previous | Compact |

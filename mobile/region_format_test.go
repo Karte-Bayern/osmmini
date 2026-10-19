@@ -21,7 +21,7 @@ func TestRegionReaderAcceptsPreviousManifestWithoutReplacingIt(t *testing.T) {
 		t.Fatalf("new imports use format %d, want %d", manifest.Format, FormatVersion)
 	}
 	path := filepath.Join(destination, "manifest.json")
-	for _, format := range []int{1, 2, FormatVersion} {
+	for _, format := range []int{1, 2, 3, FormatVersion} {
 		manifest.Format = format
 		data, err := json.Marshal(manifest)
 		if err != nil {

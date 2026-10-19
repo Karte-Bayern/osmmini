@@ -21,9 +21,9 @@ public struct RegionBounds: Codable, Sendable {
   }
 }
 public struct RegionManifest: Codable, Sendable {
-  /// Format written by the current importer. Previously published format 1/2
-  /// regions remain readable; reimporting creates the compact representation.
-  public static let currentFormat = 3
+  /// Format written by the current importer. Previously published format 1–3
+  /// regions remain readable; reimporting also packs bidirectional road chains.
+  public static let currentFormat = 4
   public let format: Int, name: String, nodes: Int, edges: Int
   public let bounds: RegionBounds
   public let minZoom: Int, maxZoom: Int

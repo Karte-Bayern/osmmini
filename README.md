@@ -485,7 +485,7 @@ Server and Swift use the same optimized PBF decoder and routing algorithms.
 Without transition penalties, A*/Dijkstra keep one search state per node;
 configured turn/crossing penalties retain the turn-aware search. Both paths
 use value heaps, and short queries start with small search maps. File-backed
-graphs read both `OSMMGR01` and the compact `OSMMGR02`; existing offline regions
+graphs read `OSMMGR01`, `OSMMGR02` and the chain-packed `OSMMGR03`; existing offline regions
 remain readable.
 Profile restrictions, speed scaling and the target latitude cosine are resolved
 once per query. Turn-aware searches also reuse the incoming bearing and crossing
@@ -500,7 +500,7 @@ merging at most 16 runs per pass. Its scratch files are removed on completion,
 cancellation or retry. Graph/search preparation closes before map generation,
 so those phases no longer retain the graph's mapped pages together.
 
-New offline imports use region format 3. Graph edges reference shared attributes
+New offline imports use region format 4. Graph edges reference shared attributes
 and internal node indices, preserving the original 64-bit OSM IDs, coordinates,
 distances and routing behavior. The search index stores prefix-coded terms and
 variable-length offsets in independently readable 128-entry blocks. Search
@@ -572,9 +572,9 @@ corrects that artificial junction classification.
 
 Two-way road segments need edges in both directions. Also, 82.4% of the original
 graph's nodes have two outgoing edges, largely retaining road shape points.
-Removing these requires a representation that preserves geometry, directions
-and routing attributes. Existing regions and import checkpoints remain
-readable; a fresh import applies the cleanup.
+The chain representation below now shares their storage while preserving
+geometry, directions and routing attributes. Existing published regions remain
+readable; reimporting into a new destination applies the current optimizations.
 
 Run the optional audit and original-versus-reimport comparison on existing
 files; neither command downloads or imports data:
@@ -585,6 +585,58 @@ OSMMINI_REAL_GRAPH=/path/to/reimport/graph.bin \
 OSMMINI_ORIGINAL_GRAPH=/path/to/original/graph.bin \
   OSMMINI_REAL_GRAPH=/path/to/reimport/graph.bin \
   go test -run '^TestRealGraphDedupEquivalence$' -count=1 -v .
+```
+
+#### Lossless road-chain storage
+
+`OSMMGR03` packs bidirectional chains with at least three interior nodes.
+Candidates must have exactly two incoming and two outgoing edges, distinct
+neighbors, bit-identical road attributes along the chain, and matching reverse
+distances. Branches, one-way entries, restrictions, parallel variants and
+attribute changes remain ordinary nodes. Rings retain an ordinary anchor.
+Short chains keep the previous representation, so packing never grows the file.
+
+Every original node ID and coordinate remains in the node/spatial tables.
+Chain nodes refer to a shared vertex sequence; segment distances are stored
+once and attributes once per chain. The reader exposes the original directed
+edges in their original order, including exact float bits. Snapping to an
+interior point, routing/turn penalties, street lookup and exported route
+geometry therefore keep their existing behavior. Opening still uses mmap and
+does not expand the chains into an in-memory graph.
+
+A complete reimport of the same Niederbayern PBF on 2026-10-20 packed
+**1,527,611 interior nodes into 191,097 chains**. Explicit directed edge records
+decreased from **4,307,453 to 1,252,231**; the remaining logical edges are
+represented by the shared chains, not deleted road connections.
+
+| Storage | Before chains | With chains | Saved |
+| --- | ---: | ---: | ---: |
+| Adjacency, including chain records/vertices | 68,919,248 B | 46,010,908 B | 33.2% |
+| Entire routing graph | 163,090,371 B | 140,182,031 B | 14.0% |
+| Entire offline region, zooms 5–14 | 267,635,432 B | 244,727,092 B | 8.6% |
+
+The **22,908,340-byte** saving preserves all 2,096,430 coordinates, 4,307,453
+logical edges, 55 incoming-only sinks and 14,956 street entries. A full streaming
+comparison checked every ordered edge bit and coordinate. Both station-to-station
+car routes retained their exact paths, distance, duration and cost; the search
+files retained their checksums and the map artifact its size.
+
+Three five-route benchmark samples on an M2 Max gave distance-route medians
+of 172 ms before versus 176 ms after, and duration-route medians of 280 ms versus
+271 ms. Query allocations stayed about 38 MB per route. This is a storage
+reduction, not a claim of a routing-speed or query-heap improvement.
+
+New packages use region format 4; readers retain formats 1–3. Update the native
+framework with the Swift sources. Published regions and file-backed snapshots
+are not rewritten; use a new import destination to obtain packed chains.
+Older pending import checkpoints remain untouched and require a new destination.
+The optional audits above compare both graph representations. Reproduce the
+route benchmark with:
+
+```sh
+OSMMINI_ORIGINAL_GRAPH=/path/to/before/graph.bin \
+  OSMMINI_REAL_GRAPH=/path/to/packed/graph.bin \
+  go test -run '^$' -bench '^BenchmarkRealGraphStorageRouting$' -benchtime=5x -count=3 -benchmem .
 ```
 
 Large JSON and GeoJSON API responses use pooled, best-speed gzip when the

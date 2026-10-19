@@ -21,11 +21,11 @@ import (
 	osm "simonwaldherr.de/go/osmmini"
 )
 
-const FormatVersion = 3
+const FormatVersion = 4
 
 // Import semantics may change without changing the readable region format.
 // Never mix checkpoints from different graph-building rules.
-const importRevision = 4
+const importRevision = 5
 
 const regionDataNotice = `Map data © OpenStreetMap contributors.
 
