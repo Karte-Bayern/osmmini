@@ -722,10 +722,15 @@ func OpenGraph(path string) (*Router, error) {
 
 // Close releases a file-backed graph. Map-built routers need no cleanup.
 func (r *Router) Close() error {
+	var landmarkErr error
+	if r.landmarks != nil {
+		landmarkErr = r.landmarks.release()
+		r.landmarks = nil
+	}
 	if r.g.store != nil && r.g.store.release != nil {
 		err := r.g.store.release()
 		r.g.store.release = nil
-		return err
+		return errors.Join(landmarkErr, err)
 	}
-	return nil
+	return landmarkErr
 }

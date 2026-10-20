@@ -619,6 +619,7 @@ struct DemoCatalogSearch: Sendable {
     case "checking": "Quelldatei wird geprüft …"
     case "building_graph": "Straßennetz wird aufbereitet …"
     case "loading_graph": "Vorbereitetes Straßennetz wird fortgesetzt …"
+    case "indexing_routing": "Wegfindung wird vorbereitet …"
     case "indexing_search": "Adressen und Orte werden für die Suche aufbereitet …"
     case "validating": "Offline-Region wird abschließend geprüft …"
     case "ready": "Offline-Region ist bereit."

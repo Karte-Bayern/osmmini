@@ -117,6 +117,7 @@ CGO_ENABLED=0 go run ./cmd/prepare-region \
 | --- | --- |
 | `manifest.json` | Version, bounds, source hash and file checksums |
 | `graph.bin` | Memory-mapped routing graph with shared road-chain storage |
+| `routing.alt` | Memory-mapped ALT lower bounds for distance and duration |
 | `search.jsonl`, `search.jsonl.idx` | Compressed records and disk-backed prefix index |
 | `places.jsonl` | Settlement catalog for faster opening in new imports |
 | `basemap.ttiles/` | Local vector-map artifact |
@@ -130,6 +131,11 @@ are preserved by chain packing.
 Published destinations are immutable. Reimport into a new directory to update
 data or obtain the current storage format. Incompatible pending imports need a
 new workspace. Keep `NOTICE.txt` with distributed regions.
+
+New imports prepare two directed landmarks per metric using conservative
+16-bit cost intervals. Older regions remain usable without this optional
+index. Emergency and territory-cost queries use a zero heuristic when their
+costs cannot be bounded by the prepared metrics.
 
 The default import cap is eight million referenced road nodes; change it with
 `-max-import-nodes`. Tile zooms default to 5–14. Node caps and tile-cache budgets

@@ -31,11 +31,11 @@ func (r *Router) indexNodeSearch(ctx context.Context, from, to int64, opt RouteO
 	fromIndex, toIndex := uint32(start), uint32(target)
 	eval := newRouteEvaluator(opt)
 	costs := newCompactRouteCosts(eval)
-	heuristic := newRouteHeuristic(d.coordAt(target), opt)
+	heuristic := r.queryHeuristic(to, d.coordAt(target), opt)
 	labels := newIndexNodeLabels(min(64, d.nodes), wantPath)
 	labels.set(fromIndex, 0, 0)
 	pq := nodeValueHeap[uint32]{}
-	pq.push(nodeCandidate[uint32]{id: fromIndex, priority: heuristic.estimateCoordinate(d.coordAt(start))})
+	pq.push(nodeCandidate[uint32]{id: fromIndex, priority: heuristic.estimateIndex(d, fromIndex)})
 	for pops := 0; len(pq) > 0; pops++ {
 		if ctx != nil && pops%256 == 0 {
 			if err := ctx.Err(); err != nil {
@@ -73,7 +73,7 @@ func (r *Router) indexNodeSearch(ctx context.Context, from, to int64, opt RouteO
 			labels.set(next, cost, current.id)
 			var estimate float64
 			if !heuristic.disabled {
-				estimate = heuristic.estimateCoordinate(d.coordAt(int(next)))
+				estimate = heuristic.estimateIndex(d, next)
 			}
 			pq.push(nodeCandidate[uint32]{id: next, dist: cost, priority: cost + estimate})
 		}

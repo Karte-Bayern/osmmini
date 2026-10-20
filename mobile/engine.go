@@ -25,7 +25,9 @@ const FormatVersion = 4
 
 // Import semantics may change without changing the readable region format.
 // Never mix checkpoints from different graph-building rules.
-const importRevision = 5
+const importRevision = 6
+
+const landmarkFilename = "routing.alt"
 
 const regionDataNotice = `Map data © OpenStreetMap contributors.
 
@@ -193,7 +195,7 @@ func Import(ctx context.Context, o ImportOptions, progress func(Progress)) (Mani
 		manifest.Name = filepath.Base(o.PBF)
 	}
 	report("validating", 0.9)
-	for _, name := range []string{"graph.bin", "search.jsonl", "search.jsonl.idx", placeCatalogFilename} {
+	for _, name := range []string{"graph.bin", "search.jsonl", "search.jsonl.idx", placeCatalogFilename, landmarkFilename} {
 		hash, e := fileHash(ctx, filepath.Join(stage, name))
 		if e != nil {
 			return manifest, e
@@ -266,6 +268,17 @@ func prepareGraphAndSearch(ctx context.Context, o ImportOptions, stage string, r
 		return importGraphInfo{}, err
 	}
 	defer router.Close()
+	report("indexing_routing", 0.32)
+	landmarkPath := filepath.Join(stage, landmarkFilename)
+	if err = router.LoadLandmarks(ctx, landmarkPath); err != nil {
+		if err = ctx.Err(); err != nil {
+			return importGraphInfo{}, err
+		}
+		_ = os.Remove(landmarkPath)
+		if err = router.WriteLandmarks(ctx, landmarkPath); err != nil {
+			return importGraphInfo{}, err
+		}
+	}
 	report("indexing_search", 0.35)
 	if _, err = os.Stat(filepath.Join(stage, "search.ready")); err != nil {
 		if err = buildSearch(ctx, filepath.Join(stage, "search.jsonl"), router, o.PBF); err != nil {
@@ -362,6 +375,10 @@ func Open(ctx context.Context, path string) (*Engine, error) {
 	if hasPlaceCatalog {
 		names = append(names, placeCatalogFilename)
 	}
+	_, hasLandmarks := manifest.Checksums[landmarkFilename]
+	if hasLandmarks {
+		names = append(names, landmarkFilename)
+	}
 	// Integrity checks share one bounded scratch buffer, independent of the
 	// number and size of files. Never skip validation to speed up reopening.
 	hashBuffer := make([]byte, 1<<20)
@@ -381,6 +398,12 @@ func Open(ctx context.Context, path string) (*Engine, error) {
 	r, err := osm.OpenGraph(filepath.Join(path, "graph.bin"))
 	if err != nil {
 		return nil, err
+	}
+	if hasLandmarks {
+		if err := r.LoadLandmarks(ctx, filepath.Join(path, landmarkFilename)); err != nil {
+			r.Close()
+			return nil, err
+		}
 	}
 	search, err := openSearch(filepath.Join(path, "search.jsonl"))
 	if err != nil {

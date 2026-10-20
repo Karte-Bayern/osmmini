@@ -34,7 +34,7 @@ func (r *Router) nodeSearch(ctx context.Context, from, to int64, opt RouteOption
 		return nil, 0, ErrRouteStartUnreachable
 	}
 	eval := newRouteEvaluator(opt)
-	heuristic := newRouteHeuristic(target, opt)
+	heuristic := r.queryHeuristic(to, target, opt)
 	dist := make(map[int64]float64, min(64, r.NodeCount()))
 	var prev map[int64]int64
 	if wantPath {

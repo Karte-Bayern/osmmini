@@ -278,6 +278,7 @@ type Router struct {
 	streetNameByNode map[int64]string
 	idx              *spatialIndex
 	bounds           *CoordWindow
+	landmarks        *landmarkIndex
 
 	// CH data
 	ch *chData
@@ -1627,7 +1628,7 @@ func (r *Router) astar(ctx context.Context, from, to int64, opt RouteOptions, wa
 	}
 
 	eval := newRouteEvaluator(opt)
-	heuristic := newRouteHeuristic(target, opt)
+	heuristic := r.queryHeuristic(to, target, opt)
 	start := turnState{prev: 0, cur: from}
 	gScore := make(map[turnState]float64, min(64, r.NodeCount()))
 	gScore[start] = 0
@@ -1704,17 +1705,21 @@ func reconstructPathTurnState(goal turnState, came map[turnState]turnState) []in
 // A route's target never changes. Reuse its latitude cosine across all
 // estimates while keeping the same great-circle formula and cost units.
 type routeHeuristic struct {
-	target      Coord
-	cosLatitude float64
-	objective   Objective
-	maxSpeedKph float64
-	disabled    bool
+	target         Coord
+	cosLatitude    float64
+	objective      Objective
+	maxSpeedKph    float64
+	disabled       bool
+	landmarks      *landmarkIndex
+	landmarkTarget [8]uint16
+	landmarkScale  float64
+	landmarkTime   bool
 }
 
 func newRouteHeuristic(target Coord, opt RouteOptions) routeHeuristic {
 	h := routeHeuristic{
 		target: target, objective: opt.Objective, maxSpeedKph: opt.Weights.MaxSpeedKph,
-		disabled: opt.Engine == EngineDijkstra || opt.Engine == EngineDijkstraNode,
+		disabled: opt.Engine == EngineDijkstra || opt.Engine == EngineDijkstraNode || opt.EmergencyMode || opt.TerritoryCost != nil,
 	}
 	if !h.disabled {
 		h.cosLatitude = math.Cos(deg2rad(target.Lat))
@@ -1725,6 +1730,9 @@ func newRouteHeuristic(target Coord, opt RouteOptions) routeHeuristic {
 func (h *routeHeuristic) estimate(r *Router, from int64) float64 {
 	if h.disabled {
 		return 0
+	}
+	if h.landmarks != nil {
+		return h.estimateIndex(r.g.store, uint32(r.g.store.nodeIndex(from)))
 	}
 	a, _ := r.g.coord(from)
 	return h.estimateCoordinate(a)
