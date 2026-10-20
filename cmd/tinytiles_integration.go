@@ -620,7 +620,11 @@ func (s *server) serveTinyTiles(w http.ResponseWriter, r *http.Request) {
 	// http.ServeMux redirects when a mounted handler receives the outer prefix
 	// in RawPath. Rewrite a request copy explicitly so tinyTiles sees precisely
 	// its documented routes (/tiles, /tilejson.json, /metadata, /sync).
-	request := r.Clone(r.Context())
+	// Match net/http.StripPrefix's shallow request copy: the downstream
+	// handler reads headers and forms, while only the URL needs its own copy.
+	// Clone would duplicate all request headers for every map tile.
+	request := new(http.Request)
+	*request = *r
 	urlCopy := *r.URL
 	urlCopy.Path = strings.TrimPrefix(r.URL.Path, "/tinytiles")
 	if urlCopy.Path == "" {

@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unicode"
@@ -566,7 +567,10 @@ const (
 
 // tileCacheStats tracks hit/miss counters for observability.
 type tileCacheStats struct {
-	memHits  int64
+	// Memory hits are the only counter updated by every warm request. Keep
+	// them independent of the cache write lock so parallel tile reads remain
+	// concurrent. The remaining counters are protected by TileCache.mu.
+	memHits  atomic.Int64
 	diskHits int64
 	fetches  int64
 	errors   int64
@@ -703,7 +707,7 @@ func (tc *TileCache) Stats() map[string]int64 {
 	defer tc.mu.RUnlock()
 	return map[string]int64{
 		"mem_size":  int64(len(tc.mem)),
-		"mem_hits":  tc.stats.memHits,
+		"mem_hits":  tc.stats.memHits.Load(),
 		"disk_hits": tc.stats.diskHits,
 		"fetches":   tc.stats.fetches,
 		"errors":    tc.stats.errors,
@@ -847,9 +851,7 @@ func (tc *TileCache) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// L1: in-memory
 	if data, contentType, ok := tc.getFromMem(key); ok {
-		tc.mu.Lock()
-		tc.stats.memHits++
-		tc.mu.Unlock()
+		tc.stats.memHits.Add(1)
 		serveTile(w, r, data, contentType)
 		return
 	}

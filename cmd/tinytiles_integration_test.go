@@ -7,12 +7,45 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	tinytiles "github.com/Karte-Bayern/tinyTiles/v2"
 	tiles "github.com/SimonWaldherr/tinySQL/tiles"
 )
+
+func TestServeTinyTilesRewritesOnlyOwnedRequestURL(t *testing.T) {
+	request := httptest.NewRequest(http.MethodHead, "/tinytiles/tiles/14/8804/5656.mvt?rev=a%2Fb", nil).WithContext(t.Context())
+	request.URL.RawPath = "/tinytiles/tiles/14/8804/5656%2Emvt"
+	request.Header.Set("If-None-Match", `"tile-revision"`)
+	request.Header.Set("Accept-Encoding", "gzip")
+	originalURL := *request.URL
+	originalHeader := request.Header.Clone()
+	originalURI := request.RequestURI
+	s := &server{tinyTilesHandler: http.HandlerFunc(func(w http.ResponseWriter, inner *http.Request) {
+		if inner == request || inner.URL == request.URL {
+			t.Fatal("mounted handler must receive its own request and URL")
+		}
+		if inner.URL.Path != "/tiles/14/8804/5656.mvt" || inner.URL.RawPath != "" || inner.URL.RawQuery != originalURL.RawQuery {
+			t.Fatalf("rewritten URL = %s, raw path %q", inner.URL, inner.URL.RawPath)
+		}
+		if inner.Context() != request.Context() || inner.Method != request.Method || inner.RequestURI != originalURI || !reflect.DeepEqual(inner.Header, originalHeader) {
+			t.Fatal("mount lost request context, method, URI or HTTP validators")
+		}
+		inner.URL.Path = "/handler-owned"
+		w.Header().Set("ETag", inner.Header.Get("If-None-Match"))
+		w.WriteHeader(http.StatusNotModified)
+	})}
+	w := httptest.NewRecorder()
+	s.serveTinyTiles(w, request)
+	if !reflect.DeepEqual(*request.URL, originalURL) || !reflect.DeepEqual(request.Header, originalHeader) || request.RequestURI != originalURI {
+		t.Fatal("mounted handler changed the outer request")
+	}
+	if w.Code != http.StatusNotModified || w.Header().Get("ETag") != `"tile-revision"` {
+		t.Fatalf("mounted response lost status or ETag: %d, %v", w.Code, w.Header())
+	}
+}
 
 func TestTinyTilesBuildStatusIncludesPublicProgress(t *testing.T) {
 	s := &server{}

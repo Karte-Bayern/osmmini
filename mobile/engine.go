@@ -522,16 +522,22 @@ func (e *Engine) Tile(ctx context.Context, z, x, y int) (VectorTile, error) {
 		return VectorTile{}, err
 	}
 	data, err := e.tiles.GetTileXYZ(z, x, y)
+	if contextErr := ctx.Err(); contextErr != nil {
+		return VectorTile{}, contextErr
+	}
 	var tile VectorTile
 	if errors.Is(err, tinytiles.ErrTileNotFound) {
 		tile = VectorTile{Features: []VectorFeature{}}
 	} else if err != nil {
 		return VectorTile{}, err
 	} else {
-		tile, err = DecodeVectorTile(data)
+		tile, err = decodeVectorTile(ctx, data)
 		if err != nil {
 			return VectorTile{}, err
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return VectorTile{}, err
 	}
 	tile.Features = append(tile.Features, e.places.features(z, x, y)...)
 	return tile, nil

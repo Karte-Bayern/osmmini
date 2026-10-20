@@ -30,6 +30,22 @@ func BenchmarkTileProxyMemoryHit(b *testing.B) {
 	}
 }
 
+func BenchmarkTileProxyMemoryHitParallel(b *testing.B) {
+	cfg := TileSettings{CacheDir: b.TempDir(), Upstream: "https://maps.example.test/{z}/{x}/{y}.png"}
+	cache := NewTileCache(cfg)
+	defer cache.Close()
+	cache.setInMem(tileCacheKey{source: tileSourceNamespace(cfg), z: 14, x: 8529, y: 5974}, []byte("cached tile"), "image/png")
+	req := httptest.NewRequest(http.MethodGet, "/tiles/14/8529/5974.png", nil)
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		w := tileBenchmarkWriter{header: make(http.Header)}
+		for pb.Next() {
+			cache.ServeHTTP(w, req)
+		}
+	})
+}
+
 func BenchmarkTileDiskCacheRead(b *testing.B) {
 	data := append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte{0}, (64<<10)-8)...)
 	path := filepath.Join(b.TempDir(), "tile")

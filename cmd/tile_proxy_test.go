@@ -125,6 +125,29 @@ func TestTileProxyCoalescesConcurrentMissesAndWarmsBothCaches(t *testing.T) {
 	}
 }
 
+func TestTileProxyCountsConcurrentMemoryHits(t *testing.T) {
+	cache := testTileProxy(t, tileRoundTripper(func(*http.Request) (*http.Response, error) {
+		t.Error("memory hit reached upstream")
+		return tileResponse(nil), nil
+	}))
+	_, source, _ := cache.cfgCopy()
+	cache.setInMem(tileCacheKey{source: source, z: 1, x: 0, y: 0}, encodedPNG(t), "image/png")
+	req := httptest.NewRequest(http.MethodHead, "/tiles/1/0/0.png", nil)
+	var group sync.WaitGroup
+	for range 32 {
+		group.Go(func() {
+			w := tileBenchmarkWriter{header: make(http.Header)}
+			for range 32 {
+				cache.ServeHTTP(w, req)
+			}
+		})
+	}
+	group.Wait()
+	if stats := cache.Stats(); stats["mem_hits"] != 32*32 || stats["mem_size"] != 1 || stats["fetches"] != 0 || stats["errors"] != 0 {
+		t.Fatalf("concurrent memory stats = %v", stats)
+	}
+}
+
 func TestTileProxyCancellationDoesNotCancelOtherWaiters(t *testing.T) {
 	data := encodedPNG(t)
 	release := make(chan struct{})

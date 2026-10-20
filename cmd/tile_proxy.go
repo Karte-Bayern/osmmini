@@ -58,7 +58,7 @@ func (tc *TileCache) loadTile(ctx context.Context, cfg TileSettings, key tileCac
 	// A previous flight may have populated L1 between ServeHTTP's lookup and
 	// acquiring this lock. Avoid starting a redundant disk read in that gap.
 	if e := tc.mem[key]; e != nil && !time.Now().After(e.expiresAt) {
-		tc.stats.memHits++
+		tc.stats.memHits.Add(1)
 		tc.mu.Unlock()
 		return tileResult{data: e.data, contentType: e.contentType}
 	}

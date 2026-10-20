@@ -3,12 +3,175 @@ package mobile
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
+	"math"
+	"math/rand/v2"
+	"os"
 	"reflect"
 	"sync"
 	"testing"
 )
+
+// Cancel at a deterministic checkpoint rather than relying on a timer racing
+// with a fast decoder. Err stays canceled after the chosen checkpoint.
+type vectorCheckpointContext struct {
+	context.Context
+	checks int
+	after  int
+}
+
+func (c *vectorCheckpointContext) Err() error {
+	c.checks++
+	if c.checks >= c.after {
+		return context.Canceled
+	}
+	return nil
+}
+
+func TestVectorGeometryCancellation(t *testing.T) {
+	commands := vectorPacked(9, 0, 0, 2000<<3|2)
+	commands = append(commands, bytes.Repeat([]byte{0}, 4000)...)
+	ctx := &vectorCheckpointContext{Context: context.Background(), after: 1}
+	paths, err := geometry(newValueReader(ctx, commands, 1, 4, nil))
+	if !errors.Is(err, context.Canceled) || paths != nil || ctx.checks != 1 {
+		t.Fatalf("geometry cancellation: %d paths, %v, %d checkpoints", len(paths), err, ctx.checks)
+	}
+	// The public decoder does not retain a previous call's cancellation.
+	if _, err = DecodeVectorTile(vectorTestTile(vectorTestFeature(commands))); err != nil {
+		t.Fatalf("decode after cancellation: %v", err)
+	}
+}
+
+func TestVectorGeometryScratchMatchesExactAndKeepsResultsIndependent(t *testing.T) {
+	for _, vertices := range []int{1, 64, 4095, 4096, 4097, 20000} {
+		for _, closed := range []bool{false, true} {
+			commands := vectorPacked(9, 0, 0)
+			if vertices > 1 {
+				commands = append(commands, vectorPacked(uint64((vertices-1)<<3|2))...)
+				commands = append(commands, bytes.Repeat([]byte{2, 1}, vertices-1)...)
+			}
+			if closed {
+				commands = append(commands, 15)
+			}
+			reader := newValueReader(nil, commands, 1, 4, nil)
+			got, err := geometry(reader)
+			want, wantErr := geometryExact(reader)
+			if err != nil || wantErr != nil || !reflect.DeepEqual(got, want) {
+				t.Fatalf("%d vertices, closed=%t: got %v, want %v", vertices, closed, err, wantErr)
+			}
+			for range 8 {
+				if _, err := geometry(newValueReader(nil, vectorPacked(9, 32, 64, 15), 1, 4, nil)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			clear(commands)
+			if !reflect.DeepEqual(got, want) {
+				t.Fatal("returned geometry aliases the input or reused workspace")
+			}
+			for _, path := range got {
+				if cap(path) != len(path) {
+					t.Fatal("a returned path can overwrite an adjacent path")
+				}
+			}
+		}
+	}
+}
+
+func TestVectorRealGeometryMatchesExact(t *testing.T) {
+	region := os.Getenv("OSMMINI_REAL_REGION")
+	if region == "" {
+		t.Skip("set OSMMINI_REAL_REGION to a prepared Niederbayern region")
+	}
+	e, err := Open(t.Context(), region)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+	features := 0
+	for _, city := range [][2]float64{{48.574, 13.450}, {48.538, 12.152}, {48.832, 12.960}, {48.881, 12.574}} {
+		for _, z := range []int{12, 14} {
+			n := math.Exp2(float64(z))
+			x := int((city[1] + 180) / 360 * n)
+			y := int((1 - math.Asinh(math.Tan(city[0]*math.Pi/180))/math.Pi) / 2 * n)
+			data, err := e.tiles.GetTileXYZ(z, x, y)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(data) > 2 && data[0] == 0x1f && data[1] == 0x8b {
+				data, err = expandVectorGzip(nil, data)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			tile := fieldReader{data: data}
+			for layer, ok := tile.next(); ok; layer, ok = tile.next() {
+				if layer.number != 3 {
+					continue
+				}
+				fields := fieldReader{data: layer.data}
+				for feature, ok := fields.next(); ok; feature, ok = fields.next() {
+					if feature.number != 2 {
+						continue
+					}
+					message := fieldReader{data: feature.data}
+					var data []byte
+					count := 0
+					for field, ok := message.next(); ok; field, ok = message.next() {
+						if field.number == 4 {
+							data, count = field.data, count+1
+						}
+					}
+					reader := newValueReader(nil, data, count, 4, feature.data)
+					got, err := geometry(reader)
+					want, wantErr := geometryExact(reader)
+					if err != nil || wantErr != nil || !reflect.DeepEqual(got, want) {
+						t.Fatalf("z%d/%d/%d feature %d differs: %v, %v", z, x, y, features, err, wantErr)
+					}
+					features++
+				}
+				if fields.err != nil {
+					t.Fatal(fields.err)
+				}
+			}
+			if tile.err != nil {
+				t.Fatal(tile.err)
+			}
+		}
+	}
+	if features == 0 {
+		t.Fatal("city fixtures did not contain geometry")
+	}
+	t.Logf("%d real feature geometries match exact decoding", features)
+}
+
+func TestVectorGzipCancellationKeepsPooledReaderUsable(t *testing.T) {
+	// Incompressible metadata ensures cancellation occurs during inflation,
+	// after the gzip header has been accepted and compressed bytes consumed.
+	metadata := make([]byte, 256<<10)
+	random := rand.New(rand.NewPCG(7, 19))
+	for i := range metadata {
+		metadata[i] = byte(random.Uint32())
+	}
+	data := vectorMessage(3, vectorMessage(1, metadata))
+	compressed := vectorGzip(t, data)
+	ctx := &vectorCheckpointContext{Context: context.Background(), after: 5}
+	if _, err := decodeVectorTile(ctx, compressed); !errors.Is(err, context.Canceled) || ctx.checks != 5 {
+		t.Fatalf("gzip cancellation: %v, %d checkpoints", err, ctx.checks)
+	}
+	want, err := DecodeVectorTile(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		got, err := decodeVectorTile(context.Background(), compressed)
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("gzip after cancellation: %+v, %v", got, err)
+		}
+	}
+}
 
 func vectorTestTile(feature []byte) []byte {
 	// Deliberately put dictionaries and metadata after the feature. Protobuf
@@ -278,6 +441,23 @@ func FuzzDecodeVectorTile(f *testing.F) {
 			t.Skip()
 		}
 		_, _ = DecodeVectorTile(data)
+	})
+}
+
+func FuzzVectorGeometryMatchesExact(f *testing.F) {
+	f.Add(vectorPacked(9, 0, 0, 26, 20, 0, 0, 20, 19, 0, 15))
+	f.Add(vectorPacked(17, 6, 10, 4, 3))
+	f.Add([]byte{9, 0, 0xff})
+	f.Fuzz(func(t *testing.T, data []byte) {
+		if len(data) > 1<<20 {
+			t.Skip()
+		}
+		reader := newValueReader(nil, data, 1, 4, nil)
+		got, err := geometry(reader)
+		want, wantErr := geometryExact(reader)
+		if (err == nil) != (wantErr == nil) || (err != nil && err.Error() != wantErr.Error()) || !reflect.DeepEqual(got, want) {
+			t.Fatalf("geometry %x: %v, %v; want %v, %v", data, got, err, want, wantErr)
+		}
 	})
 }
 
