@@ -84,3 +84,38 @@ func TestRegionLandmarksAreVerifiedAndOptionalForOlderImports(t *testing.T) {
 		t.Fatal("opening legacy region wrote an index")
 	}
 }
+
+func TestIndexedRegionDoesNotSkipManifestGraphChecksum(t *testing.T) {
+	destination := filepath.Join(t.TempDir(), "region")
+	manifest, err := Import(t.Context(), ImportOptions{PBF: fixture(t), Destination: destination, MinZoom: 14, MaxZoom: 14}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	good := manifest.Checksums["graph.bin"]
+	for _, expected := range []string{strings.Repeat("0", 64), "invalid"} {
+		manifest.Checksums["graph.bin"] = expected
+		data, err := json.Marshal(manifest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(destination, "manifest.json"), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Open(t.Context(), destination); err == nil || !strings.Contains(err.Error(), "checksum") {
+			t.Fatalf("incorrect graph checksum accepted: %v", err)
+		}
+	}
+	manifest.Checksums["graph.bin"] = good
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(destination, "manifest.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	engine, err := Open(t.Context(), destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.Close()
+}

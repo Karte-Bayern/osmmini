@@ -3,6 +3,7 @@ package osmmini
 import (
 	"context"
 	"encoding/binary"
+	"math"
 	"slices"
 )
 
@@ -32,6 +33,11 @@ func (r *Router) indexNodeSearch(ctx context.Context, from, to int64, opt RouteO
 	eval := newRouteEvaluator(opt)
 	costs := newCompactRouteCosts(eval)
 	heuristic := r.queryHeuristic(to, d.coordAt(target), opt)
+	startCoord, targetCoord := d.coordAt(start), d.coordAt(target)
+	// Local routes must not eagerly walk a long road away from a nearby target.
+	// Tight time potentials already prune most chain interiors. Eager batches
+	// increased their labels/allocation footprint, so retain normal time search.
+	walkChains := d.chainsOffset != 0 && !opt.EmergencyMode && opt.Objective != ObjectiveDuration && (math.Abs(startCoord.Lat-targetCoord.Lat) >= .01 || math.Abs(startCoord.Lon-targetCoord.Lon) >= .02)
 	labels := newIndexNodeLabels(min(64, d.nodes), wantPath)
 	labels.set(fromIndex, 0, 0)
 	pq := nodeValueHeap[uint32]{}
@@ -62,23 +68,64 @@ func (r *Router) indexNodeSearch(ctx context.Context, from, to int64, opt RouteO
 		}
 		for it := d.edgesAt(int(current.id)); it.next(); {
 			next, attribute, distance := it.compactFields()
-			edgeCost, allowed := costs.edgeCost(d, attribute, distance)
-			if !allowed {
-				continue
+			previous, cost := current.id, current.dist
+			for steps := 0; ; steps++ {
+				if ctx != nil && steps > 0 && steps%16 == 0 {
+					if err := ctx.Err(); err != nil {
+						return nil, 0, err
+					}
+				}
+				edgeCost, allowed := costs.edgeCost(d, attribute, distance)
+				if !allowed {
+					break
+				}
+				cost += edgeCost
+				if old, exists := labels.distance(next); exists && cost >= old {
+					break
+				}
+				labels.set(next, cost, previous)
+				// Packed interiors have exactly two reciprocal neighbors and shared
+				// attributes. With no transition costs, going back cannot improve g.
+				// Keep the target in the queue, even if it lies inside a chain; bound
+				// each batch so a high-cost branch never scans an entire long road.
+				if walkChains && next != toIndex && steps < 31 && edgeCost >= 0 && !math.IsInf(edgeCost, 0) {
+					if following, attr, length, ok := d.chainContinuation(next, previous); ok {
+						previous, next, attribute, distance = next, following, attr, length
+						continue
+					}
+				}
+				var estimate float64
+				if !heuristic.disabled {
+					estimate = heuristic.estimateIndex(d, next)
+				}
+				pq.push(nodeCandidate[uint32]{id: next, dist: cost, priority: cost + estimate})
+				break
 			}
-			cost := current.dist + edgeCost
-			if old, exists := labels.distance(next); exists && cost >= old {
-				continue
-			}
-			labels.set(next, cost, current.id)
-			var estimate float64
-			if !heuristic.disabled {
-				estimate = heuristic.estimateIndex(d, next)
-			}
-			pq.push(nodeCandidate[uint32]{id: next, dist: cost, priority: cost + estimate})
 		}
 	}
 	return nil, 0, ErrRouteNoPath
+}
+
+func (d *diskGraph) chainContinuation(node, previous uint32) (next, attribute uint32, distance float64, ok bool) {
+	chain, position, _ := d.chainNode(int(node))
+	if chain == nil {
+		return
+	}
+	start := binary.LittleEndian.Uint32(chain)
+	left := d.data[d.verticesOffset+int(start+position-1)*graphChainVertexSize:]
+	right := d.data[d.verticesOffset+int(start+position+1)*graphChainVertexSize:]
+	if binary.LittleEndian.Uint32(left) == previous {
+		next = binary.LittleEndian.Uint32(right)
+		distance = math.Float64frombits(binary.LittleEndian.Uint64(d.data[d.verticesOffset+int(start+position)*graphChainVertexSize+4:]))
+	} else if binary.LittleEndian.Uint32(right) == previous {
+		next = binary.LittleEndian.Uint32(left)
+		distance = math.Float64frombits(binary.LittleEndian.Uint64(left[4:]))
+	} else {
+		return
+	}
+	attribute = binary.LittleEndian.Uint32(chain[8:])
+	ok = true
+	return
 }
 
 // A path query updates both fields together. Keeping them in one map avoids a

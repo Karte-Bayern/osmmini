@@ -387,6 +387,11 @@ func Open(ctx context.Context, path string) (*Engine, error) {
 		if !ok {
 			return nil, fmt.Errorf("missing checksum: %s", name)
 		}
+		// Indexed regions verify the graph's mapped bytes below. Reuse that
+		// digest for the index binding instead of hashing this large file twice.
+		if name == "graph.bin" && hasLandmarks {
+			continue
+		}
 		actual, e := fileHashBuffer(ctx, filepath.Join(path, name), hashBuffer)
 		if e != nil {
 			return nil, e
@@ -400,6 +405,10 @@ func Open(ctx context.Context, path string) (*Engine, error) {
 		return nil, err
 	}
 	if hasLandmarks {
+		if err := r.VerifyGraphChecksum(ctx, manifest.Checksums["graph.bin"]); err != nil {
+			r.Close()
+			return nil, err
+		}
 		if err := r.LoadLandmarks(ctx, filepath.Join(path, landmarkFilename)); err != nil {
 			r.Close()
 			return nil, err

@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -28,6 +29,48 @@ type landmarkIndex struct {
 
 func hashLandmarkData(ctx context.Context, data []byte) ([32]byte, error) {
 	return hashLandmarkParts(ctx, data)
+}
+
+// VerifyGraphChecksum verifies the immutable mapped graph against a published
+// SHA-256 checksum. The successful computation is reused when binding an ALT
+// index to the same graph. Like LoadLandmarks, call before starting queries.
+func (r *Router) VerifyGraphChecksum(ctx context.Context, expected string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if len(expected) != sha256.Size*2 {
+		return errors.New("invalid graph checksum")
+	}
+	digest, err := r.graphChecksum(ctx)
+	if err != nil {
+		return err
+	}
+	if hex.EncodeToString(digest[:]) != expected {
+		return errors.New("checksum mismatch: graph.bin")
+	}
+	return nil
+}
+
+func (r *Router) graphChecksum(ctx context.Context) ([32]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return [32]byte{}, err
+	}
+	d := r.g.store
+	if d == nil || d.release == nil {
+		return [32]byte{}, errors.New("graph is not mapped")
+	}
+	if d.checksumReady {
+		return d.checksum, nil
+	}
+	digest, err := hashLandmarkData(ctx, d.data)
+	if err == nil {
+		d.checksum = digest
+		d.checksumReady = true
+	}
+	return digest, err
 }
 
 func hashLandmarkParts(ctx context.Context, parts ...[]byte) ([32]byte, error) {
@@ -374,7 +417,7 @@ func (r *Router) LoadLandmarks(ctx context.Context, path string) error {
 			return fail(errors.New("invalid landmark reserved bytes"))
 		}
 	}
-	graphHash, err := hashLandmarkData(ctx, d.data)
+	graphHash, err := r.graphChecksum(ctx)
 	if err != nil {
 		return fail(err)
 	}
@@ -421,9 +464,8 @@ func (h *routeHeuristic) estimateIndex(d *diskGraph, node uint32) float64 {
 	if h.disabled {
 		return 0
 	}
-	geometric := h.estimateCoordinate(d.coordAt(int(node)))
 	if h.landmarks == nil {
-		return geometric
+		return h.estimateCoordinate(d.coordAt(int(node)))
 	}
 	values := h.landmarks.data[int(node)*landmarkStride:][:landmarkStride]
 	lower := [2]float64{}
@@ -446,5 +488,21 @@ func (h *routeHeuristic) estimateIndex(d *diskGraph, node uint32) float64 {
 	// Leave an additional relative margin for floating-point accumulation in the
 	// preprocessing and query searches; never subtract quantized point values
 	// without their interval error allowance.
-	return max(geometric, lower[0]*(1-1e-12)*h.landmarkScale, lower[1]*(1-1e-12))
+	bound := max(lower[0]*(1-1e-12)*h.landmarkScale, lower[1]*(1-1e-12))
+	coordinate := d.coordAt(int(node))
+	// Walking a meridian, then the target's parallel, upper-bounds the
+	// great-circle distance. If ALT already dominates that cheap upper bound,
+	// the expensive trigonometric lower bound cannot improve the result.
+	longitude := math.Abs(h.target.Lon - coordinate.Lon)
+	if longitude > 180 {
+		longitude = 360 - longitude
+	}
+	upper := 6371000.0 * deg2rad(math.Abs(h.target.Lat-coordinate.Lat)+h.cosLatitude*longitude)
+	if h.objective == ObjectiveDuration {
+		upper = upper * 3.6 / h.maxSpeedKph
+	}
+	if bound > upper*(1+1e-12) {
+		return bound
+	}
+	return max(h.estimateCoordinate(coordinate), bound)
 }

@@ -49,6 +49,8 @@ type diskGraph struct {
 	compact                                        bool
 	classes                                        []string
 	release                                        func() error
+	checksum                                       [32]byte
+	checksumReady                                  bool
 }
 
 func (g Graph) coord(id int64) (Coord, bool) {
