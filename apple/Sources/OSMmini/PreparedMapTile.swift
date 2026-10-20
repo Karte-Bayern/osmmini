@@ -24,6 +24,17 @@ struct PreparedMapTile: Sendable {
       enum Place: Sendable { case city, town, village, other }
       case road(major: Bool)
       case place(Place)
+
+      var priority: OfflineMapLabelPriority {
+        switch self {
+        case .place(.city): .city
+        case .place(.town): .town
+        case .place(.village): .village
+        case .place(.other): .otherPlace
+        case .road(major: true): .majorRoad
+        case .road(major: false): .road
+        }
+      }
     }
     let name: String
     let key: OfflineMapLabelLayout.Key
@@ -40,6 +51,7 @@ struct PreparedMapTile: Sendable {
 
   let features: [Feature]
   let labels: [Label]
+  private let labelRanges: PreparedMapLabelRanges
   let spatialIndex: PreparedMapTileIndex?
 
   init(_ tile: VectorTile) throws {
@@ -106,8 +118,16 @@ struct PreparedMapTile: Sendable {
       }
     }
     features = prepared
+    labels.sort { $0.style.priority.rawValue < $1.style.priority.rawValue }
     self.labels = labels
+    labelRanges = PreparedMapLabelRanges(labels)
     spatialIndex = try PreparedMapTileIndex(prepared)
+  }
+
+  /// The stable order inside each priority is the source tile order. Frames can
+  /// merge tiles by priority without allocating or sorting screen-space labels.
+  func labels(in priority: OfflineMapLabelPriority) -> ArraySlice<Label> {
+    labels[labelRanges.range(for: priority)]
   }
 
   /// Submit each ring in one operation. Scratch coordinates are reused across
@@ -210,6 +230,33 @@ struct PreparedMapTile: Sendable {
       return result
     } onCancel: {
       preparation.cancel()
+    }
+  }
+}
+
+/// Six inline end offsets cost 48 bytes per tile, independent of label count.
+private struct PreparedMapLabelRanges: Sendable {
+  let cityEnd, townEnd, villageEnd, placeEnd, majorRoadEnd, roadEnd: Int
+
+  init(_ labels: [PreparedMapTile.Label]) {
+    var counts = Array(repeating: 0, count: OfflineMapLabelPriority.allCases.count)
+    for label in labels { counts[label.style.priority.rawValue] += 1 }
+    cityEnd = counts[0]
+    townEnd = cityEnd + counts[1]
+    villageEnd = townEnd + counts[2]
+    placeEnd = villageEnd + counts[3]
+    majorRoadEnd = placeEnd + counts[4]
+    roadEnd = majorRoadEnd + counts[5]
+  }
+
+  func range(for priority: OfflineMapLabelPriority) -> Range<Int> {
+    switch priority {
+    case .city: 0..<cityEnd
+    case .town: cityEnd..<townEnd
+    case .village: townEnd..<villageEnd
+    case .otherPlace: villageEnd..<placeEnd
+    case .majorRoad: placeEnd..<majorRoadEnd
+    case .road: majorRoadEnd..<roadEnd
     }
   }
 }

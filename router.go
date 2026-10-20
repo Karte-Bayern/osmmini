@@ -1232,8 +1232,10 @@ func (r *Router) RouteWithOptions(ctx context.Context, from, to int64, opt Route
 // The lookup is used for every interior point when generating maneuvers, so a
 // pre-built index avoids repeatedly scanning all named streets on long routes.
 func (r *Router) streetNameForNode(node int64) string {
-	if name, ok := r.streetNameByNode[node]; ok {
-		return name
+	if r.streetNameByNode != nil {
+		// The index covers every named sample. An absent entry is an unnamed
+		// node, not a reason to scan all streets again at each geometry point.
+		return r.streetNameByNode[node]
 	}
 	// Keep manually constructed Router values and older serialized test data
 	// working. Normal PBF-built routers always have streetNameByNode.

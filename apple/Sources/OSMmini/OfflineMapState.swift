@@ -233,6 +233,17 @@ struct OfflineMapMarker {
   }
 }
 
+/// The fixed priority order is prepared once with the immutable tile geometry.
+enum OfflineMapLabelPriority: Int, CaseIterable, Sendable {
+  case city, town, village, otherPlace, majorRoad, road
+}
+
+struct OfflineMapLabelTile {
+  let tile: PreparedMapTile
+  let offset: CGPoint
+  let scale: CGFloat
+}
+
 struct OfflineMapLabelLayout {
   /// Retain the exact previous normalization, but do it when a tile is prepared
   /// rather than once or twice per candidate on every drawn frame.

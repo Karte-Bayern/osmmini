@@ -70,11 +70,11 @@ private func framePath(_ feature: VectorFeature, offset: CGPoint) -> Path {
   let prepared = try PreparedMapTile(VectorTile(features: [road, place]))
   #expect(prepared.features.count == 1)
   #expect(prepared.labels.count == 2)
-  #expect(prepared.labels[0].point == CGPoint(x: 156.25, y: 62.5))
-  #expect(prepared.labels[0].style == .road(major: true))
-  #expect(prepared.labels[1].style == .place(.town))
-  #expect(prepared.labels[1].name == "Dingolfing")
-  #expect(prepared.labels[1].point == CGPoint(x: 128, y: 64))
+  #expect(prepared.labels[1].point == CGPoint(x: 156.25, y: 62.5))
+  #expect(prepared.labels[1].style == .road(major: true))
+  #expect(prepared.labels[0].style == .place(.town))
+  #expect(prepared.labels[0].name == "Dingolfing")
+  #expect(prepared.labels[0].point == CGPoint(x: 128, y: 64))
 }
 
 @Test func preparedMapSkipsUnusedLayersAndKeepsDrawOrderAndStyles() throws {

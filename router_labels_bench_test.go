@@ -72,3 +72,43 @@ func BenchmarkManeuverStreetNames(b *testing.B) {
 		}
 	})
 }
+
+// A complete name index also records negative lookups implicitly. Most geometry
+// points do not have a captured street name; missing entries must not fall back
+// to scanning all of a region's named streets for each point in the route.
+func BenchmarkManeuverStreetNamesUnmapped(b *testing.B) {
+	const (
+		extraStreets = 10000
+		pathNodes    = 400
+	)
+	coords := make(map[int64]Coord, pathNodes)
+	path := make([]int64, pathNodes)
+	for i := range path {
+		id := int64(i + 1)
+		path[i] = id
+		coords[id] = Coord{Lat: 48 + float64(i)*0.0001, Lon: 12}
+	}
+	for _, scenario := range []string{"named", "mixed", "unnamed"} {
+		b.Run(scenario, func(b *testing.B) {
+			streets := make(map[string]streetEntry, extraStreets+1)
+			var named []int64
+			for i, id := range path {
+				if scenario == "named" || scenario == "mixed" && i%2 == 0 {
+					named = append(named, id)
+				}
+			}
+			streets["route"] = streetEntry{Display: "Schnellstraße", NodeIDs: named}
+			for i := 0; i < extraStreets; i++ {
+				key := "other-" + strconv.Itoa(i)
+				streets[key] = streetEntry{Display: key, NodeIDs: []int64{int64(1_000_000 + i)}}
+			}
+			r := &Router{g: Graph{coords: coords}, streets: streets, streetNameByNode: buildStreetNameIndex(streets)}
+			opt := RouteOptions{Objective: ObjectiveDuration}.withDefaults()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_ = r.ManeuversForPath(path, opt)
+			}
+		})
+	}
+}

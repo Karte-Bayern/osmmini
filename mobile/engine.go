@@ -193,7 +193,7 @@ func Import(ctx context.Context, o ImportOptions, progress func(Progress)) (Mani
 		manifest.Name = filepath.Base(o.PBF)
 	}
 	report("validating", 0.9)
-	for _, name := range []string{"graph.bin", "search.jsonl", "search.jsonl.idx"} {
+	for _, name := range []string{"graph.bin", "search.jsonl", "search.jsonl.idx", placeCatalogFilename} {
 		hash, e := fileHash(ctx, filepath.Join(stage, name))
 		if e != nil {
 			return manifest, e
@@ -275,6 +275,18 @@ func prepareGraphAndSearch(ctx context.Context, o ImportOptions, stage string, r
 			return importGraphInfo{}, err
 		}
 	}
+	// Build the small settlement catalog once, while preparing the region.
+	// Opening it then needs no decompression or JSON decoding of address/POI
+	// records. Rebuild on resume from the completed, immutable search checkpoint.
+	search, err := openSearch(filepath.Join(stage, "search.jsonl"))
+	if err != nil {
+		return importGraphInfo{}, err
+	}
+	err = writePlaceCatalog(ctx, filepath.Join(stage, placeCatalogFilename), search)
+	search.close()
+	if err != nil {
+		return importGraphInfo{}, err
+	}
 	bounds, _ := router.Bounds()
 	return importGraphInfo{nodes: router.NodeCount(), edges: router.EdgeCount(), bounds: bounds}, nil
 }
@@ -291,13 +303,16 @@ func writeSynced(path string, b []byte) error {
 	return f.Sync()
 }
 func fileHash(ctx context.Context, path string) (string, error) {
+	return fileHashBuffer(ctx, path, make([]byte, 1<<20))
+}
+
+func fileHashBuffer(ctx context.Context, path string, buf []byte) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
 	h := sha256.New()
-	buf := make([]byte, 1<<20)
 	for {
 		if err = ctx.Err(); err != nil {
 			return "", err
@@ -342,12 +357,20 @@ func Open(ctx context.Context, path string) (*Engine, error) {
 	if manifest.Format < 1 || manifest.Format > FormatVersion {
 		return nil, fmt.Errorf("unsupported region format %d", manifest.Format)
 	}
-	for _, name := range []string{"graph.bin", "search.jsonl", "search.jsonl.idx"} {
+	names := []string{"graph.bin", "search.jsonl", "search.jsonl.idx"}
+	_, hasPlaceCatalog := manifest.Checksums[placeCatalogFilename]
+	if hasPlaceCatalog {
+		names = append(names, placeCatalogFilename)
+	}
+	// Integrity checks share one bounded scratch buffer, independent of the
+	// number and size of files. Never skip validation to speed up reopening.
+	hashBuffer := make([]byte, 1<<20)
+	for _, name := range names {
 		expected, ok := manifest.Checksums[name]
 		if !ok {
 			return nil, fmt.Errorf("missing checksum: %s", name)
 		}
-		actual, e := fileHash(ctx, filepath.Join(path, name))
+		actual, e := fileHashBuffer(ctx, filepath.Join(path, name), hashBuffer)
 		if e != nil {
 			return nil, e
 		}
@@ -364,7 +387,13 @@ func Open(ctx context.Context, path string) (*Engine, error) {
 		r.Close()
 		return nil, err
 	}
-	places, err := loadPlaceCatalog(ctx, search)
+	var places *placeCatalog
+	if hasPlaceCatalog {
+		places, err = readPlaceCatalog(ctx, filepath.Join(path, placeCatalogFilename))
+	} else {
+		// Existing portable regions remain usable without a new PBF import.
+		places, err = loadPlaceCatalog(ctx, search)
+	}
 	if err != nil {
 		r.Close()
 		search.close()

@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-// Settlement labels are derived from the existing search file at opening, so
+// Settlement labels can also be derived from the existing search file, so
 // previously imported regions gain labels without another PBF import. Only
 // settlement labels and exact-name search results remain in memory. The labels
 // are grouped into zoom-8 cells; exact matches never scan address/POI records.
@@ -61,16 +61,59 @@ func loadPlaces(ctx context.Context, search *searchReader) (placeIndex, error) {
 
 func loadPlaceCatalog(ctx context.Context, search *searchReader) (*placeCatalog, error) {
 	index := &placeCatalog{labels: placeIndex{}, exact: exactPlaceIndex{}}
+	err := scanSearchPlaces(ctx, search, func(record SearchResult) error {
+		index.add(record)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return index, nil
+}
+
+const placeScanBufferBytes = 64 << 10
+
+// Use the same predicate for old search catalogs and the settlement-only
+// sidecar. In particular, a present but unrecognized place tag must not fall
+// back to category, and label trimming must not alter exact-search results.
+func settlementRecord(record SearchResult) (kind, name string, zoom int, valid bool) {
+	kind = record.Place
+	if kind == "" {
+		kind = record.Category
+	}
+	zoom = placeMinZoom(kind)
+	name = strings.TrimSpace(record.Label)
+	lat, lon := record.Coordinate.Lat, record.Coordinate.Lon
+	valid = zoom >= 0 && record.Kind != "street" && name != "" && len(name) <= 256 &&
+		!math.IsNaN(lat) && !math.IsNaN(lon) && math.Abs(lat) <= 90 && math.Abs(lon) <= 180
+	return
+}
+
+func (index *placeCatalog) add(record SearchResult) {
+	kind, name, zoom, _ := settlementRecord(record)
+	lat, lon := record.Coordinate.Lat, record.Coordinate.Lon
+	lat = max(-85.05112878, min(85.05112878, lat)) * math.Pi / 180
+	x := math.Mod((lon+180)/360, 1)
+	y := max(0, min(math.Nextafter(1, 0), (1-math.Asinh(math.Tan(lat))/math.Pi)/2))
+	key := uint32(int(y*256)*256 + int(x*256))
+	index.labels[key] = append(index.labels[key], placeLabel{x: x, y: y, name: name, kind: kind, minZoom: zoom})
+	index.exact.add(record)
+}
+
+// Scan source records once without retaining address/POI text. This is shared
+// with import-time sidecar generation so old and new regions have identical
+// labels, exact-name priorities, duplicate handling, and source ordering.
+func scanSearchPlaces(ctx context.Context, search *searchReader, visit func(SearchResult) error) error {
 	var data io.Reader = io.NewSectionReader(search.data, 0, search.dataBytes)
 	if search.compressedData {
 		scratch := searchScratchPool.Get().(*searchScratch)
 		defer searchScratchPool.Put(scratch)
 		data = &searchDataStream{search: search, ctx: ctx, scratch: scratch}
 	}
-	reader := bufio.NewReaderSize(data, 64<<10)
+	reader := bufio.NewReaderSize(data, placeScanBufferBytes)
 	for {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return err
 		}
 		line, err := reader.ReadSlice('\n')
 		if errors.Is(err, bufio.ErrBufferFull) {
@@ -78,37 +121,26 @@ func loadPlaceCatalog(ctx context.Context, search *searchReader) (*placeCatalog,
 			// Drain this record in bounded chunks without retaining its text.
 			for errors.Is(err, bufio.ErrBufferFull) {
 				if err := ctx.Err(); err != nil {
-					return nil, err
+					return err
 				}
 				_, err = reader.ReadSlice('\n')
 			}
 		} else if bytes.Contains(line, []byte(`"category"`)) || bytes.Contains(line, []byte(`"place"`)) {
 			var record SearchResult
 			if decodeErr := json.Unmarshal(line, &record); decodeErr != nil {
-				return nil, decodeErr
+				return decodeErr
 			}
-			kind := record.Place
-			if kind == "" {
-				kind = record.Category // Regions imported before the place field.
-			}
-			zoom := placeMinZoom(kind)
-			name := strings.TrimSpace(record.Label)
-			lat, lon := record.Coordinate.Lat, record.Coordinate.Lon
-			if zoom >= 0 && record.Kind != "street" && name != "" && len(name) <= 256 &&
-				!math.IsNaN(lat) && !math.IsNaN(lon) && math.Abs(lat) <= 90 && math.Abs(lon) <= 180 {
-				lat = max(-85.05112878, min(85.05112878, lat)) * math.Pi / 180
-				x := math.Mod((lon+180)/360, 1)
-				y := max(0, min(math.Nextafter(1, 0), (1-math.Asinh(math.Tan(lat))/math.Pi)/2))
-				key := uint32(int(y*256)*256 + int(x*256))
-				index.labels[key] = append(index.labels[key], placeLabel{x: x, y: y, name: name, kind: kind, minZoom: zoom})
-				index.exact.add(record)
+			if _, _, _, valid := settlementRecord(record); valid {
+				if err := visit(record); err != nil {
+					return err
+				}
 			}
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return index, nil
+				return nil
 			}
-			return nil, err
+			return err
 		}
 	}
 }

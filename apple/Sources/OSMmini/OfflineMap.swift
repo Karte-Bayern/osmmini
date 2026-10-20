@@ -88,7 +88,7 @@ public struct OfflineMap: View {
         context.fill(
           Path(CGRect(origin: .zero, size: canvasSize)),
           with: .color(Color(red: 0.96, green: 0.95, blue: 0.92)))
-        var labels: [MapLabel] = []
+        var labelTiles: [OfflineMapLabelTile] = []
         for placement in placements {
           let key = placement.key
           guard let tile = tileLoader.cache.tile(for: key, owner: request.owner) else { continue }
@@ -134,15 +134,8 @@ public struct OfflineMap: View {
                 style: StrokeStyle(lineWidth: width / scale, lineCap: .round, lineJoin: .round))
             }
           }
-          for label in tile.labels {
-            guard let style = labelStyle(for: label.style) else { continue }
-            let point = CGPoint(
-              x: label.point.x * scale + offset.x, y: label.point.y * scale + offset.y)
-            guard CGRect(origin: .zero, size: canvasSize).contains(point) else { continue }
-            labels.append(
-              MapLabel(
-                name: label.name, key: label.key, point: point,
-                size: style.size, priority: style.priority, bold: style.bold))
+          if !tile.labels.isEmpty {
+            labelTiles.append(OfflineMapLabelTile(tile: tile, offset: offset, scale: scale))
           }
         }
         if let userLocation, userLocation.lon.isFinite,
@@ -170,7 +163,7 @@ public struct OfflineMap: View {
                 lineWidth: 5 / placement.scale, lineCap: .round, lineJoin: .round))
           }
         }
-        drawLabels(labels, context: &context, size: canvasSize)
+        drawLabels(labelTiles, context: &context, size: canvasSize)
         if let selection, selection.lat.isFinite, selection.lon.isFinite {
           let point = screen(selection, size: canvasSize)
           let pin = Path(
@@ -349,14 +342,6 @@ public struct OfflineMap: View {
   private func world(_ c: Coordinate) -> CGPoint {
     WebMercator.world(c, zoom: zoom)
   }
-  private struct MapLabel {
-    let name: String
-    let key: OfflineMapLabelLayout.Key
-    let point: CGPoint
-    let size: CGFloat
-    let priority: Int
-    let bold: Bool
-  }
   private struct MapControlStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     func makeBody(configuration: Configuration) -> some View {
@@ -406,23 +391,22 @@ public struct OfflineMap: View {
         .help("Ganze Route anzeigen")
     }
   }
-  private func labelStyle(for style: PreparedMapTile.Label.Style) -> (
-    size: CGFloat, priority: Int, bold: Bool
+  private func labelStyle(for priority: OfflineMapLabelPriority) -> (
+    size: CGFloat, bold: Bool
   )? {
-    switch style {
-    case .place(let kind):
-      switch kind {
-      case .city: return (zoom >= 11 ? 17 : 15, 0, true)
-      case .town: return (zoom >= 12 ? 15 : 13, 1, true)
-      case .village: return (13, 2, true)
-      case .other: return (12, 3, false)
-      }
-    case .road(let major) where zoom >= (major ? 12 : 13):
-      return (zoom >= 14 ? 12 : 11, major ? 4 : 5, false)
+    switch priority {
+    case .city: return (zoom >= 11 ? 17 : 15, true)
+    case .town: return (zoom >= 12 ? 15 : 13, true)
+    case .village: return (13, true)
+    case .otherPlace: return (12, false)
+    case .majorRoad where zoom >= 12, .road where zoom >= 13:
+      return (zoom >= 14 ? 12 : 11, false)
     default: return nil
     }
   }
-  private func drawLabels(_ labels: [MapLabel], context: inout GraphicsContext, size: CGSize) {
+  private func drawLabels(
+    _ tiles: [OfflineMapLabelTile], context: inout GraphicsContext, size: CGSize
+  ) {
     let controlLength: CGFloat = route?.path.isEmpty == false ? 232 : 180
     let controlsSize =
       size.height >= controlLength
@@ -440,20 +424,33 @@ public struct OfflineMap: View {
       obstacles.append(CGRect(x: point.x - 16, y: point.y - 16, width: 32, height: 32))
     }
     var layout = OfflineMapLabelLayout(obstacles: obstacles, viewport: size)
-    for label in labels.sorted(by: { $0.priority < $1.priority }) {
-      guard layout.canPlace(key: label.key, at: label.point, viewport: size) else { continue }
-      let text = context.resolve(
-        Text(label.name).font(.system(size: label.size, weight: label.bold ? .semibold : .regular))
-          .foregroundStyle(.black))
-      let measured = text.measure(in: CGSize(width: 220, height: 30))
-      let frame = CGRect(
-        x: label.point.x - measured.width / 2, y: label.point.y - measured.height / 2,
-        width: measured.width, height: measured.height)
-      guard layout.reserve(key: label.key, frame: frame, viewport: size) else { continue }
-      context.fill(
-        Path(roundedRect: frame.insetBy(dx: -3, dy: -1), cornerRadius: 3),
-        with: .color(.white.opacity(label.bold ? 0.92 : 0.86)))
-      context.draw(text, in: frame)
+    let viewport = CGRect(origin: .zero, size: size)
+    for priority in OfflineMapLabelPriority.allCases {
+      guard let style = labelStyle(for: priority) else { continue }
+      for placement in tiles {
+        for label in placement.tile.labels(in: priority) {
+          let point = CGPoint(
+            x: label.point.x * placement.scale + placement.offset.x,
+            y: label.point.y * placement.scale + placement.offset.y)
+          guard viewport.contains(point),
+            layout.canPlace(key: label.key, at: point, viewport: size)
+          else { continue }
+          let text = context.resolve(
+            Text(label.name).font(
+              .system(size: style.size, weight: style.bold ? .semibold : .regular)
+            )
+            .foregroundStyle(.black))
+          let measured = text.measure(in: CGSize(width: 220, height: 30))
+          let frame = CGRect(
+            x: point.x - measured.width / 2, y: point.y - measured.height / 2,
+            width: measured.width, height: measured.height)
+          guard layout.reserve(key: label.key, frame: frame, viewport: size) else { continue }
+          context.fill(
+            Path(roundedRect: frame.insetBy(dx: -3, dy: -1), cornerRadius: 3),
+            with: .color(.white.opacity(style.bold ? 0.92 : 0.86)))
+          context.draw(text, in: frame)
+        }
+      }
     }
   }
   private func coordinate(_ p: CGPoint) -> Coordinate {
