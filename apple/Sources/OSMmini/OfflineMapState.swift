@@ -631,7 +631,10 @@ struct OfflineMapTilePlacement: Hashable {
   private(set) var isLoading = false
 
   func failures(owner: ObjectIdentifier, keys: [MapTileKey]) -> Int {
-    self.owner == owner && self.keys == Set(keys) ? failureCount : 0
+    // Successful loading is the normal render path. Avoid rebuilding the
+    // viewport set on each camera or location update when there is no error.
+    guard failureCount > 0 else { return 0 }
+    return self.owner == owner && self.keys == Set(keys) ? failureCount : 0
   }
 
   func load(

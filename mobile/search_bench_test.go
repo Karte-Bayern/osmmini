@@ -2,6 +2,7 @@ package mobile
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -102,5 +103,54 @@ func BenchmarkMobileNormalize(b *testing.B) {
 				_ = normalized(input)
 			}
 		})
+	}
+}
+
+// Import a region once and set OSMMINI_REAL_REGION to measure disk-backed
+// prefix and multiword searches without including import or region validation.
+func BenchmarkRealRegionSearch(b *testing.B) {
+	region := os.Getenv("OSMMINI_REAL_REGION")
+	if region == "" {
+		b.Skip("set OSMMINI_REAL_REGION to a prepared offline region")
+	}
+	search, err := openSearch(filepath.Join(region, "search.jsonl"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer search.close()
+	for _, query := range []string{"Passau", "Haupt", "Hauptstrasse 12", "Hauptstrasse Passau", "Landshut Apotheke", "missing"} {
+		b.Run(query, func(b *testing.B) {
+			b.ReportAllocs()
+			for range b.N {
+				if _, err := search.search(context.Background(), query, 20); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func TestRealRegionSearchResults(t *testing.T) {
+	region := os.Getenv("OSMMINI_REAL_REGION")
+	if region == "" {
+		t.Skip("set OSMMINI_REAL_REGION to a prepared offline region")
+	}
+	search, err := openSearch(filepath.Join(region, "search.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer search.close()
+	for _, query := range []string{"", "Passau", "Haupt", "Hauptstrasse 12", "Hauptstrasse Passau", "Landshut Apotheke", "Apotheke", "Tankstelle", "cafe", "strasse", "strasse 12", "Deggendorf", "Straubing", "Bad Griesbach", "missing"} {
+		for _, limit := range []int{1, 20, 100} {
+			results, err := search.search(t.Context(), query, limit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := json.Marshal(results)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("%q/%d: %d results, %x", query, limit, len(results), sha256.Sum256(encoded))
+		}
 	}
 }

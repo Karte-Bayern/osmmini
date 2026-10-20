@@ -194,6 +194,8 @@ type searchPostingIterator struct {
 	lastTerm   [searchKeyBytes]byte
 	lastLength int
 	lastOffset uint64
+	windowAt   int
+	windowSize int
 }
 
 func searchTerm(b []byte) []byte {
@@ -203,13 +205,35 @@ func searchTerm(b []byte) []byte {
 	return b
 }
 
+// A directory lookup narrows to nearby entries near the end of its binary
+// search. Read one bounded window into the existing query scratch instead of
+// issuing a file read for every comparison. Compact scans reuse the same
+// window while advancing through the directory.
+func (i *searchPostingIterator) indexEntry(position int) ([]byte, error) {
+	if position < i.windowAt || position >= i.windowAt+i.windowSize {
+		count, base := i.search.count, int64(0)
+		if i.search.compact {
+			count, base = i.search.blocks, i.search.directory
+		}
+		const entries = 64
+		at := position / entries * entries
+		n := min(entries, count-at)
+		if _, err := i.search.index.ReadAt(i.scratch.postings[:n*searchIndexBytes], base+int64(at)*searchIndexBytes); err != nil {
+			return nil, err
+		}
+		i.windowAt, i.windowSize = at, n
+	}
+	at := (position - i.windowAt) * searchIndexBytes
+	return i.scratch.postings[at : at+searchIndexBytes], nil
+}
+
 func (s *searchReader) postingsFrom(key []byte, scratch *searchScratch) (*searchPostingIterator, error) {
 	iterator := &searchPostingIterator{search: s, scratch: scratch}
 	var readErr error
 	if !s.compact {
 		iterator.position = sort.Search(s.count, func(i int) bool {
-			b := scratch.postings[:searchIndexBytes]
-			if _, err := s.index.ReadAt(b, int64(i)*searchIndexBytes); err != nil {
+			b, err := iterator.indexEntry(i)
+			if err != nil {
 				readErr = err
 				return true
 			}
@@ -217,8 +241,8 @@ func (s *searchReader) postingsFrom(key []byte, scratch *searchScratch) (*search
 		})
 	} else {
 		iterator.block = sort.Search(s.blocks, func(i int) bool {
-			b := scratch.postings[:searchIndexBytes]
-			if _, err := s.index.ReadAt(b, s.directory+int64(i)*searchIndexBytes); err != nil {
+			b, err := iterator.indexEntry(i)
+			if err != nil {
 				readErr = err
 				return true
 			}
@@ -257,8 +281,8 @@ func (i *searchPostingIterator) next() ([]byte, uint64, uint32, error) {
 		if i.block == i.search.blocks {
 			return nil, 0, 0, io.EOF
 		}
-		entry := i.scratch.postings[:searchIndexBytes]
-		if _, err := i.search.index.ReadAt(entry, i.search.directory+int64(i.block)*searchIndexBytes); err != nil {
+		entry, err := i.indexEntry(i.block)
+		if err != nil {
 			return nil, 0, 0, err
 		}
 		offset, size, count := binary.LittleEndian.Uint64(entry[96:]), binary.LittleEndian.Uint32(entry[104:]), binary.LittleEndian.Uint32(entry[108:])

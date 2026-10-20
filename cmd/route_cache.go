@@ -132,19 +132,31 @@ func (c *RouteCache) set(key routeCacheKey, resp RouteResponse) {
 		}
 		// If still full, remove the half with the soonest expiry.
 		if len(c.entries) >= c.maxItems {
-			type kv struct {
-				k routeCacheKey
-				t time.Time
+			// Only deadlines are needed to select the oldest half. Copying the
+			// full routing-option key for sorting multiplies temporary storage.
+			expiries := make([]time.Time, 0, len(c.entries))
+			for _, e := range c.entries {
+				expiries = append(expiries, e.expiresAt)
 			}
-			evictions := make([]kv, 0, len(c.entries))
+			slices.SortFunc(expiries, time.Time.Compare)
+			remaining := max(1, len(expiries)/2)
+			cutoff := expiries[remaining-1]
 			for k, e := range c.entries {
-				evictions = append(evictions, kv{k, e.expiresAt})
+				if e.expiresAt.Before(cutoff) {
+					delete(c.entries, k)
+					remaining--
+				}
 			}
-			// Sort in O(n log n); insertion sort held the cache lock for
-			// quadratic work when a regional cache reached capacity.
-			slices.SortFunc(evictions, func(a, b kv) int { return a.t.Compare(b.t) })
-			for _, kv := range evictions[:max(1, len(evictions)/2)] {
-				delete(c.entries, kv.k)
+			// Equal deadlines can straddle the halfway point. Remove only the
+			// required number, after all strictly older entries are gone.
+			for k, e := range c.entries {
+				if remaining == 0 {
+					break
+				}
+				if e.expiresAt.Equal(cutoff) {
+					delete(c.entries, k)
+					remaining--
+				}
 			}
 		}
 	}

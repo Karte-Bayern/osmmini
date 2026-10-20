@@ -8,6 +8,14 @@ import (
 // Opt in with the same before/after graph files used by the equivalence audit.
 // Opening and validation are outside the query measurements.
 func BenchmarkRealGraphStorageRouting(b *testing.B) {
+	benchmarkRealGraphStorageRouting(b, true)
+}
+
+func BenchmarkRealGraphStorageCostRouting(b *testing.B) {
+	benchmarkRealGraphStorageRouting(b, false)
+}
+
+func benchmarkRealGraphStorageRouting(b *testing.B, wantPath bool) {
 	for _, fixture := range []struct{ name, environment string }{{"original", "OSMMINI_ORIGINAL_GRAPH"}, {"packed", "OSMMINI_REAL_GRAPH"}} {
 		path := os.Getenv(fixture.environment)
 		if path == "" {
@@ -33,11 +41,19 @@ func BenchmarkRealGraphStorageRouting(b *testing.B) {
 					b.ReportAllocs()
 					b.ResetTimer()
 					for range b.N {
-						route, err := r.RouteWithOptions(b.Context(), from, to, opt)
-						if err != nil {
-							b.Fatal(err)
+						if wantPath {
+							route, err := r.RouteWithOptions(b.Context(), from, to, opt)
+							if err != nil {
+								b.Fatal(err)
+							}
+							graphStoreBenchmarkSum = int64(route.Cost)
+						} else {
+							cost, err := r.RouteCostWithOptions(b.Context(), from, to, opt)
+							if err != nil {
+								b.Fatal(err)
+							}
+							graphStoreBenchmarkSum = int64(cost)
 						}
-						graphStoreBenchmarkSum = int64(route.Cost)
 					}
 				})
 			}

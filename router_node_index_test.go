@@ -35,6 +35,7 @@ func TestIndexedNodeSearchMatchesOriginalIDSearch(t *testing.T) {
 			for _, opt := range []RouteOptions{
 				{Profile: ProfileCar, Objective: ObjectiveDistance},
 				{Profile: ProfileCar, Objective: ObjectiveDuration},
+				{Profile: ProfileCar, Objective: ObjectiveEconomy},
 				{Profile: ProfileWalking}, {Profile: ProfileCycling}, {Profile: ProfileTravel},
 				{Profile: ProfileDelivery},
 				{Pro: true, Weights: ProWeights{LeftTurn: 2, Crossing: 5, NoLeftTurn: true}},
@@ -66,5 +67,49 @@ func TestIndexedNodeSearchMatchesOriginalIDSearch(t *testing.T) {
 		if _, err := disk.RouteWithOptions(ctx, ids[0], ids[len(ids)-1], RouteOptions{}); !errors.Is(err, context.Canceled) {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestIndexedShortQueriesInLongChain(t *testing.T) {
+	// Exercise both query modes at the ends and inside a packed road chain.
+	memory := chainTestRouter(20_000, false)
+	disk, _ := writeChainTestGraph(t, memory)
+	for _, engine := range []RouteEngine{EngineAStar, EngineDijkstraNode} {
+		for _, pair := range [][2]int64{{1, 2}, {10_000, 10_001}, {19_999, 20_000}, {20_000, 19_999}} {
+			opt := RouteOptions{Engine: engine, Profile: ProfileCar, Objective: ObjectiveDistance}
+			want, err := memory.RouteWithOptions(t.Context(), pair[0], pair[1], opt)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := disk.RouteWithOptions(t.Context(), pair[0], pair[1], opt)
+			if err != nil || !slices.Equal(got.Path, want.Path) || got.Cost != want.Cost || got.DistanceM != want.DistanceM || got.DurationS != want.DurationS {
+				t.Fatalf("%s %v: short route changed: %v", engine, pair, err)
+			}
+			cost, err := disk.RouteCostWithOptions(t.Context(), pair[0], pair[1], opt)
+			if err != nil || cost != want.Cost {
+				t.Fatalf("%s %v: cost-only route changed: %v", engine, pair, err)
+			}
+		}
+	}
+}
+
+func BenchmarkIndexedShortQueries(b *testing.B) {
+	memory := chainTestRouter(20_000, false)
+	disk, _ := writeChainTestGraph(b, memory)
+	for _, wantPath := range []bool{false, true} {
+		name := "cost"
+		if wantPath {
+			name = "path"
+		}
+		b.Run(name, func(b *testing.B) {
+			opt := (RouteOptions{Profile: ProfileCar, Objective: ObjectiveDistance}).withDefaults()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				if _, _, err := disk.indexNodeSearch(b.Context(), 10_000, 10_001, opt, wantPath); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }

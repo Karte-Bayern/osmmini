@@ -270,13 +270,19 @@ struct PreparedMapTileCache {
   private(set) var tiles: [MapTileKey: PreparedMapTile] = [:]
 
   mutating func updateViewport(owner: ObjectIdentifier, keys: [MapTileKey]) {
-    needed = Set(keys.prefix(Self.capacity))
+    let nextNeeded = Set(keys.prefix(Self.capacity))
     if self.owner != owner {
       tiles.removeAll(keepingCapacity: true)
       self.owner = owner
     } else {
-      tiles = tiles.filter { needed.contains($0.key) }
+      guard nextNeeded != needed else { return }
+      // Iterate the previous request, not the dictionary's keys: retaining a
+      // dictionary view while removing entries would force a copy on mutation.
+      for key in needed where !nextNeeded.contains(key) {
+        tiles.removeValue(forKey: key)
+      }
     }
+    needed = nextNeeded
   }
 
   func tile(for key: MapTileKey, owner: ObjectIdentifier) -> PreparedMapTile? {

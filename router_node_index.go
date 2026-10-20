@@ -32,12 +32,8 @@ func (r *Router) indexNodeSearch(ctx context.Context, from, to int64, opt RouteO
 	eval := newRouteEvaluator(opt)
 	costs := newCompactRouteCosts(eval)
 	heuristic := newRouteHeuristic(d.coordAt(target), opt)
-	dist := make(map[uint32]float64, min(64, d.nodes))
-	var previous map[uint32]uint32
-	if wantPath {
-		previous = make(map[uint32]uint32, min(64, d.nodes))
-	}
-	dist[fromIndex] = 0
+	labels := newIndexNodeLabels(min(64, d.nodes), wantPath)
+	labels.set(fromIndex, 0, 0)
 	pq := nodeValueHeap[uint32]{}
 	pq.push(nodeCandidate[uint32]{id: fromIndex, priority: heuristic.estimateCoordinate(d.coordAt(start))})
 	for pops := 0; len(pq) > 0; pops++ {
@@ -47,7 +43,7 @@ func (r *Router) indexNodeSearch(ctx context.Context, from, to int64, opt RouteO
 			}
 		}
 		current := pq.pop()
-		if current.dist != dist[current.id] {
+		if distance, _ := labels.distance(current.id); current.dist != distance {
 			continue
 		}
 		if current.id == toIndex {
@@ -55,7 +51,7 @@ func (r *Router) indexNodeSearch(ctx context.Context, from, to int64, opt RouteO
 				return nil, current.dist, nil
 			}
 			path := make([]int64, 0, 64)
-			for node := toIndex; ; node = previous[node] {
+			for node := toIndex; ; node = labels.paths[node].previous {
 				path = append(path, int64(binary.LittleEndian.Uint64(d.nodeRecord(int(node)))))
 				if node == fromIndex {
 					break
@@ -71,13 +67,10 @@ func (r *Router) indexNodeSearch(ctx context.Context, from, to int64, opt RouteO
 				continue
 			}
 			cost := current.dist + edgeCost
-			if old, exists := dist[next]; exists && cost >= old {
+			if old, exists := labels.distance(next); exists && cost >= old {
 				continue
 			}
-			dist[next] = cost
-			if wantPath {
-				previous[next] = current.id
-			}
+			labels.set(next, cost, current.id)
 			var estimate float64
 			if !heuristic.disabled {
 				estimate = heuristic.estimateCoordinate(d.coordAt(int(next)))
@@ -86,4 +79,41 @@ func (r *Router) indexNodeSearch(ctx context.Context, from, to int64, opt RouteO
 		}
 	}
 	return nil, 0, ErrRouteNoPath
+}
+
+// A path query updates both fields together. Keeping them in one map avoids a
+// second lookup and growth of a separate predecessor map for every relaxed node.
+// Cost-only queries still store just distances, and both maps grow lazily.
+type indexNodeLabel struct {
+	distance float64
+	previous uint32
+}
+
+type indexNodeLabels struct {
+	distances map[uint32]float64
+	paths     map[uint32]indexNodeLabel
+}
+
+func newIndexNodeLabels(capacity int, wantPath bool) indexNodeLabels {
+	if wantPath {
+		return indexNodeLabels{paths: make(map[uint32]indexNodeLabel, capacity)}
+	}
+	return indexNodeLabels{distances: make(map[uint32]float64, capacity)}
+}
+
+func (labels indexNodeLabels) distance(node uint32) (float64, bool) {
+	if labels.paths != nil {
+		label, exists := labels.paths[node]
+		return label.distance, exists
+	}
+	distance, exists := labels.distances[node]
+	return distance, exists
+}
+
+func (labels indexNodeLabels) set(node uint32, distance float64, previous uint32) {
+	if labels.paths != nil {
+		labels.paths[node] = indexNodeLabel{distance: distance, previous: previous}
+		return
+	}
+	labels.distances[node] = distance
 }

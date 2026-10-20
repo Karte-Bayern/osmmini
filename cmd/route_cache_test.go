@@ -55,6 +55,51 @@ func TestRouteCacheExpiryAndInvalidation(t *testing.T) {
 	c.Close() // Also exercise idempotent cleanup with the deferred Close.
 }
 
+func TestRouteCacheEvictionPreservesLaterDeadlinesAndBoundsTies(t *testing.T) {
+	for _, scenario := range []struct {
+		name    string
+		offsets []int
+		want    map[int]int
+	}{
+		{name: "one entry", offsets: []int{3}, want: map[int]int{}},
+		{name: "ordered", offsets: []int{6, 2, 5, 1, 4, 3}, want: map[int]int{4: 1, 5: 1, 6: 1}},
+		{name: "odd capacity", offsets: []int{4, 1, 5, 2, 3}, want: map[int]int{3: 1, 4: 1, 5: 1}},
+		{name: "equal deadlines", offsets: []int{3, 3, 3, 3, 3, 3}, want: map[int]int{3: 3}},
+		{name: "boundary ties", offsets: []int{1, 2, 2, 2, 3, 3}, want: map[int]int{2: 1, 3: 2}},
+		{name: "expired first", offsets: []int{-1, -1, 2, 3, 4, 5}, want: map[int]int{2: 1, 3: 1, 4: 1, 5: 1}},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			cache := newRouteCache(time.Hour, len(scenario.offsets))
+			defer cache.Close()
+			now := time.Now()
+			for i, offset := range scenario.offsets {
+				cache.entries[routeCacheKey{fromNode: int64(i)}] = &routeCacheEntry{
+					expiresAt: now.Add(time.Duration(offset) * time.Minute),
+				}
+			}
+			newKey := routeCacheKey{fromNode: int64(len(scenario.offsets))}
+			cache.set(newKey, RouteResponse{DistanceM: 42})
+			if response, ok := cache.get(newKey); !ok || response.DistanceM != 42 {
+				t.Fatal("new route missing after eviction")
+			}
+			got := map[int]int{}
+			for key := range cache.entries {
+				if key != newKey {
+					got[scenario.offsets[int(key.fromNode)]]++
+				}
+			}
+			if len(got) != len(scenario.want) {
+				t.Fatalf("remaining expiry groups = %v, want %v", got, scenario.want)
+			}
+			for offset, count := range scenario.want {
+				if got[offset] != count {
+					t.Fatalf("remaining expiry groups = %v, want %v", got, scenario.want)
+				}
+			}
+		})
+	}
+}
+
 func TestRouteCacheConcurrentAccess(t *testing.T) {
 	c := newRouteCache(time.Hour, 8)
 	defer c.Close()

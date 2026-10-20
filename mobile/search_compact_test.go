@@ -6,12 +6,82 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
 )
+
+func TestSearchPostingWindowBoundaries(t *testing.T) {
+	// Cross several complete directory windows and end in a partial one. The
+	// expected postings are built independently of either on-disk decoder.
+	postings := make([]searchPosting, 3*64*searchBlockPostings+71)
+	legacy := make([]byte, len(postings)*searchIndexBytes)
+	for n := range postings {
+		postings[n] = searchPosting{fmt.Sprintf("term%05d", n/3), uint64(n * 100), 17}
+		b := legacy[n*searchIndexBytes:][:searchIndexBytes]
+		copy(b, postings[n].term)
+		binary.LittleEndian.PutUint64(b[96:], postings[n].offset)
+		binary.LittleEndian.PutUint32(b[104:], postings[n].length)
+	}
+	for _, compact := range []bool{false, true} {
+		t.Run(fmt.Sprintf("compact=%v", compact), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "search.idx")
+			if compact {
+				if err := writeSearchPostings(t.Context(), path, postings, false); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(path, legacy, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			file, err := os.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			stat, err := file.Stat()
+			if err != nil {
+				t.Fatal(err)
+			}
+			reader := &searchReader{index: file}
+			if err := reader.readIndexHeader(stat.Size()); err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range []string{"", "term00000", "term00021", "term02730", "term02731", "term05461", "term08192", "term99999"} {
+				iterator, err := reader.postingsFrom([]byte(key), new(searchScratch))
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantAt := 0
+				for wantAt < len(postings) && postings[wantAt].term < key {
+					wantAt++
+				}
+				for {
+					term, offset, length, err := iterator.next()
+					if err == io.EOF {
+						break
+					}
+					if err != nil {
+						t.Fatalf("key %q: %v", key, err)
+					}
+					if string(term) < key {
+						continue
+					}
+					if wantAt >= len(postings) || postings[wantAt] != (searchPosting{string(term), offset, length}) {
+						t.Fatalf("key %q: unexpected posting %q/%d/%d at %d", key, term, offset, length, wantAt)
+					}
+					wantAt++
+				}
+				if wantAt != len(postings) {
+					t.Fatalf("key %q: stopped at %d of %d", key, wantAt, len(postings))
+				}
+			}
+		})
+	}
+}
 
 // Build the new index from an independently encoded legacy catalog, so query
 // equivalence does not depend on both test paths using the same encoder.
