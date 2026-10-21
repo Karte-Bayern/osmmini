@@ -8,6 +8,52 @@ import (
 	"testing"
 )
 
+func TestNodeSearchRetainsImprovedAndEqualCostPredecessors(t *testing.T) {
+	const start int64 = math.MinInt64 + 1
+	const target int64 = math.MaxInt64 - 1
+	for _, tc := range []struct {
+		name string
+		adj  map[int64][]Edge
+		path []int64
+		cost float64
+	}{
+		{
+			name: "improved predecessor through zero ID",
+			adj: map[int64][]Edge{
+				start: {{To: 0, DistM: 10}, {To: -3, DistM: 1}},
+				-3:    {{To: 0, DistM: 1}, {To: target, DistM: 10}},
+				0:     {{To: target, DistM: 1}, {To: start, DistM: 0}},
+			},
+			path: []int64{start, -3, 0, target}, cost: 3,
+		},
+		{
+			name: "equal cost keeps first predecessor",
+			adj: map[int64][]Edge{
+				start: {{To: 0, DistM: 1}, {To: -3, DistM: 1}},
+				0:     {{To: target, DistM: 1}},
+				-3:    {{To: target, DistM: 1}},
+			},
+			path: []int64{start, 0, target}, cost: 2,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Coincident coordinates make every heuristic zero, so the fixture's
+			// explicit edge weights exercise the same relaxation order in A*.
+			router := NewRouterFromGraph(map[int64]Coord{start: {}, 0: {}, -3: {}, target: {}}, tc.adj)
+			for _, engine := range []RouteEngine{EngineAStar, EngineDijkstra, EngineDijkstraNode} {
+				opt := (RouteOptions{Engine: engine, Objective: ObjectiveDistance}).withDefaults()
+				path, cost, err := router.nodeSearch(t.Context(), start, target, opt, true)
+				if err != nil || cost != tc.cost || !slices.Equal(path, tc.path) {
+					t.Fatalf("%s: path=%v, cost=%g, err=%v; want %v, %g", engine, path, cost, err, tc.path, tc.cost)
+				}
+				if _, cost, err := router.nodeSearch(t.Context(), start, target, opt, false); err != nil || cost != tc.cost {
+					t.Fatalf("%s cost-only: %g, %v; want %g", engine, cost, err, tc.cost)
+				}
+			}
+		})
+	}
+}
+
 func TestNodeSearchMatchesTurnSearchWithoutTransitionCosts(t *testing.T) {
 	r, _, _ := buildGridRouter(12, 12)
 	for id, edges := range r.g.adj {

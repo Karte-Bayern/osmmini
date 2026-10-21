@@ -35,12 +35,8 @@ func (r *Router) nodeSearch(ctx context.Context, from, to int64, opt RouteOption
 	}
 	eval := newRouteEvaluator(opt)
 	heuristic := r.queryHeuristic(to, target, opt)
-	dist := make(map[int64]float64, min(64, r.NodeCount()))
-	var prev map[int64]int64
-	if wantPath {
-		prev = make(map[int64]int64, min(64, r.NodeCount()))
-	}
-	dist[from] = 0
+	labels := newNodeLabels[int64](min(64, r.NodeCount()), wantPath)
+	labels.set(from, 0, 0)
 	pq := nodeValueHeap[int64]{}
 	pq.push(nodeCandidate[int64]{id: from, dist: 0, priority: heuristic.estimate(r, from)})
 	for pops := 0; len(pq) > 0; pops++ {
@@ -50,7 +46,7 @@ func (r *Router) nodeSearch(ctx context.Context, from, to int64, opt RouteOption
 			}
 		}
 		current := pq.pop()
-		if current.dist != dist[current.id] {
+		if distance, _ := labels.distance(current.id); current.dist != distance {
 			continue
 		}
 		if current.id == to {
@@ -58,7 +54,7 @@ func (r *Router) nodeSearch(ctx context.Context, from, to int64, opt RouteOption
 				return nil, current.dist, nil
 			}
 			path := make([]int64, 0, 64)
-			for id := to; ; id = prev[id] {
+			for id := to; ; id = labels.paths[id].previous {
 				path = append(path, id)
 				if id == from {
 					break
@@ -73,17 +69,51 @@ func (r *Router) nodeSearch(ctx context.Context, from, to int64, opt RouteOption
 				continue
 			}
 			cost := current.dist + eval.edgeCost(r, edge)
-			if old, exists := dist[edge.To]; exists && cost >= old {
+			if old, exists := labels.distance(edge.To); exists && cost >= old {
 				continue
 			}
-			dist[edge.To] = cost
-			if wantPath {
-				prev[edge.To] = current.id
-			}
+			labels.set(edge.To, cost, current.id)
 			pq.push(nodeCandidate[int64]{id: edge.To, dist: cost, priority: cost + heuristic.estimate(r, edge.To)})
 		}
 	}
 	return nil, 0, ErrRouteNoPath
+}
+
+// Path queries update distance and predecessor together. Keeping both values in
+// one map saves a second lookup and map growth. Cost-only queries retain just
+// distances, and neither representation allocates region-sized arrays.
+type nodeLabel[ID ~int64 | ~uint32] struct {
+	distance float64
+	previous ID
+}
+
+type nodeLabels[ID ~int64 | ~uint32] struct {
+	distances map[ID]float64
+	paths     map[ID]nodeLabel[ID]
+}
+
+func newNodeLabels[ID ~int64 | ~uint32](capacity int, wantPath bool) nodeLabels[ID] {
+	if wantPath {
+		return nodeLabels[ID]{paths: make(map[ID]nodeLabel[ID], capacity)}
+	}
+	return nodeLabels[ID]{distances: make(map[ID]float64, capacity)}
+}
+
+func (labels nodeLabels[ID]) distance(node ID) (float64, bool) {
+	if labels.paths != nil {
+		label, exists := labels.paths[node]
+		return label.distance, exists
+	}
+	distance, exists := labels.distances[node]
+	return distance, exists
+}
+
+func (labels nodeLabels[ID]) set(node ID, distance float64, previous ID) {
+	if labels.paths != nil {
+		labels.paths[node] = nodeLabel[ID]{distance: distance, previous: previous}
+		return
+	}
+	labels.distances[node] = distance
 }
 
 type nodeCandidate[ID ~int64 | ~uint32] struct {

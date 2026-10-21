@@ -156,6 +156,7 @@ private struct DemoSidebar: View {
   @State private var removingImport = false
   @State private var deletingRegion: InstalledRegion?
   @State private var clearingDownloads = false
+  @State private var showingPlaces = false
 
   var body: some View {
     List {
@@ -211,6 +212,18 @@ private struct DemoSidebar: View {
           }
         }
       }
+      if !model.places.saved.isEmpty || !model.places.recent.isEmpty || model.places.needsReset {
+        Section {
+          Button("Meine Orte", systemImage: "star") {
+            model.query = ""
+            showingPlaces = true
+          }.frame(minHeight: 44).disabled(model.busy)
+        } footer: {
+          Text(
+            "Gespeicherte Orte und letzte Auswahlen bleiben auch beim Löschen einer Offline-Karte erhalten."
+          )
+        }
+      }
       CatalogPicker(model: model)
       Section {
         Button("Lokale PBF importieren", systemImage: "doc.badge.plus") {
@@ -231,6 +244,14 @@ private struct DemoSidebar: View {
       }
     }
     .scrollDismissesKeyboard(.interactively)
+    .sheet(isPresented: $showingPlaces) {
+      DemoPlaceSearch(model: model, target: nil, showRegions: { showingPlaces = false }) { place in
+        guard !model.busy, model.contains(place.coordinate) else { return }
+        model.inspect(place, minimumZoom: 14)
+        showingPlaces = false
+        showMap()
+      }
+    }
     .confirmationDialog(
       "Offline-Region löschen?",
       isPresented: Binding(
@@ -245,9 +266,11 @@ private struct DemoSidebar: View {
       }
       Button("Abbrechen", role: .cancel) { deletingRegion = nil }
     } message: {
-      Text(
-        "Die Offline-Karte wird vom Gerät entfernt. Für die spätere Nutzung muss sie erneut importiert werden."
-      )
+      if let region = deletingRegion {
+        Text(
+          "„\(region.name)“ wird entfernt und gibt \(region.byteCount.formatted(.byteCount(style: .file))) frei. Für die spätere Nutzung muss die Region erneut importiert werden."
+        )
+      }
     }
     .confirmationDialog(
       "PBF-Downloads entfernen?", isPresented: $clearingDownloads, titleVisibility: .visible
@@ -285,39 +308,57 @@ private struct DemoSidebar: View {
     Section {
       ForEach(model.installed) { region in
         let active = model.activeDirectory == region.directory
-        Button {
-          if active { showMap() } else { model.openRegion(region.directory) }
-        } label: {
-          HStack(spacing: 12) {
-            Image(systemName: active ? "map.fill" : "map")
-              .imageScale(.large).accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 4) {
-              Text(region.name).font(.headline).foregroundStyle(.primary)
-              Text(
-                "\(active ? "Geöffnet" : "Offline verfügbar") · \(region.byteCount.formatted(.byteCount(style: .file)))"
-              )
-              .font(.caption).foregroundStyle(.secondary)
-              if let date = region.importedAt {
-                Text("Importiert \(date.formatted(date: .abbreviated, time: .omitted))")
-                  .font(.caption2).foregroundStyle(.secondary)
+        HStack(spacing: 8) {
+          Button {
+            if active { showMap() } else { model.openRegion(region.directory) }
+          } label: {
+            HStack(spacing: 12) {
+              Image(systemName: active ? "map.fill" : "map")
+                .imageScale(.large).foregroundStyle(.tint).accessibilityHidden(true)
+              VStack(alignment: .leading, spacing: 4) {
+                Text(region.name).font(.headline).foregroundStyle(.primary)
+                Text(
+                  "\(active ? "Geöffnet" : "Offline verfügbar") · \(region.byteCount.formatted(.byteCount(style: .file)))"
+                )
+                .font(.caption).foregroundStyle(.secondary)
+                if let date = region.importedAt {
+                  Text("Importiert \(date.formatted(date: .abbreviated, time: .omitted))")
+                    .font(.caption2).foregroundStyle(.secondary)
+                }
+                if region.format < RegionManifest.currentFormat {
+                  Text("Erneut importieren, um Speicherplatz zu sparen.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                }
               }
-              if region.format < RegionManifest.currentFormat {
-                Text("Erneut importieren, um Speicherplatz zu sparen.")
-                  .font(.caption2).foregroundStyle(.secondary)
-              }
+              Spacer(minLength: 0)
+              Image(systemName: active ? "arrow.up.forward.app" : "chevron.right")
+                .font(.callout).accessibilityHidden(true)
             }
-            Spacer(minLength: 0)
-            Image(systemName: active ? "arrow.up.forward.app" : "chevron.right")
-              .font(.callout).accessibilityHidden(true)
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
           }
-          .padding(.vertical, 4)
-          .contentShape(Rectangle())
+          .buttonStyle(.plain)
+          .accessibilityElement(children: .combine)
+          .accessibilityHint(active ? "Zur Karte wechseln." : "Offline-Karte öffnen.")
+          Menu {
+            Button(active ? "Karte anzeigen" : "Karte öffnen", systemImage: "map") {
+              if active { showMap() } else { model.openRegion(region.directory) }
+            }
+            Button("Region löschen …", systemImage: "trash", role: .destructive) {
+              deletingRegion = region
+            }
+          } label: {
+            Image(systemName: "ellipsis.circle")
+              .frame(minWidth: 44, minHeight: 44)
+              .contentShape(Rectangle())
+          }
+          .menuStyle(.borderlessButton)
+          .menuIndicator(.hidden)
+          .accessibilityLabel("Aktionen für \(region.name)")
         }
         .disabled(model.busy)
-        .accessibilityElement(children: .combine)
-        .accessibilityHint(active ? "Zur Karte wechseln." : "Offline-Karte öffnen.")
         .contextMenu {
-          Button("Region löschen", systemImage: "trash", role: .destructive) {
+          Button("Region löschen …", systemImage: "trash", role: .destructive) {
             deletingRegion = region
           }.disabled(model.busy)
         }
@@ -386,6 +427,11 @@ private struct DemoSidebar: View {
     } header: {
       Label("Region noch nicht bereit", systemImage: "exclamationmark.triangle")
         .foregroundStyle(.red)
+    } footer: {
+      if model.pending == nil {
+        Text(
+          "Wähle die Region oder die lokale PBF-Datei erneut aus, um es noch einmal zu versuchen.")
+      }
     }
   }
 
@@ -447,10 +493,18 @@ private struct CatalogPicker: View {
       if model.catalogLoading { ProgressView("Regionenkatalog wird geladen …") }
       if let error = model.catalogError {
         VStack(alignment: .leading, spacing: 8) {
-          Label("Katalog momentan nicht erreichbar", systemImage: "wifi.exclamationmark")
-            .font(.callout)
-          Text("Prüfe die Internetverbindung und versuche es erneut.")
-            .font(.caption).foregroundStyle(.secondary)
+          Label(
+            model.catalogLoaded
+              ? "Katalog konnte nicht aktualisiert werden" : "Katalog momentan nicht erreichbar",
+            systemImage: "wifi.exclamationmark"
+          )
+          .font(.callout)
+          Text(
+            model.catalogLoaded
+              ? "Die bereits geladenen Regionen werden weiter angezeigt. Versuche die Aktualisierung später erneut."
+              : "Prüfe die Internetverbindung und versuche es erneut."
+          )
+          .font(.caption).foregroundStyle(.secondary)
           DisclosureGroup("Fehlerdetails") {
             Text(error).font(.caption).textSelection(.enabled)
           }
@@ -601,14 +655,23 @@ struct ActivityProgress: View {
     VStack(alignment: .leading, spacing: 12) {
       Text(title).font(.headline).accessibilityAddTraits(.isHeader)
       if let fraction = model.fraction, !model.cancelling {
-        ProgressView(value: fraction) {
-          Text(
-            model.activity == .downloading && model.pending == nil ? "Download" : "Aktuelle Phase")
-        } currentValueLabel: {
-          Text(fraction, format: .percent.precision(.fractionLength(0)))
-            .monospacedDigit()
+        VStack(alignment: .leading, spacing: 6) {
+          HStack(alignment: .firstTextBaseline) {
+            Text(
+              model.activity == .downloading && model.pending == nil ? "Download" : "Aktuelle Phase"
+            )
+            Spacer(minLength: 8)
+            Text(fraction, format: .percent.precision(.fractionLength(0)))
+              .monospacedDigit()
+          }
+          .font(.caption)
+          .accessibilityHidden(true)
+          ProgressView(value: fraction)
+            .accessibilityLabel(
+              model.activity == .downloading && model.pending == nil ? "Download" : "Aktuelle Phase"
+            )
+            .accessibilityValue(fraction.formatted(.percent.precision(.fractionLength(0))))
         }
-        .accessibilityValue(fraction.formatted(.percent.precision(.fractionLength(0))))
       } else {
         ProgressView().accessibilityLabel(title)
       }
@@ -616,6 +679,12 @@ struct ActivityProgress: View {
         model.cancelling ? "Bitte kurz warten, bis der Vorgang sicher beendet ist." : model.status
       )
       .font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+      if !model.cancelling, model.pending != nil,
+        model.activity == .importing || model.activity == .downloading
+      {
+        Text("Die Aufbereitung läuft in mehreren Phasen. Jede Phase hat ihren eigenen Fortschritt.")
+          .font(.caption).foregroundStyle(.secondary)
+      }
       #if os(iOS)
         if !model.cancelling, model.activity == .importing || model.activity == .downloading {
           Text("Für die Aufbereitung die App im Vordergrund lassen.")

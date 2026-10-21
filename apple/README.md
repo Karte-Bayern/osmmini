@@ -46,7 +46,39 @@ before an iOS build. No Go installation is needed on the destination device.
 1. Download a region from Geofabrik or select a local `.osm.pbf` file.
 2. Wait for graph, search and map preparation.
 3. Search for a place or select a map position, then choose **Als Start** or
-   **Als Ziel**. Plan a route by distance or duration and export GPX/GeoJSON.
+   **Route hierher**. The latter requests your location when no start is set.
+   Plan a route by distance or duration and export GPX/GeoJSON.
+
+Save places with the star and find them again in search, including under your
+own names. Saved places and the last 20 selected places stay local and survive
+region replacement or deletion. GPS updates are not added to this history.
+Places outside the current region are marked; open a matching offline map to
+use them. Remove individual entries or clear recent selections from the search
+sheet.
+
+Tap a named road or a visible POI marker to open its details, save it or use it
+as a route endpoint. Road selections use the nearest point on the visible line;
+empty areas still select a free map point. POI markers appear from display zoom
+14; their detail tiles follow the display zoom independently of the basemap,
+with at most 512 POIs per detail tile. Details include address, opening-hours
+text, phone and website when retained by the import. Existing regions gain POI
+markers from their search catalog without the source PBF; additional source
+tags require a new import. Opening hours are stored OSM text, not a live
+open/closed status. Website and OSM links open only when selected and require
+a network connection.
+
+POIs use category colors, with category symbols from display zoom 16 and
+collision-checked names from zoom 17. Nearby markers are spaced apart in screen
+coordinates. Crowded markers show a count and expose every member through
+`MapSelection.alternatives`, retaining each place's own coordinate and details.
+The demo offers a searchable choice list, including for coincident POIs at the
+maximum zoom. Drawing and selection share the same group and label layout.
+The place inspector shows the address above route/save actions, expands
+opening-hours details on demand, displays the website's host and can share a
+place as text.
+Selecting another place resets the inspector's scroll position and disclosures.
+On narrow screens, a compact inspector preserves map space and opens full
+details in a separate sheet with route/save actions fixed above the safe area.
 
 Published regions work without the source PBF or a network connection. The app
 can reopen the last region, retry interrupted imports, remove installed regions
@@ -56,8 +88,16 @@ app is suspended is not guaranteed.
 
 The map displays local vector geometry, road/place labels, routes and location
 accuracy. It supports panning, zooming and fitting the region or route. Enlarging
-source tiles adds no detail. Location access starts only after an explicit
-action and stops in the background.
+basemap tiles adds no road or building detail. Location access starts only
+after an explicit action and stops in the background.
+
+The location arrow on the map zooms to the current GPS fix at street level.
+When no fresh fix exists, the demo requests location access and focuses the map
+once a fix arrives. Repeated taps recenter without changing route endpoints.
+Outside the installed region, the position remains visible with a prompt to
+open a matching offline map. Embedders can supply `onLocate`/`isLocating` to
+connect their location provider; with only `userLocation`, the renderer's
+location button focuses that coordinate without requesting permissions.
 
 Adaptive split views and map details follow the available window size,
 including iPad multitasking and resizable displays. macOS uses native windows
@@ -95,6 +135,19 @@ Use `OfflineMap(engine: engine, route: route)` in SwiftUI, or read vector tiles
 with `engine.tile(z:x:y:)` for another renderer. `Geofabrik(directory:)` exposes
 catalog and download APIs independently; offline engine queries use no network.
 
+Use `onFeatureSelect` for road/POI selection, including snapped coordinates and
+optional source metadata:
+
+```swift
+OfflineMap(engine: engine, onFeatureSelect: { selection in
+    // A nil feature denotes a free map point.
+    print(selection.feature?.name ?? "Map point", selection.coordinate)
+})
+```
+
+The existing `onSelect` callback continues to return the tapped coordinate.
+When both callbacks are set, `onFeatureSelect` takes precedence.
+
 Native work runs off the main actor. Progress callbacks run on a worker thread;
 UI changes belong on `MainActor`. Task cancellation cancels the native operation.
 `close()` is idempotent and waits for active native work. Callers retain access
@@ -120,6 +173,7 @@ CGO_ENABLED=0 go run ./cmd/prepare-region \
 | `routing.alt` | Memory-mapped ALT lower bounds for distance and duration |
 | `search.jsonl`, `search.jsonl.idx` | Compressed records and disk-backed prefix index |
 | `places.jsonl` | Settlement catalog for faster opening in new imports |
+| `.poi-v1.idx` (optional) | Locally derived spatial index referencing search records |
 | `basemap.ttiles/` | Local vector-map artifact |
 | `NOTICE.txt` | Map-data attribution and licence links |
 
@@ -128,9 +182,13 @@ catalog is optional for older regions and validated when declared by the
 manifest. Original OSM IDs, coordinates, directed connectivity and road geometry
 are preserved by chain packing.
 
-Published destinations are immutable. Reimport into a new directory to update
-data or obtain the current storage format. Incompatible pending imports need a
-new workspace. Keep `NOTICE.txt` with distributed regions.
+Published map files are immutable. Reimport into a new directory to update
+data or obtain the current storage format. A derived POI index may be cached
+locally when a region is opened; it is bound to the search-data checksum and
+does not replace source files. The first open builds this index; subsequent
+opens reuse it. Read-only regions use a temporary index. In writable regions,
+interrupted index builds are cleaned up on the next open. Incompatible pending
+imports need a new workspace. Keep `NOTICE.txt` with distributed regions.
 
 New imports prepare two directed landmarks per metric using conservative
 16-bit cost intervals. Older regions remain usable without this optional

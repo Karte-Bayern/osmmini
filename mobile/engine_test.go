@@ -79,6 +79,10 @@ func fixture(t *testing.T) string {
 }
 
 func fixtureWithStreetName(t *testing.T, streetName string) string {
+	return fixtureWithRoadClass(t, streetName, "residential")
+}
+
+func fixtureWithRoadClass(t *testing.T, streetName, roadClass string) string {
 	t.Helper()
 	uv := func(v uint64) []byte { return binary.AppendUvarint(nil, v) }
 	field := func(n int, v uint64) []byte { return append(uv(uint64(n<<3)), uv(v)...) }
@@ -88,7 +92,7 @@ func fixtureWithStreetName(t *testing.T, streetName string) string {
 		return append(out, b...)
 	}
 	zig := func(v int64) uint64 { return uint64(v<<1) ^ uint64(v>>63) }
-	strings := []string{"", "highway", "residential", "name", streetName, "amenity", "cafe", "Café Test", "addr:street", "addr:housenumber", "7"}
+	strings := []string{"", "highway", roadClass, "name", streetName, "amenity", "cafe", "Café Test", "addr:street", "addr:housenumber", "7"}
 	var table, group []byte
 	for _, s := range strings {
 		table = append(table, message(1, []byte(s))...)

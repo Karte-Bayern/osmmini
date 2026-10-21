@@ -351,6 +351,7 @@ type Engine struct {
 	tiles       *tinytiles.Dataset
 	places      placeIndex
 	settlements exactPlaceIndex
+	pois        *poiIndex
 	Manifest    Manifest
 	closed      bool
 }
@@ -437,9 +438,16 @@ func Open(ctx context.Context, path string) (*Engine, error) {
 		search.close()
 		return nil, err
 	}
+	pois, err := openPOIIndex(ctx, path, search, manifest.Checksums["search.jsonl"])
+	if err != nil {
+		r.Close()
+		search.close()
+		_ = tiles.Close()
+		return nil, err
+	}
 	return &Engine{
 		router: r, search: search, tiles: tiles, places: places.labels,
-		settlements: places.exact, Manifest: manifest,
+		settlements: places.exact, pois: pois, Manifest: manifest,
 	}, nil
 }
 func (e *Engine) Close() error {
@@ -451,6 +459,7 @@ func (e *Engine) Close() error {
 	e.closed = true
 	e.places = nil
 	e.settlements = nil
+	e.pois.close()
 	e.search.close()
 	_ = e.tiles.Close()
 	return e.router.Close()
@@ -483,6 +492,7 @@ func (e *Engine) Search(ctx context.Context, query string, limit int) ([]SearchR
 		for _, result := range candidates {
 			key := identity{result.Kind, result.ID}
 			if !seen[key] {
+				result.Details = cleanDetails(result.Details)
 				results = append(results, result)
 				seen[key] = true
 				if len(results) == limit {
@@ -553,24 +563,38 @@ func (e *Engine) Tile(ctx context.Context, z, x, y int) (VectorTile, error) {
 	if err := ctx.Err(); err != nil {
 		return VectorTile{}, err
 	}
-	data, err := e.tiles.GetTileXYZ(z, x, y)
-	if contextErr := ctx.Err(); contextErr != nil {
-		return VectorTile{}, contextErr
+	if z < 0 || z > 22 || x < 0 || y < 0 || x >= 1<<z || y >= 1<<z {
+		return VectorTile{}, errors.New("invalid tile coordinates")
 	}
-	var tile VectorTile
-	if errors.Is(err, tinytiles.ErrTileNotFound) {
-		tile = VectorTile{Features: []VectorFeature{}}
-	} else if err != nil {
-		return VectorTile{}, err
-	} else {
-		tile, err = decodeVectorTile(ctx, data)
-		if err != nil {
+	tile := VectorTile{Features: []VectorFeature{}}
+	// Swift can request detail tiles at its display zoom independently of the
+	// lower-resolution basemap. Never ask the dataset for an unknown zoom or
+	// repeat its coarse geometry in those overzoomed detail tiles.
+	if z <= e.Manifest.MaxZoom {
+		data, err := e.tiles.GetTileXYZ(z, x, y)
+		if contextErr := ctx.Err(); contextErr != nil {
+			return VectorTile{}, contextErr
+		}
+		if err != nil && !errors.Is(err, tinytiles.ErrTileNotFound) {
 			return VectorTile{}, err
+		}
+		if err == nil {
+			tile, err = decodeVectorTile(ctx, data)
+			if err != nil {
+				return VectorTile{}, err
+			}
 		}
 	}
 	if err := ctx.Err(); err != nil {
 		return VectorTile{}, err
 	}
 	tile.Features = append(tile.Features, e.places.features(z, x, y)...)
+	if z >= min(poiIndexZoom, e.Manifest.MaxZoom) {
+		points, err := e.pois.features(ctx, z, x, y)
+		if err != nil {
+			return VectorTile{}, err
+		}
+		tile.Features = append(tile.Features, points...)
+	}
 	return tile, nil
 }

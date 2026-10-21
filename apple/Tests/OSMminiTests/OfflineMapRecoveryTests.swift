@@ -590,6 +590,7 @@ private actor PendingMapViewport {
   let coordinate = Coordinate(lat: 48.573, lon: 13.457)
   for (currentZoom, minimumZoom, expectedZoom) in [
     (7, 14, 14), (14, 14, 14), (17, 14, 17),
+    (7, 16, 16), (16, 16, 16), (18, 16, 18),
   ] {
     let viewport = try #require(
       OfflineMapViewport.focusing(

@@ -568,13 +568,14 @@ struct OfflineMapTilePlacement: Hashable {
 
   /// Load the center first, while leaving drawing order and task identity stable.
   /// Distance uses the displayed world copy, including across the date line.
+  /// Zoom-zero units make basemap and detail tiles comparable in one request.
   static func loadingKeys(in placements: [Self], center: Coordinate) -> [MapTileKey] {
-    guard let zoom = placements.first?.key.z else { return [] }
     let origin = WebMercator.world(
-      Coordinate(lat: center.lat, lon: center.lon.truncatingRemainder(dividingBy: 360)), zoom: zoom)
+      Coordinate(lat: center.lat, lon: center.lon.truncatingRemainder(dividingBy: 360)), zoom: 0)
     var ranked = placements.enumerated().map { index, placement in
-      let dx = (Double(placement.worldX) + 0.5) * 256 - Double(origin.x)
-      let dy = (Double(placement.key.y) + 0.5) * 256 - Double(origin.y)
+      let scale = exp2(Double(-placement.key.z)) * 256
+      let dx = (Double(placement.worldX) + 0.5) * scale - Double(origin.x)
+      let dy = (Double(placement.key.y) + 0.5) * scale - Double(origin.y)
       return (placement: placement, distance: dx * dx + dy * dy, index: index)
     }
     ranked.sort {
@@ -610,6 +611,40 @@ struct OfflineMapTilePlacement: Hashable {
       }
     }
     return placements
+  }
+}
+
+/// Road geometry can overzoom from coarse imported tiles, while POI positions
+/// and the per-tile result limit follow the actual viewport. Both layers share
+/// the same bounded cache; missing detail tiles never fall back to coarse POIs.
+struct OfflineMapTilePlan {
+  let base: [OfflineMapTilePlacement]
+  let details: [OfflineMapTilePlacement]
+  let baseZoom: Int
+  let poiZoom: Int?
+  var hasDetailPOIs: Bool { poiZoom != nil && poiZoom != baseZoom }
+  var placements: [OfflineMapTilePlacement] { base + details }
+  var keys: [MapTileKey] { OfflineMapTilePlacement.keys(in: placements) }
+
+  static func make(
+    center: Coordinate, zoom: Int, size: CGSize, baseMaxZoom: Int
+  ) -> Self {
+    let baseZoom = min(zoom, baseMaxZoom)
+    let base = OfflineMapTilePlacement.visible(
+      center: center, zoom: zoom, size: size, tileZoom: baseMaxZoom)
+    let poiZoom = zoom >= 14 ? min(zoom, 18) : nil
+    guard !base.isEmpty, let poiZoom, poiZoom > baseZoom else {
+      return Self(base: base, details: [], baseZoom: baseZoom, poiZoom: zoom >= 14 ? baseZoom : nil)
+    }
+    let remaining = max(
+      0, PreparedMapTileCache.capacity - OfflineMapTilePlacement.keys(in: base).count)
+    let candidates = OfflineMapTilePlacement.visible(
+      center: center, zoom: zoom, size: size, tileZoom: poiZoom)
+    let allowed = Set(
+      OfflineMapTilePlacement.loadingKeys(in: candidates, center: center).prefix(remaining))
+    return Self(
+      base: base, details: candidates.filter { allowed.contains($0.key) },
+      baseZoom: baseZoom, poiZoom: poiZoom)
   }
 }
 

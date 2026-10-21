@@ -7,6 +7,10 @@ public struct OfflineMap: View {
   public let engine: OfflineEngine
   public var route: Route?
   public var onSelect: ((Coordinate) -> Void)?
+  /// Receives named streets and points of interest from the visible offline
+  /// tiles. When present, this replaces `onSelect`; empty taps still return a
+  /// coordinate with no feature. The legacy callback always receives raw taps.
+  public var onFeatureSelect: ((MapSelection) -> Void)?
   public var markers: [Coordinate]
   public var focus: Coordinate?
   /// Change this identifier to repeat a focus request at the same coordinate.
@@ -24,6 +28,11 @@ public struct OfflineMap: View {
   public var userLocation: Coordinate?
   /// Horizontal accuracy in meters, used only when a valid user location exists.
   public var userLocationAccuracy: Double?
+  /// Ask the host to acquire a GPS fix and focus it. With no callback, the
+  /// location control focuses the supplied `userLocation` directly.
+  public var onLocate: (() -> Void)?
+  /// The host is currently waiting for a location fix or permission.
+  public var isLocating: Bool
   private let initialCenter: Coordinate?
   @State private var center: Coordinate
   @State private var zoom: Int
@@ -53,11 +62,14 @@ public struct OfflineMap: View {
     routeStart: Coordinate? = nil, routeDestination: Coordinate? = nil,
     selection: Coordinate? = nil,
     userLocation: Coordinate? = nil, userLocationAccuracy: Double? = nil,
+    onLocate: (() -> Void)? = nil, isLocating: Bool = false,
+    onFeatureSelect: ((MapSelection) -> Void)? = nil,
     onSelect: ((Coordinate) -> Void)? = nil
   ) {
     self.engine = engine
     self.route = route
     self.onSelect = onSelect
+    self.onFeatureSelect = onFeatureSelect
     self.markers = markers
     self.focus = focus
     self.focusRequest = focusRequest
@@ -67,6 +79,8 @@ public struct OfflineMap: View {
     self.selection = selection
     self.userLocation = userLocation
     self.userLocationAccuracy = userLocationAccuracy
+    self.onLocate = onLocate
+    self.isLocating = isLocating
     initialCenter = center
     let initialZoom = max(engine.manifest.minZoom, min(11, engine.manifest.maxZoom))
     let focusedViewport = OfflineMapViewport.focusing(
@@ -79,9 +93,9 @@ public struct OfflineMap: View {
   public var body: some View {
     GeometryReader { geometry in
       let size = geometry.size
-      let placements = OfflineMapTilePlacement.visible(
-        center: center, zoom: zoom, size: size, tileZoom: engine.manifest.maxZoom)
-      let keys = OfflineMapTilePlacement.keys(in: placements)
+      let tilePlan = OfflineMapTilePlan.make(
+        center: center, zoom: zoom, size: size, baseMaxZoom: engine.manifest.maxZoom)
+      let keys = tilePlan.keys
       let request = TileRequest(owner: ObjectIdentifier(engine), keys: keys, retry: retry)
       let routeRequest = RouteViewportRequest(owner: ObjectIdentifier(engine), path: route?.path)
       Canvas { context, canvasSize in
@@ -89,7 +103,7 @@ public struct OfflineMap: View {
           Path(CGRect(origin: .zero, size: canvasSize)),
           with: .color(Color(red: 0.96, green: 0.95, blue: 0.92)))
         var labelTiles: [OfflineMapLabelTile] = []
-        for placement in placements {
+        for placement in tilePlan.base {
           let key = placement.key
           guard let tile = tileLoader.cache.tile(for: key, owner: request.owner) else { continue }
           let scale = placement.scale(at: zoom)
@@ -134,7 +148,7 @@ public struct OfflineMap: View {
                 style: StrokeStyle(lineWidth: width / scale, lineCap: .round, lineJoin: .round))
             }
           }
-          if !tile.labels.isEmpty {
+          if !tile.labels.isEmpty || !tile.selectablePoints.isEmpty {
             labelTiles.append(OfflineMapLabelTile(tile: tile, offset: offset, scale: scale))
           }
         }
@@ -163,16 +177,29 @@ public struct OfflineMap: View {
                 lineWidth: 5 / placement.scale, lineCap: .round, lineJoin: .round))
           }
         }
-        drawLabels(labelTiles, context: &context, size: canvasSize)
+        var detailTiles: [OfflineMapLabelTile] = []
+        for placement in tilePlan.details {
+          guard let tile = tileLoader.cache.tile(for: placement.key, owner: request.owner) else {
+            continue
+          }
+          let origin = placement.origin(center: center, zoom: zoom, size: canvasSize)
+          detailTiles.append(
+            OfflineMapLabelTile(
+              tile: tile,
+              offset: CGPoint(x: origin.x + drag.width, y: origin.y + drag.height),
+              scale: placement.scale(at: zoom)))
+        }
+        let poiMarkers = OfflineMapPOILayout.markers(
+          in: tilePlan.hasDetailPOIs ? detailTiles : labelTiles, zoom: zoom, size: canvasSize)
+        drawPlacePoints(labelTiles, context: &context, size: canvasSize)
+        drawPOIs(poiMarkers, context: &context)
+        drawLabels(labelTiles, poiMarkers: poiMarkers, context: &context, size: canvasSize)
         if let selection, selection.lat.isFinite, selection.lon.isFinite {
           let point = screen(selection, size: canvasSize)
           let pin = Path(
-            ellipseIn: CGRect(x: point.x - 10, y: point.y - 10, width: 20, height: 20))
-          context.fill(pin, with: .color(.orange))
-          context.stroke(pin, with: .color(.white), lineWidth: 3)
-          context.fill(
-            Path(ellipseIn: CGRect(x: point.x - 3, y: point.y - 3, width: 6, height: 6)),
-            with: .color(.white))
+            ellipseIn: CGRect(x: point.x - 15, y: point.y - 15, width: 30, height: 30))
+          context.stroke(pin, with: .color(.white), lineWidth: 6)
+          context.stroke(pin, with: .color(.orange), lineWidth: 3)
         }
         for marker in displayedMarkers {
           let p = screen(marker.coordinate, size: canvasSize)
@@ -198,10 +225,12 @@ public struct OfflineMap: View {
           context.stroke(dot, with: .color(.white), lineWidth: 3)
         }
       }
+      .environment(\.lineLimit, 1)
+      .environment(\.truncationMode, .tail)
       .accessibilityElement(children: .ignore)
       .accessibilityLabel("Offline-Karte von \(engine.manifest.name)")
       .accessibilityHint(
-        onSelect == nil
+        onSelect == nil && onFeatureSelect == nil
           ? "Doppeltippen oder mit Plus und Minus zoomen. Mit dem Regionsknopf die ganze Region anzeigen."
           : "Doppeltippen oder mit Plus und Minus zoomen. Antippen wählt einen Ort. A markiert den Start, B das Ziel."
       )
@@ -226,14 +255,25 @@ public struct OfflineMap: View {
               zoom = viewport.zoom
             }.exclusively(
               before: SpatialTapGesture().onEnded { tap in
-                guard let onSelect else { return }
+                guard onSelect != nil || onFeatureSelect != nil else { return }
                 navigate()
+                if let onFeatureSelect {
+                  if let selection = OfflineMapSelection.select(
+                    at: tap.location, center: center, zoom: zoom, size: size,
+                    placements: tilePlan.placements, baseZoom: tilePlan.baseZoom,
+                    poiZoom: tilePlan.poiZoom, labelObstacles: labelObstacles(size: size),
+                    tile: { tileLoader.cache.tile(for: $0, owner: request.owner) })
+                  {
+                    onFeatureSelect(selection)
+                  }
+                  return
+                }
                 let p = world(center)
                 let selected = coordinate(
                   CGPoint(
                     x: p.x + tap.location.x - size.width / 2,
                     y: p.y + tap.location.y - size.height / 2))
-                onSelect(selected)
+                onSelect?(selected)
               })
           )
       )
@@ -297,7 +337,8 @@ public struct OfflineMap: View {
         }.padding(6).background(.regularMaterial)
       }
       .task(id: request) {
-        let loadingKeys = OfflineMapTilePlacement.loadingKeys(in: placements, center: center)
+        let loadingKeys = OfflineMapTilePlacement.loadingKeys(
+          in: tilePlan.placements, center: center)
         await tileLoader.load(owner: request.owner, keys: loadingKeys) { [engine] key in
           try await PreparedMapTile.prepare(engine.tile(z: key.z, x: key.x, y: key.y))
         }
@@ -358,6 +399,31 @@ public struct OfflineMap: View {
     }
   }
   @ViewBuilder private func controls(size: CGSize) -> some View {
+    if onLocate != nil || userLocation != nil {
+      Button {
+        if let onLocate {
+          onLocate()
+        } else if let viewport = OfflineMapViewport.focusing(
+          userLocation, currentZoom: zoom, minimumZoom: 16,
+          minZoom: engine.manifest.minZoom, maxZoom: maximumDisplayZoom)
+        {
+          navigate()
+          center = viewport.center
+          zoom = viewport.zoom
+        }
+      } label: {
+        Group {
+          if isLocating {
+            ProgressView().controlSize(.small)
+          } else {
+            Image(systemName: userLocation == nil ? "location" : "location.fill")
+          }
+        }.frame(width: 44, height: 44)
+      }
+      .accessibilityLabel(isLocating ? "Standort wird ermittelt" : "Auf meinen Standort zoomen")
+      .help("Aktuellen GPS-Standort heranzoomen")
+      .disabled(isLocating)
+    }
     Button {
       navigate()
       zoom = min(maximumDisplayZoom, zoom + 1)
@@ -404,10 +470,10 @@ public struct OfflineMap: View {
     default: return nil
     }
   }
-  private func drawLabels(
-    _ tiles: [OfflineMapLabelTile], context: inout GraphicsContext, size: CGSize
-  ) {
-    let controlLength: CGFloat = route?.path.isEmpty == false ? 232 : 180
+  private func labelObstacles(size: CGSize) -> [CGRect] {
+    let controlLength: CGFloat =
+      (route?.path.isEmpty == false ? 232 : 180)
+      + (onLocate != nil || userLocation != nil ? 52 : 0)
     let controlsSize =
       size.height >= controlLength
       ? CGSize(width: 76, height: controlLength) : CGSize(width: controlLength, height: 76)
@@ -423,6 +489,24 @@ public struct OfflineMap: View {
       let point = screen(coordinate, size: size)
       obstacles.append(CGRect(x: point.x - 16, y: point.y - 16, width: 32, height: 32))
     }
+    return obstacles
+  }
+
+  private func drawLabels(
+    _ tiles: [OfflineMapLabelTile], poiMarkers: [OfflineMapPOILayout.Marker],
+    context: inout GraphicsContext, size: CGSize
+  ) {
+    var obstacles = labelObstacles(size: size)
+    for marker in poiMarkers {
+      let markerRadius = marker.radius(at: zoom)
+      obstacles.append(
+        CGRect(
+          x: marker.point.x - markerRadius - 2, y: marker.point.y - markerRadius - 2,
+          width: markerRadius * 2 + 4, height: markerRadius * 2 + 4))
+    }
+    let poiLabels = OfflineMapPOILayout.labels(
+      for: poiMarkers, zoom: zoom, size: size, excluding: obstacles)
+    obstacles.append(contentsOf: poiLabels.map(\.frame))
     var layout = OfflineMapLabelLayout(obstacles: obstacles, viewport: size)
     let viewport = CGRect(origin: .zero, size: size)
     for priority in OfflineMapLabelPriority.allCases {
@@ -450,6 +534,61 @@ public struct OfflineMap: View {
             with: .color(.white.opacity(style.bold ? 0.92 : 0.86)))
           context.draw(text, in: frame)
         }
+      }
+    }
+    for label in poiLabels {
+      let text = context.resolve(
+        Text(label.marker.feature.name).font(.system(size: 11, weight: .medium))
+          .foregroundStyle(.black))
+      context.fill(
+        Path(roundedRect: label.frame.insetBy(dx: -3, dy: -1), cornerRadius: 3),
+        with: .color(.white.opacity(0.94)))
+      context.draw(text, in: label.frame)
+    }
+  }
+
+  private func drawPOIs(_ markers: [OfflineMapPOILayout.Marker], context: inout GraphicsContext) {
+    for marker in markers {
+      let radius = marker.radius(at: zoom)
+      let category = POICategory(marker.feature.category)
+      let dot = Path(
+        ellipseIn: CGRect(
+          x: marker.point.x - radius, y: marker.point.y - radius,
+          width: radius * 2, height: radius * 2))
+      context.fill(dot, with: .color(marker.isGroup ? .indigo : category.tint))
+      context.stroke(dot, with: .color(.white), lineWidth: 2)
+      if marker.isGroup {
+        let count = marker.members.count > 99 ? "99+" : String(marker.members.count)
+        context.draw(
+          Text(count).font(.system(size: 11, weight: .bold)).foregroundStyle(.white),
+          at: marker.point)
+      } else if zoom >= 16 {
+        let symbol = context.resolve(
+          Text(Image(systemName: POICategory.symbolName(for: marker.feature.category)))
+            .font(.system(size: 10, weight: .semibold)).foregroundStyle(.white))
+        context.draw(symbol, at: marker.point)
+      }
+    }
+  }
+
+  private func drawPlacePoints(
+    _ tiles: [OfflineMapLabelTile], context: inout GraphicsContext, size: CGSize
+  ) {
+    let viewport = CGRect(origin: .zero, size: size)
+    for placement in tiles {
+      for candidate in placement.tile.selectablePoints
+      where !candidate.isPOI {
+        let point = CGPoint(
+          x: candidate.point.x * placement.scale + placement.offset.x,
+          y: candidate.point.y * placement.scale + placement.offset.y)
+        guard viewport.contains(point), PreparedMapTileIndex.tileBounds.contains(candidate.point)
+        else { continue }
+        let radius: CGFloat = 2.5
+        let dot = Path(
+          ellipseIn: CGRect(
+            x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2))
+        context.fill(dot, with: .color(.gray))
+        context.stroke(dot, with: .color(.white), lineWidth: 1)
       }
     }
   }

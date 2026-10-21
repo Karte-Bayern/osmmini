@@ -114,6 +114,7 @@ private struct PreviousMapFeature {
   let tile = try PreparedMapTile(VectorTile(features: buildings))
   #expect(tile.features.count == buildings.count)
   #expect(tile.labels.isEmpty)
+  #expect(tile.selectableRoads.isEmpty && tile.selectablePoints.isEmpty)
   let previousBytes = buildings.count * MemoryLayout<PreviousMapFeature>.stride
   let preparedBytes = tile.features.count * MemoryLayout<PreparedMapTile.Feature>.stride
   #expect(preparedBytes * 2 < previousBytes)
@@ -127,11 +128,13 @@ private struct PreviousMapFeature {
   #expect(placeTile.features.isEmpty)
   #expect(placeTile.labels.count == places.count)
   #expect(placeTile.labels.allSatisfy { $0.style == .place(.other) })
-  let placeBytes = placeTile.labels.count * MemoryLayout<PreparedMapTile.Label>.stride
-  #expect(placeBytes < places.count * MemoryLayout<PreviousMapFeature>.stride)
+  let labelBytes = placeTile.labels.count * MemoryLayout<PreparedMapTile.Label>.stride
+  let selectionBytes =
+    placeTile.selectablePoints.count * MemoryLayout<PreparedMapTile.SelectablePoint>.stride
+  #expect(labelBytes < places.count * MemoryLayout<PreviousMapFeature>.stride)
   print(
     "Map metadata: 1024 buildings \(previousBytes) → \(preparedBytes) bytes; "
-      + "256 places \(places.count * MemoryLayout<PreviousMapFeature>.stride) → \(placeBytes) bytes; "
+      + "256 places: \(labelBytes) label bytes + \(selectionBytes) selection bytes; "
       + "path coordinates are unchanged")
 }
 

@@ -19,6 +19,18 @@ struct PreparedMapTile: Sendable {
     let style: Style
   }
 
+  struct SelectableRoad: Sendable {
+    let index: Int
+    let feature: MapFeature
+  }
+
+  struct SelectablePoint: Sendable {
+    let point: CGPoint
+    let feature: MapFeature
+    var isPOI: Bool { feature.kind != "place" }
+    func isVisible(at zoom: Int) -> Bool { !isPOI || zoom >= 14 }
+  }
+
   struct Label: Sendable {
     enum Style: Sendable, Equatable {
       enum Place: Sendable { case city, town, village, other }
@@ -51,6 +63,8 @@ struct PreparedMapTile: Sendable {
 
   let features: [Feature]
   let labels: [Label]
+  let selectableRoads: [SelectableRoad]
+  let selectablePoints: [SelectablePoint]
   private let labelRanges: PreparedMapLabelRanges
   let spatialIndex: PreparedMapTileIndex?
 
@@ -72,6 +86,8 @@ struct PreparedMapTile: Sendable {
     }
     var prepared: [Feature] = []
     var labels: [Label] = []
+    var roads: [SelectableRoad] = []
+    var selections: [SelectablePoint] = []
     var points: [CGPoint] = []
     prepared.reserveCapacity(geometryCount)
     labels.reserveCapacity(labelCount)
@@ -79,10 +95,25 @@ struct PreparedMapTile: Sendable {
       try Task.checkCancellation()
       guard feature.extent > 0 else { continue }
       let scale = 256 / Double(feature.extent)
-      if feature.layer == "place" {
+      if feature.layer == "place" || feature.layer == "poi" {
+        guard feature.kind == 1 else { continue }
         if let name = Self.labelName(feature.name), let point = feature.paths.first?.first,
           point.count >= 2
         {
+          let coordinate = CGPoint(x: Double(point[0]) * scale, y: Double(point[1]) * scale)
+          let selectionKind =
+            feature.layer == "place"
+            ? "place" : feature.sourceIdentity?.hasPrefix("way/") == true ? "way" : "node"
+          let selectionName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+          if !selectionName.isEmpty {
+            selections.append(
+              SelectablePoint(
+                point: coordinate,
+                feature: MapFeature(
+                  name: selectionName, kind: selectionKind, category: feature.class,
+                  sourceIdentity: feature.sourceIdentity, details: feature.details)))
+          }
+          if feature.layer == "poi" { continue }
           let kind: Label.Style.Place =
             switch feature.class {
             case "city": .city
@@ -92,11 +123,11 @@ struct PreparedMapTile: Sendable {
             }
           labels.append(
             Label(
-              name: name, point: CGPoint(x: Double(point[0]) * scale, y: Double(point[1]) * scale),
+              name: name, point: coordinate,
               style: .place(kind)))
         }
-        // Place points are text anchors, not drawable geometry. In particular,
-        // they do not need a retained CoreGraphics path of their own.
+        // Point symbols and their labels share one anchor. They do not need
+        // a retained CoreGraphics path of their own.
         continue
       }
       let style: Style
@@ -111,15 +142,26 @@ struct PreparedMapTile: Sendable {
       let path = try Self.preparePath(
         feature.paths, kind: feature.kind, scale: scale, points: &points)
       prepared.append(Feature(path: path, style: style))
-      if case .road(let major) = style, let name = Self.labelName(feature.name),
-        let point = try Self.roadLabelPoint(feature.paths, scale: scale)
-      {
-        labels.append(Label(name: name, point: point, style: .road(major: major)))
+      if case .road(let major) = style, let name = Self.labelName(feature.name) {
+        let selectionName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if feature.kind == 2, !selectionName.isEmpty {
+          roads.append(
+            SelectableRoad(
+              index: prepared.count - 1,
+              feature: MapFeature(
+                name: selectionName, kind: "street", category: feature.class,
+                sourceIdentity: feature.sourceIdentity, details: feature.details)))
+        }
+        if let point = try Self.roadLabelPoint(feature.paths, scale: scale) {
+          labels.append(Label(name: name, point: point, style: .road(major: major)))
+        }
       }
     }
     features = prepared
     labels.sort { $0.style.priority.rawValue < $1.style.priority.rawValue }
     self.labels = labels
+    selectableRoads = roads
+    selectablePoints = selections
     labelRanges = PreparedMapLabelRanges(labels)
     spatialIndex = try PreparedMapTileIndex(prepared)
   }
@@ -324,21 +366,23 @@ struct PreparedMapRoute: Sendable {
     func flush() {
       guard points.count > 1 else { return }
       let origin = points[0]
-      var path = Path()
       var minX = CGFloat.infinity
       var maxX = -CGFloat.infinity
       var minY = CGFloat.infinity
       var maxY = -CGFloat.infinity
-      for (index, point) in points.enumerated() {
-        // SwiftUI Path can compress coordinates to floats. Keeping them local
-        // avoids magnifying world-coordinate rounding when zooming far in.
-        let local = CGPoint(x: point.x - origin.x, y: point.y - origin.y)
-        if index == 0 { path.move(to: local) } else { path.addLine(to: local) }
+      for index in points.indices {
+        let point = points[index]
         minX = min(minX, point.x)
         maxX = max(maxX, point.x)
         minY = min(minY, point.y)
         maxY = max(maxY, point.y)
+        // SwiftUI Path can compress coordinates to floats. Keeping them local
+        // avoids magnifying world-coordinate rounding when zooming far in.
+        points[index] = CGPoint(x: point.x - origin.x, y: point.y - origin.y)
       }
+      var path = Path()
+      // Path copies the reused buffer; submit the whole chunk in one call.
+      path.addLines(points)
       chunks.append(
         Chunk(
           path: path, origin: origin,

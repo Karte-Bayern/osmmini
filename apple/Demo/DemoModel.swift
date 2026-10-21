@@ -4,23 +4,37 @@ import Observation
 
 typealias InstalledRegion = DemoStoredRegion
 
-struct DemoPlace: Equatable, Sendable {
+struct DemoPlace: Codable, Equatable, Sendable {
   let coordinate: Coordinate
   let name: String
   let category: String?
   let kind: String?
+  let sourceIdentity: String?
+  let details: PlaceDetails?
 
-  init(coordinate: Coordinate, name: String, category: String?, kind: String? = nil) {
+  init(
+    coordinate: Coordinate, name: String, category: String?, kind: String? = nil,
+    sourceIdentity: String? = nil, details: PlaceDetails? = nil
+  ) {
     self.coordinate = coordinate
     self.name = name
     self.category = category
     self.kind = kind
+    self.sourceIdentity = sourceIdentity
+    self.details = details
   }
 
   init(_ result: SearchResult) {
     self.init(
       coordinate: result.coordinate, name: result.label, category: result.category,
-      kind: result.kind)
+      kind: result.kind, sourceIdentity: result.identity, details: result.details)
+  }
+
+  init(_ selection: MapSelection) {
+    self.init(
+      coordinate: selection.coordinate, name: selection.feature?.name ?? "Ausgewählter Kartenpunkt",
+      category: selection.feature?.category, kind: selection.feature?.kind,
+      sourceIdentity: selection.feature?.sourceIdentity, details: selection.feature?.details)
   }
 }
 
@@ -159,9 +173,12 @@ struct DemoCatalogSearch: Sendable {
   private(set) var focusMinimumZoom: Int?
   private(set) var inspectedPlace: DemoPlace?
   var routeSelectionHint: String {
-    selectedRoutePoint == .start
-      ? "Startpunkt auf der Karte oder in der Suche wählen."
-      : "Zielpunkt auf der Karte oder in der Suche wählen."
+    switch (start, destination) {
+    case (nil, nil): "Start und Ziel auf der Karte oder in der Suche wählen."
+    case (nil, _): "Startpunkt auf der Karte oder in der Suche wählen."
+    case (_, nil): "Zielpunkt auf der Karte oder in der Suche wählen."
+    case (_, _): "Start und Ziel sind gesetzt. Die Route kann berechnet werden."
+    }
   }
   var canCalculateRoute: Bool { !busy && engine != nil && start != nil && destination != nil }
   var canCancel: Bool { busy && activity != .deleting }
@@ -187,6 +204,7 @@ struct DemoCatalogSearch: Sendable {
   @ObservationIgnored private var started = false
   let root: URL
   let geofabrik: Geofabrik
+  let places: DemoPlaceLibrary
   private let defaults: UserDefaults
 
   init(root: URL? = nil, defaults: UserDefaults = .standard, geofabrik: Geofabrik? = nil) {
@@ -198,6 +216,7 @@ struct DemoCatalogSearch: Sendable {
         URL(fileURLWithPath: $0, isDirectory: true)
       } ?? support.appendingPathComponent("OSMminiDemo", isDirectory: true)
     self.defaults = defaults
+    places = DemoPlaceLibrary(defaults: defaults)
     if let raw = defaults.string(forKey: "routeObjective"),
       let objective = RouteObjective(rawValue: raw),
       objective == .distance || objective == .duration
@@ -345,7 +364,9 @@ struct DemoCatalogSearch: Sendable {
       fraction = nil
       cancelling = false
       operation = nil
-      if activity == .importing || activity == .downloading || activity == .deleting {
+      if activity == .importing || activity == .downloading || activity == .deleting
+        || activity == .opening
+      {
         await refreshInstalled()
       }
     }
@@ -679,19 +700,37 @@ struct DemoCatalogSearch: Sendable {
     inspect(DemoPlace(result), minimumZoom: 14)
   }
 
-  private func inspect(_ place: DemoPlace, minimumZoom: Int? = nil) {
+  func inspect(_ selection: MapSelection) {
+    inspect(DemoPlace(selection))
+  }
+
+  func inspect(_ place: DemoPlace, minimumZoom: Int? = nil) {
     guard !busy, engine != nil else { return }
-    inspectedPlace = place
+    places.remember(place)
+    inspectedPlace = preferredPlace(place)
     focusOn(place.coordinate, minimumZoom: minimumZoom)
   }
 
   func dismissPlace() { inspectedPlace = nil }
 
-  func usePlace(_ place: DemoPlace, as point: RoutePoint, minimumZoom: Int? = nil) {
+  func usePlace(
+    _ place: DemoPlace, as point: RoutePoint, minimumZoom: Int? = nil,
+    remember: Bool = true
+  ) {
     guard !busy, engine != nil else { return }
+    if remember { places.remember(place) }
+    let place = preferredPlace(place)
     selectedRoutePoint = point
     inspectedPlace = nil
     select(place.coordinate, label: place.name, minimumZoom: minimumZoom)
+  }
+
+  private func preferredPlace(_ place: DemoPlace) -> DemoPlace {
+    guard let saved = places.savedEntry(for: place)?.place else { return place }
+    return DemoPlace(
+      coordinate: place.coordinate, name: saved.name, category: place.category ?? saved.category,
+      kind: place.kind ?? saved.kind, sourceIdentity: place.sourceIdentity ?? saved.sourceIdentity,
+      details: place.details)
   }
 
   func focusOn(_ coordinate: Coordinate, minimumZoom: Int? = nil) {
@@ -793,8 +832,8 @@ struct DemoCatalogSearch: Sendable {
         return
       }
       route = result
-      status =
-        "Route: \((result.distanceM / 1000).formatted(.number.precision(.fractionLength(1)))) km · \((result.durationS / 60).formatted(.number.precision(.fractionLength(0)))) min"
+      let summary = DemoRouteText.summary(distance: result.distanceM, duration: result.durationS)
+      status = "Route: \(summary)"
     }
   }
 

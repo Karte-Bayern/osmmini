@@ -70,7 +70,7 @@ func TestEngineSearchExactSettlementPrecedesEarlierPOIsBeforeLimit(t *testing.T)
 func TestEngineSearchExactSettlementDeduplicatesKindAndIDAndCopiesRows(t *testing.T) {
 	engine := engineWithPlaceCatalog(t, writeSearchCatalog(t, []SearchResult{
 		{ID: 10, Kind: "node", Label: "Passau Café", Category: "cafe"},
-		{ID: 20, Kind: "node", Label: "Passau", Category: "city"},
+		{ID: 20, Kind: "node", Label: "Passau", Category: "city", Details: &PlaceDetails{Website: "https://example.org"}},
 		{ID: 20, Kind: "way", Label: "Passau Bank", Category: "bank"},
 		{ID: 30, Kind: "node", Label: "Passau Hotel", Category: "hotel"},
 	}))
@@ -91,7 +91,11 @@ func TestEngineSearchExactSettlementDeduplicatesKindAndIDAndCopiesRows(t *testin
 		if got[0].Label != "Passau" {
 			t.Fatal("caller mutation changed immutable place lookup")
 		}
+		if got[0].Details == nil || got[0].Details.Website != "https://example.org" {
+			t.Fatal("caller mutation changed immutable place details")
+		}
 		got[0].Label = "Changed by caller"
+		got[0].Details.Website = "Changed by caller"
 	}
 }
 

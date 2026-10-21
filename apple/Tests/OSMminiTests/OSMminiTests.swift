@@ -28,6 +28,8 @@ import Testing
   let engine = try await OfflineEngine.open(destination)
   let results = try await engine.search("cafe")
   #expect(results.contains { $0.label.contains("Café") })
+  let cafe = try #require(results.first { $0.category == "cafe" })
+  #expect(cafe.details?.address?.isEmpty == false)
   let route = try await engine.route(
     RouteRequest(
       from: Coordinate(lat: 48.001, lon: 12.001), to: Coordinate(lat: 48.003, lon: 12.003)))
@@ -40,6 +42,10 @@ import Testing
   let y = Int((1 - asinh(tan(48.002 * .pi / 180)) / .pi) / 2 * 16384)
   let tile = try await engine.tile(z: 14, x: x, y: y)
   #expect(!tile.features.isEmpty)
+  let poi = try #require(tile.features.first { $0.sourceIdentity == cafe.identity })
+  #expect(poi.layer == "poi" && poi.kind == 1)
+  #expect(poi.name == cafe.label && poi.class == cafe.category)
+  #expect(poi.details == cafe.details)
   // The map now overlaps native reads and path preparation. Exercise that
   // pipeline against the real C/Go engine, including adjacent empty tiles.
   let loader = await OfflineMapTileLoader()

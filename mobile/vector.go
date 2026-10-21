@@ -13,12 +13,14 @@ import (
 )
 
 type VectorFeature struct {
-	Layer  string     `json:"layer"`
-	Kind   int        `json:"kind"`
-	Class  string     `json:"class,omitempty"`
-	Name   string     `json:"name,omitempty"`
-	Extent int        `json:"extent"`
-	Paths  [][][2]int `json:"paths"`
+	Layer          string        `json:"layer"`
+	Kind           int           `json:"kind"`
+	Class          string        `json:"class,omitempty"`
+	Name           string        `json:"name,omitempty"`
+	Extent         int           `json:"extent"`
+	Paths          [][][2]int    `json:"paths"`
+	SourceIdentity string        `json:"source_identity,omitempty"`
+	Details        *PlaceDetails `json:"details,omitempty"`
 }
 type VectorTile struct {
 	Features []VectorFeature `json:"features"`

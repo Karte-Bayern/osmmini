@@ -38,7 +38,7 @@ func (r *Router) indexNodeSearch(ctx context.Context, from, to int64, opt RouteO
 	// Tight time potentials already prune most chain interiors. Eager batches
 	// increased their labels/allocation footprint, so retain normal time search.
 	walkChains := d.chainsOffset != 0 && !opt.EmergencyMode && opt.Objective != ObjectiveDuration && (math.Abs(startCoord.Lat-targetCoord.Lat) >= .01 || math.Abs(startCoord.Lon-targetCoord.Lon) >= .02)
-	labels := newIndexNodeLabels(min(64, d.nodes), wantPath)
+	labels := newNodeLabels[uint32](min(64, d.nodes), wantPath)
 	labels.set(fromIndex, 0, 0)
 	pq := nodeValueHeap[uint32]{}
 	pq.push(nodeCandidate[uint32]{id: fromIndex, priority: heuristic.estimateIndex(d, fromIndex)})
@@ -126,41 +126,4 @@ func (d *diskGraph) chainContinuation(node, previous uint32) (next, attribute ui
 	attribute = binary.LittleEndian.Uint32(chain[8:])
 	ok = true
 	return
-}
-
-// A path query updates both fields together. Keeping them in one map avoids a
-// second lookup and growth of a separate predecessor map for every relaxed node.
-// Cost-only queries still store just distances, and both maps grow lazily.
-type indexNodeLabel struct {
-	distance float64
-	previous uint32
-}
-
-type indexNodeLabels struct {
-	distances map[uint32]float64
-	paths     map[uint32]indexNodeLabel
-}
-
-func newIndexNodeLabels(capacity int, wantPath bool) indexNodeLabels {
-	if wantPath {
-		return indexNodeLabels{paths: make(map[uint32]indexNodeLabel, capacity)}
-	}
-	return indexNodeLabels{distances: make(map[uint32]float64, capacity)}
-}
-
-func (labels indexNodeLabels) distance(node uint32) (float64, bool) {
-	if labels.paths != nil {
-		label, exists := labels.paths[node]
-		return label.distance, exists
-	}
-	distance, exists := labels.distances[node]
-	return distance, exists
-}
-
-func (labels indexNodeLabels) set(node uint32, distance float64, previous uint32) {
-	if labels.paths != nil {
-		labels.paths[node] = indexNodeLabel{distance: distance, previous: previous}
-		return
-	}
-	labels.distances[node] = distance
 }

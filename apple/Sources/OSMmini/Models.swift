@@ -61,7 +61,32 @@ public struct SearchResult: Codable, Sendable, Identifiable {
   public let kind: String, label: String
   public let coordinate: Coordinate
   public let category: String?
+  public let details: PlaceDetails?
   public var identity: String { "\(kind)/\(id)" }
+}
+
+/// Optional source tags. Older offline regions may not contain these fields;
+/// opening hours are the original OSM text, not a live open/closed status.
+public struct PlaceDetails: Codable, Sendable, Equatable {
+  public let address: String?
+  public let openingHours: String?
+  public let phone: String?
+  public let website: String?
+
+  public init(
+    address: String? = nil, openingHours: String? = nil, phone: String? = nil,
+    website: String? = nil
+  ) {
+    self.address = address
+    self.openingHours = openingHours
+    self.phone = phone
+    self.website = website
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case address, phone, website
+    case openingHours = "opening_hours"
+  }
 }
 public enum RoutingEngine: String, Codable, Sendable {
   case astar, dijkstra
@@ -164,6 +189,27 @@ public struct VectorFeature: Codable, Sendable {
   public let layer: String, kind: Int, extent: Int
   public let `class`: String?, name: String?
   public let paths: [[[Int]]]
+  public let sourceIdentity: String?
+  public let details: PlaceDetails?
+
+  public init(
+    layer: String, kind: Int, extent: Int, `class`: String? = nil, name: String? = nil,
+    paths: [[[Int]]], sourceIdentity: String? = nil, details: PlaceDetails? = nil
+  ) {
+    self.layer = layer
+    self.kind = kind
+    self.extent = extent
+    self.class = `class`
+    self.name = name
+    self.paths = paths
+    self.sourceIdentity = sourceIdentity
+    self.details = details
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case layer, kind, extent, `class`, name, paths, details
+    case sourceIdentity = "source_identity"
+  }
 }
 public struct VectorTile: Codable, Sendable { public let features: [VectorFeature] }
 public enum OSMminiError: Error, LocalizedError, Sendable {

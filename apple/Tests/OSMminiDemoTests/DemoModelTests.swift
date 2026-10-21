@@ -416,6 +416,59 @@ private final class DemoCatalogURLProtocol: URLProtocol, @unchecked Sendable {
     await model.engine?.close()
   }
 
+  @Test func cancelledRouteCanBeRetriedWithoutChoosingItsEndpointsAgain() async throws {
+    defer { cleanup() }
+    let model = try await readyModel()
+    let start = DemoPlace(
+      coordinate: Coordinate(lat: 48.001, lon: 12.001), name: "Bahnhof", category: nil)
+    let destination = DemoPlace(
+      coordinate: Coordinate(lat: 48.003, lon: 12.003), name: "Rathaus", category: nil)
+    model.usePlace(start, as: .start)
+    model.usePlace(destination, as: .destination)
+    let calculation = try #require(model.operation)
+    // Cancel before the main-actor task starts, independent of native route speed.
+    model.cancel()
+    await calculation.value
+
+    #expect(!model.busy)
+    #expect(model.route == nil)
+    #expect(model.routeError == nil)
+    #expect(model.start == start.coordinate && model.startLabel == start.name)
+    #expect(
+      model.destination == destination.coordinate && model.destinationLabel == destination.name)
+    #expect(model.canCalculateRoute)
+    #expect(
+      model.routeSelectionHint == "Start und Ziel sind gesetzt. Die Route kann berechnet werden.")
+
+    model.retryRoute()
+    await model.operation?.value
+    #expect(model.route?.path.count == 3)
+    #expect(model.routeError == nil)
+    #expect(model.startLabel == start.name && model.destinationLabel == destination.name)
+    await model.engine?.close()
+  }
+
+  @Test func routeGuidanceDescribesMissingEndpointsInsteadOfTheLastSelectionMode() async throws {
+    defer { cleanup() }
+    let model = try await readyModel()
+    #expect(model.routeSelectionHint == "Start und Ziel auf der Karte oder in der Suche wählen.")
+    model.chooseRoutePoint(.destination)
+    #expect(model.routeSelectionHint == "Start und Ziel auf der Karte oder in der Suche wählen.")
+    model.select(Coordinate(lat: 48.003, lon: 12.003))
+    #expect(model.routeSelectionHint == "Startpunkt auf der Karte oder in der Suche wählen.")
+    model.chooseRoutePoint(.destination)
+    #expect(model.routeSelectionHint == "Startpunkt auf der Karte oder in der Suche wählen.")
+
+    model.clearRoute()
+    model.select(Coordinate(lat: 48.001, lon: 12.001))
+    #expect(model.routeSelectionHint == "Zielpunkt auf der Karte oder in der Suche wählen.")
+    model.chooseRoutePoint(.start)
+    #expect(model.routeSelectionHint == "Zielpunkt auf der Karte oder in der Suche wählen.")
+    model.clearRoute()
+    #expect(model.routeSelectionHint == "Start und Ziel auf der Karte oder in der Suche wählen.")
+    await model.engine?.close()
+  }
+
   @Test func clearingSearchRemovesResultsImmediatelyAndCancelsPendingSearch() async throws {
     defer { cleanup() }
     let model = try await readyModel()
@@ -854,6 +907,179 @@ private final class DemoCatalogURLProtocol: URLProtocol, @unchecked Sendable {
     #expect(model.focus == place.coordinate)
     #expect(model.focusMinimumZoom == 14)
     await engine.close()
+  }
+
+  @Test func onlySelectedPlacesEnterHistoryAndSurviveAFreshModel() async throws {
+    defer { cleanup() }
+    let model = try await readyModel()
+    let engine = try #require(model.engine)
+    let result = try #require(try await engine.search("cafe").first)
+    model.focusOn(Coordinate(lat: 48.001, lon: 12.001))
+    #expect(model.places.recent.isEmpty)
+
+    model.inspect(result)
+    let remembered = try #require(model.places.recent.first)
+    #expect(model.places.recent.count == 1)
+    #expect(remembered.place.name == result.label)
+    #expect(remembered.place.coordinate == result.coordinate)
+    #expect(remembered.place.sourceIdentity == result.identity)
+    model.dismissPlace()
+    model.focusOn(Coordinate(lat: 48.003, lon: 12.003))
+    #expect(model.places.recent == [remembered])
+
+    let reopened = DemoModel(root: root, defaults: defaults)
+    #expect(reopened.places.recent == [remembered])
+    #expect(reopened.places.error == nil)
+    await engine.close()
+  }
+
+  @Test func usingGPSAsRouteStartDoesNotAddLocationFixesToHistory() async throws {
+    defer { cleanup() }
+    let model = try await readyModel()
+    let destination = DemoPlace(
+      coordinate: Coordinate(lat: 48.003, lon: 12.003), name: "Rathaus", category: nil)
+    model.usePlace(destination, as: .destination)
+    let history = model.places.recent
+    #expect(history.count == 1)
+
+    let location = DemoPlace(
+      coordinate: Coordinate(lat: 48.001, lon: 12.001), name: "Mein Standort", category: nil)
+    model.usePlace(location, as: .start, minimumZoom: 14, remember: false)
+    await model.operation?.value
+    #expect(model.route?.path.count == 3)
+    #expect(model.start == location.coordinate)
+    #expect(model.startLabel == "Mein Standort")
+    #expect(model.places.recent == history)
+    model.focusOn(Coordinate(lat: 48.002, lon: 12.002))
+    #expect(model.places.recent == history)
+    await model.engine?.close()
+  }
+
+  @Test func personalNamesAndSavedPlacesSurviveRegionReopeningAndDeletion() async throws {
+    defer { cleanup() }
+    let model = try await readyModel()
+    let engine = try #require(model.engine)
+    let result = try #require(try await engine.search("cafe").first)
+    #expect(model.places.save(DemoPlace(result)))
+    let entry = try #require(model.places.saved.first)
+    #expect(model.places.renameSaved(id: entry.id, name: "Mein Treffpunkt"))
+    model.inspect(result)
+    #expect(model.inspectedPlace?.name == "Mein Treffpunkt")
+    model.usePlace(DemoPlace(result), as: .destination)
+    #expect(model.destinationLabel == "Mein Treffpunkt")
+    let saved = model.places.saved
+    let directory = try #require(model.activeDirectory)
+    await engine.close()
+
+    let reopened = DemoModel(root: root, defaults: defaults)
+    await reopened.start(arguments: ["demo", "--region", directory.path, "--offline"])
+    #expect(reopened.engine != nil)
+    #expect(reopened.places.saved == saved)
+    reopened.inspect(result)
+    #expect(reopened.inspectedPlace?.name == "Mein Treffpunkt")
+    reopened.usePlace(DemoPlace(result), as: .start)
+    #expect(reopened.startLabel == "Mein Treffpunkt")
+
+    let region = try #require(reopened.installed.first { $0.directory == directory })
+    reopened.deleteRegion(region)
+    await reopened.operation?.value
+    #expect(reopened.engine == nil)
+    #expect(!FileManager.default.fileExists(atPath: directory.path))
+    #expect(reopened.places.saved == saved)
+    let withoutRegion = DemoModel(root: root, defaults: defaults)
+    #expect(withoutRegion.places.saved == saved)
+    #expect(withoutRegion.places.error == nil)
+  }
+
+  @Test func updatedPlaceCoordinatesKeepThePersonalNameWithoutUsingTheOldLocation() async throws {
+    defer { cleanup() }
+    let model = try await readyModel()
+    let previous = DemoPlace(
+      coordinate: Coordinate(lat: 48.001, lon: 12.001), name: "Café Alt", category: "cafe",
+      kind: "node", sourceIdentity: "node/42",
+      details: PlaceDetails(address: "Alte Straße 1", openingHours: "Mo-Fr 08:00-17:00"))
+    #expect(model.places.save(previous))
+    let saved = try #require(model.places.saved.first)
+    #expect(model.places.renameSaved(id: saved.id, name: "Unser Treffpunkt"))
+    let current = DemoPlace(
+      coordinate: Coordinate(lat: 48.003, lon: 12.003), name: "Restaurant Neu",
+      category: "restaurant", kind: "node", sourceIdentity: previous.sourceIdentity,
+      details: PlaceDetails(address: "Neue Straße 2", openingHours: "Tu-Su 12:00-22:00"))
+
+    model.inspect(current, minimumZoom: 14)
+    #expect(model.inspectedPlace?.name == "Unser Treffpunkt")
+    #expect(model.inspectedPlace?.coordinate == current.coordinate)
+    #expect(model.inspectedPlace?.category == current.category)
+    #expect(model.inspectedPlace?.details == current.details)
+    #expect(model.focus == current.coordinate)
+    #expect(model.places.recent.first?.place.details == current.details)
+
+    model.usePlace(current, as: .destination)
+    #expect(model.destinationLabel == "Unser Treffpunkt")
+    #expect(model.destination == current.coordinate)
+    #expect(model.focus == current.coordinate)
+    model.clearRoute()
+    model.usePlace(current, as: .start)
+    #expect(model.startLabel == "Unser Treffpunkt")
+    #expect(model.start == current.coordinate)
+    #expect(model.places.saved.count == 1)
+    let withoutDetails = DemoPlace(
+      coordinate: current.coordinate, name: current.name, category: current.category,
+      kind: current.kind, sourceIdentity: current.sourceIdentity)
+    model.inspect(withoutDetails)
+    #expect(model.inspectedPlace?.name == "Unser Treffpunkt")
+    #expect(model.inspectedPlace?.details == nil)
+    #expect(model.places.recent.first?.place.details == nil)
+    await model.engine?.close()
+  }
+
+  @Test func mapFeatureDetailsAndEmptyMapSelectionsPreserveThePlannedRoute() async throws {
+    defer { cleanup() }
+    let model = try await readyModel()
+    let start = DemoPlace(
+      coordinate: Coordinate(lat: 48.001, lon: 12.001), name: "Abfahrt", category: nil)
+    let destination = DemoPlace(
+      coordinate: Coordinate(lat: 48.003, lon: 12.003), name: "Ankunft", category: nil)
+    model.usePlace(start, as: .start)
+    model.usePlace(destination, as: .destination)
+    await model.operation?.value
+    let route = try #require(model.route)
+    let selectedPoint = model.selectedRoutePoint
+    let coordinate = Coordinate(lat: 48.002, lon: 12.002)
+    let details = PlaceDetails(
+      address: "Marktplatz 3 · 84130 Dingolfing", openingHours: "Mo-Sa 08:00-18:00",
+      phone: "+49 8731 123456", website: "https://example.org/cafe")
+    let selections = [
+      MapSelection(
+        coordinate: coordinate,
+        feature: MapFeature(
+          name: "Café am Markt", kind: "node", category: "cafe", sourceIdentity: "node/42",
+          details: details)),
+      MapSelection(
+        coordinate: coordinate,
+        feature: MapFeature(
+          name: "Marktplatz", kind: "street", category: "residential", sourceIdentity: nil,
+          details: nil)),
+      MapSelection(coordinate: coordinate, feature: nil),
+    ]
+    for selection in selections {
+      model.inspect(selection)
+      let place = try #require(model.inspectedPlace)
+      #expect(place.coordinate == coordinate)
+      #expect(place.name == (selection.feature?.name ?? "Ausgewählter Kartenpunkt"))
+      #expect(place.kind == selection.feature?.kind)
+      #expect(place.category == selection.feature?.category)
+      #expect(place.sourceIdentity == selection.feature?.sourceIdentity)
+      #expect(place.details == selection.feature?.details)
+      #expect(model.focus == coordinate)
+      #expect(model.focusMinimumZoom == nil)
+      #expect(model.start == start.coordinate && model.destination == destination.coordinate)
+      #expect(model.startLabel == start.name && model.destinationLabel == destination.name)
+      #expect(model.route?.path == route.path && model.route?.distanceM == route.distanceM)
+      #expect(model.selectedRoutePoint == selectedPoint)
+      #expect(model.operation == nil)
+    }
+    await model.engine?.close()
   }
 
   @Test func inspectingMapPointsAndSearchResultsPreservesTheExistingRouteAndEndpoints() async throws

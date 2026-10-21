@@ -21,13 +21,14 @@ import (
 
 // SearchResult uses OSM IDs as signed 64-bit integers throughout the bridge.
 type SearchResult struct {
-	ID         int64     `json:"id"`
-	Kind       string    `json:"kind"`
-	Label      string    `json:"label"`
-	Coordinate osm.Coord `json:"coordinate"`
-	Category   string    `json:"category,omitempty"`
-	Place      string    `json:"place,omitempty"`
-	Text       string    `json:"text,omitempty"`
+	ID         int64         `json:"id"`
+	Kind       string        `json:"kind"`
+	Label      string        `json:"label"`
+	Coordinate osm.Coord     `json:"coordinate"`
+	Category   string        `json:"category,omitempty"`
+	Place      string        `json:"place,omitempty"`
+	Text       string        `json:"text,omitempty"`
+	Details    *PlaceDetails `json:"details,omitempty"`
 }
 
 const searchKeyBytes = 96
@@ -173,9 +174,11 @@ func buildSearch(ctx context.Context, path string, r *osm.Router, source string)
 		if city := tags["addr:city"]; city != "" {
 			label += " · " + city
 		}
-		return SearchResult{ID: id, Kind: kind, Label: label, Coordinate: c, Category: category(tags), Place: tags["place"], Text: address + " " + tags["addr:postcode"] + " " + tags["brand"]}
+		return SearchResult{ID: id, Kind: kind, Label: label, Coordinate: c, Category: category(tags), Place: tags["place"], Text: address + " " + tags["addr:postcode"] + " " + tags["brand"], Details: detailsFromTags(tags)}
 	}
-	opts := osm.Options{Context: ctx, EmitWayNodeIDs: true, TaggedWayKey: func(k string) bool { return poiKey(k) || strings.HasPrefix(k, "addr:") }, KeepTag: func(k string) bool { return k == "name" || k == "brand" || poiKey(k) || strings.HasPrefix(k, "addr:") }}
+	opts := osm.Options{Context: ctx, EmitWayNodeIDs: true, TaggedWayKey: func(k string) bool { return poiKey(k) || strings.HasPrefix(k, "addr:") }, KeepTag: func(k string) bool {
+		return k == "name" || k == "brand" || poiKey(k) || strings.HasPrefix(k, "addr:") || detailTag(k)
+	}}
 	err = osm.ExtractFile(source, opts, osm.Callbacks{TaggedNode: func(n osm.Node) error {
 		if category(n.Tags) == "" && n.Tags["addr:street"] == "" {
 			return nil
@@ -773,6 +776,7 @@ func (s *searchReader) search(ctx context.Context, query string, limit int) ([]S
 		}
 		if matches {
 			result.Text = ""
+			result.Details = cleanDetails(result.Details)
 			if len(out) == 0 {
 				out = make([]SearchResult, 0, limit)
 			}

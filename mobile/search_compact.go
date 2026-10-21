@@ -180,22 +180,24 @@ func (s *searchReader) readIndexHeader(size int64) error {
 }
 
 type searchPostingIterator struct {
-	search     *searchReader
-	scratch    *searchScratch
-	position   int
-	batch      []byte
-	block      int
-	remaining  int
-	encoded    []byte
-	term       [searchKeyBytes]byte
-	termLength int
-	offset     uint64
-	first      []byte
-	lastTerm   [searchKeyBytes]byte
-	lastLength int
-	lastOffset uint64
-	windowAt   int
-	windowSize int
+	search      *searchReader
+	scratch     *searchScratch
+	position    int
+	batch       []byte
+	block       int
+	remaining   int
+	encoded     []byte
+	term        [searchKeyBytes]byte
+	termLength  int
+	offset      uint64
+	first       []byte
+	lastTerm    [searchKeyBytes]byte
+	lastLength  int
+	lastOffset  uint64
+	windowAt    int
+	windowSize  int
+	encodedAt   uint64
+	encodedSize int
 }
 
 func searchTerm(b []byte) []byte {
@@ -293,10 +295,21 @@ func (i *searchPostingIterator) next() ([]byte, uint64, uint32, error) {
 		if len(i.first) == 0 {
 			return nil, 0, 0, fmt.Errorf("empty compact search key")
 		}
-		i.encoded = i.scratch.block[:size]
-		if _, err := i.search.index.ReadAt(i.encoded, int64(offset)); err != nil {
-			return nil, 0, 0, err
+		// Keep short lookups to one block. Once a scan continues, read ahead
+		// within the payload using the existing buffer; adjacent posting
+		// blocks are usually much smaller than it.
+		if offset < i.encodedAt || offset+uint64(size) > i.encodedAt+uint64(i.encodedSize) {
+			n := uint64(size)
+			if i.encodedSize != 0 {
+				n = min(uint64(len(i.scratch.block)), uint64(i.search.directory)-offset)
+			}
+			if _, err := i.search.index.ReadAt(i.scratch.block[:n], int64(offset)); err != nil {
+				return nil, 0, 0, err
+			}
+			i.encodedAt, i.encodedSize = offset, int(n)
 		}
+		start := int(offset - i.encodedAt)
+		i.encoded = i.scratch.block[start : start+int(size)]
 		i.remaining, i.termLength, i.offset = int(count), 0, 0
 		i.block++
 	}
