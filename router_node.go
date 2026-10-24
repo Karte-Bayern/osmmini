@@ -116,12 +116,12 @@ func (labels nodeLabels[ID]) set(node ID, distance float64, previous ID) {
 	labels.distances[node] = distance
 }
 
-type nodeCandidate[ID ~int64 | ~uint32] struct {
+type nodeCandidate[ID ~int64 | ~uint32 | ~uint64] struct {
 	id             ID
 	dist, priority float64
 }
 
-type nodeValueHeap[ID ~int64 | ~uint32] []nodeCandidate[ID]
+type nodeValueHeap[ID ~int64 | ~uint32 | ~uint64] []nodeCandidate[ID]
 
 func (h *nodeValueHeap[ID]) push(v nodeCandidate[ID]) {
 	*h = append(*h, v)

@@ -1176,7 +1176,7 @@ func (r *Router) RouteCostWithOptions(ctx context.Context, from, to int64, opt R
 		_, cost, err := r.nodeSearch(ctx, from, to, opt, false)
 		return cost, err
 	}
-	_, cost, _, err := r.astar(ctx, from, to, opt, false)
+	_, cost, err := r.turnSearch(ctx, from, to, opt, false)
 	return cost, err
 }
 
@@ -1207,11 +1207,10 @@ func (r *Router) RouteWithOptions(ctx context.Context, from, to int64, opt Route
 			Engine:     opt.Engine,
 		}, nil
 	}
-	goalState, cost, came, err := r.astar(ctx, from, to, opt, true)
+	path, cost, err := r.turnSearch(ctx, from, to, opt, true)
 	if err != nil {
 		return RouteResult{}, err
 	}
-	path := reconstructPathTurnState(goalState, came)
 	coords := r.CoordsForPath(path)
 	distM, durS := r.computeMetrics(path, opt)
 
@@ -1627,6 +1626,7 @@ func (r *Router) astar(ctx context.Context, from, to int64, opt RouteOptions, wa
 		came = make(map[turnState]turnState, min(64, r.NodeCount()))
 	}
 
+	var bearings routeBearingCache[int64]
 	eval := newRouteEvaluator(opt)
 	heuristic := r.queryHeuristic(to, target, opt)
 	start := turnState{prev: 0, cur: from}
@@ -1658,7 +1658,7 @@ func (r *Router) astar(ctx context.Context, from, to int64, opt RouteOptions, wa
 			return curS, curIt.g, came, nil
 		}
 
-		transition := eval.prepareTransition(r, curS.prev, curS.cur)
+		transition := eval.prepareCachedTransition(r, curS.prev, curS.cur, &bearings)
 		for it := r.g.edges(curS.cur); it.next(); {
 			e := it.edge()
 			if !eval.edgeAllowed(e) {
@@ -1836,10 +1836,16 @@ type routeTransition struct {
 	current         Coord
 	incomingBearing float64
 	turnDirections  bool
+	bearings        *routeBearingCache[int64]
+	currentID       int64
 }
 
 func (eval *routeEvaluator) prepareTransition(r *Router, prev, cur int64) routeTransition {
-	transition := routeTransition{weights: &eval.options.Weights}
+	return eval.prepareCachedTransition(r, prev, cur, nil)
+}
+
+func (eval *routeEvaluator) prepareCachedTransition(r *Router, prev, cur int64, bearings *routeBearingCache[int64]) routeTransition {
+	transition := routeTransition{weights: &eval.options.Weights, bearings: bearings, currentID: cur}
 	if prev == 0 {
 		return transition
 	}
@@ -1853,7 +1859,11 @@ func (eval *routeEvaluator) prepareTransition(r *Router, prev, cur int64) routeT
 	c, ok2 := r.g.coord(cur)
 	if ok1 && ok2 {
 		transition.current = c
-		transition.incomingBearing = bearingDeg(p.Lat, p.Lon, c.Lat, c.Lon)
+		if bearings != nil {
+			transition.incomingBearing = bearings.bearing(prev, cur, p, c)
+		} else {
+			transition.incomingBearing = bearingDeg(p.Lat, p.Lon, c.Lat, c.Lon)
+		}
 		transition.turnDirections = true
 	}
 	return transition
@@ -1868,8 +1878,21 @@ func (transition *routeTransition) penalty(r *Router, next int64) float64 {
 	if !ok {
 		return pen
 	}
+	if transition.bearings != nil {
+		outgoing := transition.bearings.bearing(transition.currentID, next, transition.current, n)
+		return transition.penaltyBearing(outgoing)
+	}
+	return transition.penaltyCoordinate(n)
+}
+
+func (transition *routeTransition) penaltyCoordinate(n Coord) float64 {
 	c := transition.current
 	outgoing := bearingDeg(c.Lat, c.Lon, n.Lat, n.Lon)
+	return transition.penaltyBearing(outgoing)
+}
+
+func (transition *routeTransition) penaltyBearing(outgoing float64) float64 {
+	pen := transition.crossing
 	w := transition.weights
 	switch turnKindForBearings(transition.incomingBearing, outgoing) {
 	case turnLeft:
@@ -1927,7 +1950,16 @@ func turnKindForBearings(incoming, outgoing float64) turnKind {
 }
 
 func angleDiffDeg(a, b float64) float64 {
-	return math.Mod(a-b+540, 360) - 180
+	// Both bearings are in [0, 360), so the shifted difference needs at most
+	// two revolutions removed. Keep the original addition order: changing it
+	// can move a rounded value across a turn-classification threshold.
+	d := a - b + 540
+	if d >= 720 {
+		d -= 720
+	} else if d >= 360 {
+		d -= 360
+	}
+	return d - 180
 }
 
 func bearingDeg(lat1, lon1, lat2, lon2 float64) float64 {
@@ -1937,7 +1969,11 @@ func bearingDeg(lat1, lon1, lat2, lon2 float64) float64 {
 	y := math.Sin(Δλ) * math.Cos(φ2)
 	x := math.Cos(φ1)*math.Sin(φ2) - math.Sin(φ1)*math.Cos(φ2)*math.Cos(Δλ)
 	θ := math.Atan2(y, x)
-	return math.Mod(rad2deg(θ)+360, 360)
+	bearing := rad2deg(θ) + 360
+	if bearing >= 360 {
+		bearing -= 360
+	}
+	return bearing
 }
 
 func rad2deg(r float64) float64 { return r * 180 / math.Pi }
@@ -2108,8 +2144,7 @@ func (r *Router) NearestNode(lat, lon float64) (int64, float64, bool) {
 	best := math.MaxFloat64
 
 	scanCell := func(ix, iy int32) {
-		visit := func(id int64) {
-			c, _ := r.g.coord(id)
+		visit := func(id int64, c Coord) {
 			d := haversineMeters(lat, lon, c.Lat, c.Lon)
 			if d < best {
 				best = d
@@ -2118,12 +2153,13 @@ func (r *Router) NearestNode(lat, lon float64) (int64, float64, bool) {
 		}
 		if r.g.store != nil {
 			for it := r.g.store.cellNodesIter(cellKey(ix, iy)); it.next(); {
-				visit(it.nodeID())
+				visit(it.nodeID(), it.coord())
 			}
 			return
 		}
 		for _, id := range r.idx.cells[cellKey(ix, iy)] {
-			visit(id)
+			c, _ := r.g.coord(id)
+			visit(id, c)
 		}
 	}
 

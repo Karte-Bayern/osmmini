@@ -1,0 +1,23 @@
+goos: darwin
+goarch: arm64
+pkg: simonwaldherr.de/go/osmmini
+cpu: Apple M2 Max
+BenchmarkLongRoutes/Landshut_Passau/car     	       3	 133868542 ns/op	       133.6 cpu-ms/op	       118.6 km/route	28128672 B/op	    2082 allocs/op
+BenchmarkLongRoutes/Landshut_Passau/delivery         	       3	1310265722 ns/op	      1310 cpu-ms/op	       110.5 km/route	147745514 B/op	    8632 allocs/op
+BenchmarkLongRoutes/Kelheim_Passau/car     	       3	 166276694 ns/op	       166.0 cpu-ms/op	       173.6 km/route	55962570 B/op	    4119 allocs/op
+BenchmarkLongRoutes/Kelheim_Passau/delivery         	       3	1352400861 ns/op	      1353 cpu-ms/op	       149.7 km/route	173494976 B/op	   10133 allocs/op
+BenchmarkLongRoutes/Landshut_Freyung/car     	       3	 262696125 ns/op	       262.5 cpu-ms/op	       140.4 km/route	56136352 B/op	    4133 allocs/op
+BenchmarkLongRoutes/Landshut_Freyung/delivery         	       3	2328658445 ns/op	      2324 cpu-ms/op	       134.7 km/route	281275264 B/op	   16445 allocs/op
+BenchmarkLongRoutes/Landshut_Passau/car     	       3	 128815931 ns/op	       128.8 cpu-ms/op	       118.6 km/route	28128672 B/op	    2082 allocs/op
+BenchmarkLongRoutes/Landshut_Passau/delivery         	       3	1517816417 ns/op	      1469 cpu-ms/op	       110.5 km/route	148055381 B/op	    8644 allocs/op
+BenchmarkLongRoutes/Kelheim_Passau/car     	       3	 203313389 ns/op	       186.9 cpu-ms/op	       173.6 km/route	55980768 B/op	    4121 allocs/op
+BenchmarkLongRoutes/Kelheim_Passau/delivery         	       3	1362669528 ns/op	      1363 cpu-ms/op	       149.7 km/route	174468757 B/op	   10200 allocs/op
+BenchmarkLongRoutes/Landshut_Freyung/car     	       3	 252097903 ns/op	       252.2 cpu-ms/op	       140.4 km/route	56136352 B/op	    4133 allocs/op
+BenchmarkLongRoutes/Landshut_Freyung/delivery         	       3	3007825014 ns/op	      2605 cpu-ms/op	       134.7 km/route	281275264 B/op	   16445 allocs/op
+BenchmarkLongRoutes/Landshut_Passau/car     	       3	 144470722 ns/op	       143.6 cpu-ms/op	       118.6 km/route	28128672 B/op	    2082 allocs/op
+BenchmarkLongRoutes/Landshut_Passau/delivery         	       3	1430621389 ns/op	      1421 cpu-ms/op	       110.5 km/route	148282880 B/op	    8660 allocs/op
+BenchmarkLongRoutes/Kelheim_Passau/car     	       3	 182033528 ns/op	       181.9 cpu-ms/op	       173.6 km/route	55889781 B/op	    4114 allocs/op
+BenchmarkLongRoutes/Kelheim_Passau/delivery         	       3	1467488431 ns/op	      1458 cpu-ms/op	       149.7 km/route	173804650 B/op	   10149 allocs/op
+BenchmarkLongRoutes/Landshut_Freyung/car     	       3	 285527569 ns/op	       285.2 cpu-ms/op	       140.4 km/route	56136352 B/op	    4133 allocs/op
+BenchmarkLongRoutes/Landshut_Freyung/delivery         	       3	2352193639 ns/op	      2322 cpu-ms/op	       134.7 km/route	281275264 B/op	   16445 allocs/op
+PASS

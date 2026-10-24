@@ -51,6 +51,33 @@ func snapGraphVariants(t *testing.T, memory *Router) map[string]*Router {
 	return variants
 }
 
+func TestNearestNodesWithSparseSignedIDs(t *testing.T) {
+	// Spatial order differs from signed ID order, and OSM IDs cannot be used
+	// as compact table indices (including values beyond exact float64 range).
+	coords := map[int64]Coord{
+		-9223372036854775807: {Lat: 48.0101, Lon: 12.0101},
+		-17:                  {Lat: 48.0001, Lon: 12.0002},
+		42:                   {Lat: 48.0102, Lon: 12.0001},
+		9223372036854775806:  {Lat: 48.0002, Lon: 12.0102},
+	}
+	memory := NewRouterFromGraph(coords, nil)
+	for name, router := range snapGraphVariants(t, memory) {
+		t.Run(name, func(t *testing.T) {
+			for id, query := range coords {
+				nearest, distance, ok := router.NearestNode(query.Lat, query.Lon)
+				if !ok || nearest != id || distance != 0 {
+					t.Fatalf("nearest at %d: %d, %g, %v", id, nearest, distance, ok)
+				}
+				want := snapReference(memory, query.Lat, query.Lon, 8, 1000)
+				got, err := router.NearestNodes(t.Context(), query.Lat, query.Lon, 8, 1000)
+				if err != nil || !slices.Equal(got, want) {
+					t.Fatalf("nearby at %d: %+v, %v; want %+v", id, got, err, want)
+				}
+			}
+		})
+	}
+}
+
 func TestNearestNodesMatchesBruteRadiusForMemoryAndFileGraphs(t *testing.T) {
 	coords := map[int64]Coord{}
 	var id int64

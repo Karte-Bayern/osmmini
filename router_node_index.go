@@ -9,7 +9,7 @@ import (
 
 // Use the compact file's uint32 node indices throughout a turn-free search.
 // Resolve the API endpoints once and translate the final path back to OSM IDs.
-// Search maps remain lazy: short routes must not allocate region-sized arrays.
+// Search labels remain lazy: short routes must not allocate region-sized arrays.
 // Territory-cost callbacks retain the ID-based path, as do legacy V1 graphs.
 func (r *Router) indexNodeSearch(ctx context.Context, from, to int64, opt RouteOptions, wantPath bool) ([]int64, float64, error) {
 	if from == to {
@@ -38,8 +38,8 @@ func (r *Router) indexNodeSearch(ctx context.Context, from, to int64, opt RouteO
 	// Tight time potentials already prune most chain interiors. Eager batches
 	// increased their labels/allocation footprint, so retain normal time search.
 	walkChains := d.chainsOffset != 0 && !opt.EmergencyMode && opt.Objective != ObjectiveDuration && (math.Abs(startCoord.Lat-targetCoord.Lat) >= .01 || math.Abs(startCoord.Lon-targetCoord.Lon) >= .02)
-	labels := newNodeLabels[uint32](min(64, d.nodes), wantPath)
-	labels.set(fromIndex, 0, 0)
+	labels := newIndexedRouteLabels[uint32](wantPath, min(64, d.nodes))
+	labels.relax(fromIndex, 0, 0)
 	pq := nodeValueHeap[uint32]{}
 	pq.push(nodeCandidate[uint32]{id: fromIndex, priority: heuristic.estimateIndex(d, fromIndex)})
 	for pops := 0; len(pq) > 0; pops++ {
@@ -49,7 +49,7 @@ func (r *Router) indexNodeSearch(ctx context.Context, from, to int64, opt RouteO
 			}
 		}
 		current := pq.pop()
-		if distance, _ := labels.distance(current.id); current.dist != distance {
+		if current.dist != labels.distance(current.id) {
 			continue
 		}
 		if current.id == toIndex {
@@ -57,7 +57,7 @@ func (r *Router) indexNodeSearch(ctx context.Context, from, to int64, opt RouteO
 				return nil, current.dist, nil
 			}
 			path := make([]int64, 0, 64)
-			for node := toIndex; ; node = labels.paths[node].previous {
+			for node := toIndex; ; node = labels.slot(node).previous {
 				path = append(path, int64(binary.LittleEndian.Uint64(d.nodeRecord(int(node)))))
 				if node == fromIndex {
 					break
@@ -80,10 +80,9 @@ func (r *Router) indexNodeSearch(ctx context.Context, from, to int64, opt RouteO
 					break
 				}
 				cost += edgeCost
-				if old, exists := labels.distance(next); exists && cost >= old {
+				if !labels.relax(next, cost, previous) {
 					break
 				}
-				labels.set(next, cost, previous)
 				// Packed interiors have exactly two reciprocal neighbors and shared
 				// attributes. With no transition costs, going back cannot improve g.
 				// Keep the target in the queue, even if it lies inside a chain; bound

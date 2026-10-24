@@ -88,9 +88,7 @@ func (r *Router) NearestNodes(ctx context.Context, lat, lon float64, limit int, 
 					}
 					if r.g.store != nil {
 						for it := r.g.store.cellNodesIter(cellKey(x, y)); it.next(); {
-							id := it.nodeID()
-							coordinate, _ := r.g.coord(id)
-							if err := visit(id, coordinate); err != nil {
+							if err := visit(it.nodeID(), it.coord()); err != nil {
 								return nil, err
 							}
 						}

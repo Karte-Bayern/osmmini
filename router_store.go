@@ -213,11 +213,13 @@ func (g Graph) eachRoutableNode(visit func(int64, Coord)) {
 
 // cellNodeIterator is a borrowed view of the spatial index, valid until Close.
 // It reads IDs in place rather than allocating a slice for every visited cell.
+// Compact cells also retain their node index for direct coordinate access.
 type cellNodeIterator struct {
 	data  []byte
 	store *diskGraph
 	key   int64
 	id    int64
+	node  int
 }
 
 func (d *diskGraph) cellNodesIter(key int64) cellNodeIterator {
@@ -233,7 +235,8 @@ func (i *cellNodeIterator) next() bool {
 		return false
 	}
 	if i.store.compact {
-		i.id = int64(binary.LittleEndian.Uint64(i.store.nodeRecord(int(binary.LittleEndian.Uint32(i.data[8:])))))
+		i.node = int(binary.LittleEndian.Uint32(i.data[8:]))
+		i.id = int64(binary.LittleEndian.Uint64(i.store.nodeRecord(i.node)))
 	} else {
 		i.id = int64(binary.LittleEndian.Uint64(i.data[8:]))
 	}
@@ -243,6 +246,17 @@ func (i *cellNodeIterator) next() bool {
 
 func (i cellNodeIterator) nodeID() int64 {
 	return i.id
+}
+
+func (i cellNodeIterator) coord() Coord {
+	if i.store.compact {
+		return i.store.coordAt(i.node)
+	}
+	// V1 cells store OSM IDs rather than indices into the node table.
+	if node := i.store.nodeIndex(i.id); node >= 0 {
+		return i.store.coordAt(node)
+	}
+	return Coord{}
 }
 
 func (d *diskGraph) export() (map[int64]Coord, map[int64][]Edge) {
