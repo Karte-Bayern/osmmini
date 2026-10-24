@@ -141,7 +141,7 @@ function routeHarness() {
   const elements = Object.fromEntries(['from', 'to', 'status', 'routeDetails', 'routeActions', 'optimize'].map(id => [id, new Element()]));
   elements.from.value = 'Start';
   elements.to.value = 'Ziel';
-  const requests = [], rendered = [], toasts = [], busy = [];
+  const requests = [], rendered = [], toasts = [], busy = [], mapResults = [];
   const request = (from, to, options, signal) => {
     const pending = deferred();
     requests.push({ signal, ...pending });
@@ -159,10 +159,11 @@ function routeHarness() {
     renderPath: (path, data) => rendered.push(data),
     setResolvedRouteResponsePoint() {}, clearRouteLocationChoices() {},
     renderManeuvers() {}, renderStopList() {}, renderDisambiguationButtons() {},
+    showComputedRouteOnMap: data => mapResults.push(data),
     showToast: (...args) => toasts.push(args),
   });
   vm.runInContext(section('let routeRequest = null;', '\nfunction formatMeters('), context);
-  return { context, elements, requests, rendered, toasts, busy };
+  return { context, elements, requests, rendered, toasts, busy, mapResults };
 }
 
 test('only the latest route may render or release the busy state', async () => {
@@ -178,6 +179,8 @@ test('only the latest route may render or release the busy state', async () => {
   await second;
   assert.equal(h.rendered.length, 1);
   assert.equal(h.rendered[0].distance_m, 200);
+  assert.equal(h.mapResults.length, 1);
+  assert.equal(h.mapResults[0].distance_m, 200);
   assert.equal(h.busy.at(-1), false);
 });
 
@@ -190,6 +193,7 @@ test('reset cancels an in-flight trip without restoring its result', async () =>
   h.requests[0].resolve({ path: ['stale trip'], distance_m: 100 });
   await pending;
   assert.equal(h.rendered.length, 0);
+  assert.equal(h.mapResults.length, 0);
   assert.equal(h.toasts.length, 0);
   assert.equal(h.elements.status.textContent, 'Bereit');
   assert.equal(h.busy.at(-1), false);
@@ -541,19 +545,21 @@ test('restoring an open AI panel initializes request state before checking model
 
 test('compact panel hides its controls and restores content without losing state', () => {
   const classes = new Set(['panel-expanded']);
-  const elements = Object.fromEntries(['mapsPanelContent','mapsPanelToggle','mapsPanelExpand'].map(id => [id,new Element()]));
+  const elements = Object.fromEntries(['mapsPanelContent','mapsPanelToggle','mapsPanelExpand','routeFooter'].map(id => [id,new Element()]));
   const shell = {classList:{toggle(name, enabled){if(enabled) classes.add(name); else classes.delete(name);},remove(name){classes.delete(name);}}};
   let paddingUpdates=0;
-  const context=vm.createContext({document:{querySelector:()=>shell,getElementById:id=>elements[id]},map:{setPadding(){paddingUpdates++;}},mapsCameraPadding:()=>({left:40}),syncLayersButton() {}});
+  const context=vm.createContext({document:{querySelector:()=>shell,getElementById:id=>elements[id]},map:{resize(){},setPadding(){paddingUpdates++;}},mapsCameraPadding:()=>({left:40}),syncLayersButton() {}});
   vm.runInContext(section('function setMapsPanelCollapsed(', "document.getElementById('mapsPanelToggle')?"),context);
   context.setMapsPanelCollapsed(true);
   assert.equal(elements.mapsPanelContent.hidden,true);
+  assert.equal(elements.routeFooter.hidden,true);
   assert.equal(elements.mapsPanelToggle.attributes['aria-expanded'],'false');
-  assert.equal(elements.mapsPanelToggle.attributes['aria-label'],'Sidebar aufklappen');
+  assert.equal(elements.mapsPanelToggle.attributes['aria-label'],'Seitenleiste öffnen');
   assert.equal(classes.has('panel-expanded'),false);
   assert.equal(elements.mapsPanelExpand.attributes['aria-pressed'],'false');
   context.setMapsPanelCollapsed(false);
   assert.equal(elements.mapsPanelContent.hidden,false);
+  assert.equal(elements.routeFooter.hidden,false);
   assert.equal(elements.mapsPanelToggle.attributes['aria-expanded'],'true');
   assert.equal(paddingUpdates,2);
 });
@@ -630,7 +636,7 @@ test('view switching completes when the optional layers back button is missing',
   const elements = {mapsPanelTitle:title,mapsPanelContent:content};
   const context = vm.createContext({
     document: {querySelector:()=>shell,querySelectorAll:()=>[],getElementById:id=>elements[id] || null},
-    window: {}, layersReturnState: null,
+    window: {}, layersReturnState: null, currentRouteMeta: null,
     setMapsPanelCollapsed:value=>collapsed.push(value),
     map: {resize(){resizes++;}}, mapsCameraPadding:()=>({}),
     openMapsSection(){}, hydrateVisibleTilePreviews(){},
@@ -688,4 +694,103 @@ test('layers submenu keeps custom source values and opens offline content withou
   assert.equal(opened[0][1],'tinyTilesSettings');
   context.setLayersMenu('unknown');
   assert.equal(scrolls,2);
+});
+
+test('camera padding reserves only actual panel overlap, relative to the map canvas', () => {
+  let canvas = {left:396,right:1280,top:0,bottom:720,height:720};
+  let panel = {left:76,right:396,top:0,bottom:720};
+  const context = vm.createContext({
+    window:{innerWidth:1280},
+    document:{getElementById:()=>({getBoundingClientRect:()=>canvas}),querySelector:()=>({getBoundingClientRect:()=>panel})},
+  });
+  vm.runInContext(section('function mapsCameraPadding(', '\nlet layersReturnState'), context);
+  assert.equal(context.mapsCameraPadding().left,16, 'docked panel must not reserve space twice');
+  assert.equal(context.mapsCameraPadding().bottom,24);
+  assert.ok(context.mapsCameraPadding().right >= 68, 'route markers clear the 40px controls and their margins');
+  context.window.innerWidth=390;
+  canvas={left:0,right:390,top:0,bottom:780,height:780};
+  panel={left:8,right:382,top:397,bottom:768};
+  assert.equal(context.mapsCameraPadding().bottom,395, 'keep route above the entire sheet');
+  panel.top=704;
+  assert.equal(context.mapsCameraPadding().bottom,88, 'collapsed sheet gives space back to the route');
+  canvas.height=220; canvas.bottom=220; panel.top=10;
+  const padding=context.mapsCameraPadding();
+  assert.ok(padding.top+padding.bottom <= canvas.height-80, 'short viewport retains visible map area');
+});
+
+test('successful mobile route releases the map without closing another active tool', () => {
+  const shell={dataset:{view:'route'}};
+  const collapsed=[],fits=[];
+  const context=vm.createContext({
+    window:{innerWidth:390},document:{querySelector:()=>shell},
+    setMapsPanelCollapsed:value=>collapsed.push(value),
+    polyline:{getBounds:()=>[1,2]}, map:{fitBounds:(bounds,options)=>fits.push({bounds,options})},
+    mapsCameraPadding:()=>({bottom:88}),
+  });
+  vm.runInContext(section('function showComputedRouteOnMap(', '\nfunction setMapsPanelCollapsed'),context);
+  context.showComputedRouteOnMap({path:[]});
+  assert.equal(collapsed.length,0);
+  context.showComputedRouteOnMap({path:[{}]});
+  assert.deepEqual(collapsed,[true]);
+  assert.equal(fits[0].options.padding.bottom,88);
+  shell.dataset.view='tools';
+  context.showComputedRouteOnMap({path:[{}]});
+  shell.dataset.view='route'; context.window.innerWidth=1280;
+  context.showComputedRouteOnMap({path:[{}]});
+  assert.equal(collapsed.length,1);
+});
+
+test('collapsing focused route controls moves focus to the reopen button and keeps a summary', () => {
+  const active={};
+  const elements=Object.fromEntries(['mapsPanelContent','routeFooter','mapsPanelToggle','mapsPanelExpand','mapsPanelToggleLabel','mapsPanelSummary'].map(id=>[id,new Element()]));
+  elements.routeFooter.contains=el=>el===active;
+  let focused=false;
+  elements.mapsPanelToggle.focus=()=>{focused=true;};
+  const shell={dataset:{view:'route'},classList:{toggle(){},remove(){}}};
+  const context=vm.createContext({
+    document:{activeElement:active,querySelector:()=>shell,getElementById:id=>elements[id]},
+    map:{resize(){},setPadding(){}},mapsCameraPadding:()=>({}),syncLayersButton(){},
+    currentRouteMeta:{distance_m:268,duration_s:60},formatMeters:()=> '268 m',formatDuration:()=> '1 min',
+  });
+  vm.runInContext(section('function setMapsPanelCollapsed(', "document.getElementById('mapsPanelToggle')?"),context);
+  context.setMapsPanelCollapsed(true);
+  assert.equal(focused,true);
+  assert.equal(elements.mapsPanelSummary.hidden,false);
+  assert.equal(elements.mapsPanelSummary.textContent,'1 min · 268 m');
+  assert.equal(elements.mapsPanelToggleLabel.textContent,'Öffnen');
+  context.formatDuration = () => '';
+  context.setMapsPanelCollapsed(true);
+  assert.equal(elements.mapsPanelSummary.textContent,'< 1 min · 268 m');
+  context.setMapsPanelCollapsed(false);
+  assert.equal(elements.mapsPanelSummary.hidden,true);
+  assert.equal(elements.mapsPanelToggleLabel.textContent,'Karte');
+  assert.equal(elements.routeFooter.hidden,false);
+});
+
+test('theme follows system changes until the user makes an explicit choice', () => {
+  const elements=Object.fromEntries(['themeToggle','themeIconMoon','themeIconSun'].map(id=>[id,new Element()]));
+  const meta=new Element(), classes=new Set();
+  let saved=null, changed;
+  const system={matches:true,addEventListener:(_event,handler)=>{changed=handler;}};
+  const root={classList:{contains:name=>classes.has(name),toggle(name,on){const enabled=on===undefined?!classes.has(name):on; if(enabled)classes.add(name);else classes.delete(name);}}};
+  const context=vm.createContext({
+    window:{matchMedia:()=>system},
+    localStorage:{getItem:()=>saved,setItem:(_key,value)=>{saved=value;}},
+    document:{documentElement:root,getElementById:id=>elements[id],querySelector:()=>meta},
+  });
+  vm.runInContext(section('function initTheme()', "document.getElementById('themeToggle').addEventListener"),context);
+  context.initTheme();
+  assert.equal(classes.has('light-mode'),false);
+  assert.equal(elements.themeToggle.attributes['aria-pressed'],'true');
+  assert.equal(meta.attributes.content,'#1c1c1e');
+  system.matches=false;changed();
+  assert.equal(classes.has('light-mode'),true);
+  context.toggleTheme();
+  assert.equal(saved,'dark');
+  changed();
+  assert.equal(classes.has('light-mode'),false, 'system updates preserve an explicit theme');
+  saved='light'; system.matches=true; context.initTheme();
+  assert.equal(classes.has('light-mode'),true, 'saved light theme wins over a dark system');
+  assert.equal(elements.themeToggle.attributes.title,'Dunkles Design verwenden');
+  assert.equal(meta.attributes.content,'#f5f5f7');
 });

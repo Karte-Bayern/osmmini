@@ -35,18 +35,17 @@
         <button type="button" data-map-view="assistant" aria-pressed="false"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m12 3 2.8 6.2L21 12l-6.2 2.8L12 21l-2.8-6.2L3 12l6.2-2.8Z"/></svg></span>Assistent</button>
         <button type="button" data-map-view="maps" aria-pressed="false"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m12 3 10 6-10 6L2 9ZM2 13l10 6 10-6M2 17l10 6 10-6"/></svg></span>Karten</button>
         <button type="button" data-map-view="edit" aria-pressed="false"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m4 6 6-3 6 3 4-2v14l-4 2-6-3-6 3Z"/><path d="M10 3v15m6-12v15"/><path d="m15 11 4 4-4 4"/></svg></span>OSM-Edit</button>
-        <button type="button" data-map-view="tools" aria-pressed="false"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="9" cy="18" r="2"/></svg></span>Werkzeuge</button>
+        <button type="button" data-map-view="tools" aria-pressed="false"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="9" cy="18" r="2"/></svg></span><span class="rail-label-desktop">Werkzeuge</span><span class="rail-label-mobile">Mehr</span></button>
         <button type="button" class="maps-rail-shortcut" data-sidebar-open="settings" aria-label="Einstellungen öffnen"><span aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.1 2.1-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.55v.09h-3v-.09A1.7 1.7 0 0 0 10.7 18.6a1.7 1.7 0 0 0-1.88.34l-.06.06-2.1-2.1.06-.06A1.7 1.7 0 0 0 7.06 15a1.7 1.7 0 0 0-1.55-1.03h-.09v-3h.09A1.7 1.7 0 0 0 7.06 9.94a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.1-2.1.06.06a1.7 1.7 0 0 0 1.88.34 1.7 1.7 0 0 0 1.03-1.55v-.09h3v.09a1.7 1.7 0 0 0 1.03 1.55 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.1 2.1-.06.06a1.7 1.7 0 0 0-.34 1.88 1.7 1.7 0 0 0 1.55 1.03h.09v3h-.09A1.7 1.7 0 0 0 19.4 15Z"/></svg></span>Einstellungen</button>
         <div class="maps-rail-footer">OSM<br>mini</div>
       </nav>
       <aside class="sidebar" aria-label="Routenplanung und Werkzeuge">
         <div class="maps-panel-top">
           <div class="maps-panel-toolbar">
-            <button id="mapsPanelBack" type="button" hidden aria-label="Zur vorherigen Ansicht" title="Zurück"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-arrow"/></svg></button><strong id="mapsPanelTitle">Entdecken</strong>
+            <button id="mapsPanelBack" type="button" hidden aria-label="Zur vorherigen Ansicht" title="Zurück"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-arrow"/></svg></button><div class="maps-panel-heading"><strong id="mapsPanelTitle">Entdecken</strong><span id="mapsPanelSummary" class="maps-panel-summary" hidden></span></div>
             <div class="maps-panel-controls">
-              <button id="themeToggle" class="btn-icon maps-theme-toggle" title="Design wechseln" aria-label="Dunkles Design" aria-pressed="false"> <svg id="themeIconMoon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg> <svg id="themeIconSun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="display:none" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg> </button>
-              <button id="mapsPanelExpand" type="button" aria-pressed="false" aria-controls="mapsPanelContent">Mehr Platz</button>
-              <button id="mapsPanelToggle" type="button" aria-expanded="true" aria-controls="mapsPanelContent" aria-label="Sidebar einklappen" title="Sidebar einklappen"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-chevron"/></svg></button>
+              <button id="mapsPanelExpand" type="button" aria-pressed="false" aria-controls="mapsPanelContent routeFooter" aria-label="Ansicht vergrößern"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-chevron"/></svg></button>
+              <button id="mapsPanelToggle" type="button" aria-expanded="true" aria-controls="mapsPanelContent routeFooter" aria-label="Karte ansehen" title="Karte ansehen"><span id="mapsPanelToggleLabel">Karte</span><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-chevron"/></svg></button>
             </div>
           </div>
         <form id="placeSearchForm" class="maps-search" role="search">
@@ -83,7 +82,7 @@
           </div>
         </div>
 
-        <section class="workspace-context" data-view-only="route maps" aria-label="Aktiver Kartenmodus" aria-live="polite">
+        <section class="workspace-context" data-view-only="maps" aria-label="Aktiver Kartenmodus" aria-live="polite">
           <span id="mapModeIcon" class="workspace-context-icon" aria-hidden="true">◌</span>
           <div class="workspace-context-copy">
             <strong id="mapModeTitle">Karte wird vorbereitet</strong>
@@ -95,24 +94,43 @@
         <!-- ── Route card ── -->
         <section class="card route-card" data-view-only="route">
 
+          <!-- The result leads with information needed on the journey. -->
+          <div id="routeDetails" class="route-details" style="display:none" aria-label="Routenergebnis">
+            <div class="route-overview">
+              <div><span class="route-result-label">Fahrzeit</span><strong id="detailDuration">—</strong></div>
+              <span class="route-result-icon" aria-hidden="true"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-route"/></svg></span>
+            </div>
+            <div class="route-result-meta"><span id="detailDistance">—</span><span aria-hidden="true">·</span><span>Ankunft <strong id="detailETA">—</strong></span></div>
+            <div id="territoryTransitions" class="territory-transitions" style="display:none"></div>
+          </div>
+          <div class="route-actions" id="routeActions" style="display:none">
+            <button id="zoomToRoute" class="btn btn-action route-show-map" type="button">
+              <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-map"/></svg>Auf Karte ansehen
+            </button>
+            <details class="route-more-actions">
+              <summary>Weitere Aktionen<svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-chevron"/></svg></summary>
+              <div class="route-action-grid">
+                <button id="exportRouteGPX" class="btn btn-action" type="button" title="Route als GPX exportieren (Navi, GPS-Apps)">GPX exportieren</button>
+                <button id="exportRoute" class="btn btn-action" type="button" title="Route als GeoJSON exportieren (GIS)">GeoJSON exportieren</button>
+                <a id="gmaps" class="link-ext" href="#" target="_blank" rel="noopener" style="display:none">Google Maps ↗</a>
+                <a id="amaps" class="link-ext" href="#" target="_blank" rel="noopener" style="display:none">Apple Maps ↗</a>
+              </div>
+              <div class="route-diagnostics"><span>Routing: <span id="detailEngine">—</span></span><span id="detailComputePill" title="Serverseitige Berechnungszeit der Route"><span id="detailComputeMs">—</span></span></div>
+              <button id="clearRoute" class="btn btn-action route-delete" type="button">Route entfernen</button>
+            </details>
+          </div>
+
           <div class="route-inputs">
             <!-- From -->
             <div class="route-input-row" id="from-group">
               <div class="route-dot route-dot-start"></div>
               <div class="route-input-wrap">
-                <div id="from-suggest" class="suggest"></div>
+                <label for="from" class="route-field-label">Start</label>
                 <div id="from-container"></div>
+                <div id="from-suggest" class="suggest"></div>
               </div>
             </div>
-            <p id="routeStartHint" class="route-start-hint">Start leer lassen: aktuelle GPS-Position wird verwendet.</p>
-
-            <!-- Connector + swap -->
-            <div class="route-connector-row">
-              <div class="route-connector-line"></div>
-              <button id="swapFromTo" class="btn-swap" title="Start und Ziel tauschen" aria-label="Start und Ziel tauschen">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/><polyline points="5 12 12 5 19 12" style="transform:rotate(180deg);transform-origin:50% 50%"/></svg>
-              </button>
-            </div>
+            <p id="routeStartHint" class="route-start-hint">Ohne Startadresse: aktuellen Standort verwenden.</p>
 
             <!-- Waypoints -->
             <div id="waypointsContainer" class="waypoints"></div>
@@ -121,100 +139,34 @@
             <div class="route-input-row" id="to-group">
               <div class="route-dot route-dot-end"></div>
               <div class="route-input-wrap">
-                <div id="to-suggest" class="suggest"></div>
+                <label for="to" class="route-field-label">Ziel</label>
                 <div id="to-container"></div>
+                <div id="to-suggest" class="suggest"></div>
               </div>
             </div>
           </div>
 
-          <!-- Add waypoint -->
-          <button id="addWaypoint" class="btn-add-wp">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            Zwischenstopp
-          </button>
-
-          <!-- Route objective (mirrors the "Ziel" select in Einstellungen > Routing) -->
-          <div id="routeObjectiveToggle" class="route-objective-toggle" role="group" aria-label="Routenziel">
-            <button type="button" class="route-objective-btn" data-objective="duration">Schnellste</button>
-            <button type="button" class="route-objective-btn" data-objective="distance">Kürzeste</button>
-            <button type="button" class="route-objective-btn" data-objective="economy">Ausgewogen</button>
-          </div>
-
-          <!-- Compute row -->
-          <div class="compute-row">
-            <button id="go" class="btn btn-primary">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-              Route berechnen
+          <div class="route-edit-actions">
+            <button id="addWaypoint" class="btn-add-wp">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              Zwischenstopp
             </button>
-            <button id="clear" class="btn btn-ghost" title="Zurücksetzen" aria-label="Route zurücksetzen">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.5"/></svg>
+            <button id="swapFromTo" class="btn-swap" title="Start und Ziel tauschen" aria-label="Start und Ziel tauschen">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/><polyline points="5 12 12 5 19 12" style="transform:rotate(180deg);transform-origin:50% 50%"/></svg>
             </button>
           </div>
 
-          <!-- Status bar -->
-          <div class="status-bar">
-            <span id="status" role="status" aria-live="polite" class="status-text">Bereit</span>
-            <div id="spinner" class="spinner" aria-hidden="true" style="display:none"></div>
-          </div>
-
-          <!-- Route result (shown after compute) -->
-          <div id="routeDetails" class="route-details" style="display:none">
-            <div class="route-stats">
-              <div class="stat-pill">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
-                <span id="detailDistance">—</span>
-              </div>
-              <div class="stat-pill">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                <span id="detailDuration">—</span>
-              </div>
-              <div class="stat-pill">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-                <span id="detailETA">—</span>
-              </div>
-              <div class="stat-pill stat-pill-engine">
-                <span id="detailEngine">—</span>
-              </div>
-              <div class="stat-pill stat-pill-engine" id="detailComputePill" title="Serverseitige Berechnungszeit der Route">
-                <span id="detailComputeMs">—</span>
-              </div>
+          <details class="route-options">
+            <summary>Routenoptionen</summary>
+            <!-- Mirrors the objective select in Einstellungen > Routing. -->
+            <div id="routeObjectiveToggle" class="route-objective-toggle" role="group" aria-label="Routenziel">
+              <button type="button" class="route-objective-btn" data-objective="duration">Schnellste</button>
+              <button type="button" class="route-objective-btn" data-objective="distance">Kürzeste</button>
+              <button type="button" class="route-objective-btn" data-objective="economy">Ausgewogen</button>
             </div>
-            <div id="territoryTransitions" class="territory-transitions" style="display:none"></div>
-          </div>
+          </details>
 
-          <!-- Route action buttons -->
-          <div class="route-actions" id="routeActions" style="display:none">
-            <button id="zoomToRoute" class="btn btn-action" title="Route einpassen">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
-              Einpassen
-            </button>
-            <button id="clearRoute" class="btn btn-action" title="Route löschen">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
-              Löschen
-            </button>
-            <button id="exportRoute" class="btn btn-action" title="Route als GeoJSON exportieren (GIS)">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-              GeoJSON
-            </button>
-            <button id="exportRouteGPX" class="btn btn-action" title="Route als GPX exportieren (Navi, GPS-Apps)">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-              GPX
-            </button>
-          </div>
-
-          <!-- External links -->
-          <div class="external-links">
-            <a id="gmaps" class="link-ext" href="#" target="_blank" rel="noopener" style="display:none">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
-              Google Maps
-            </a>
-            <a id="amaps" class="link-ext" href="#" target="_blank" rel="noopener" style="display:none">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
-              Apple Maps
-            </a>
-          </div>
-
-          <!-- Distance (compat, hidden — content shown in route-stats above) -->
+          <!-- Legacy distance output; the visible summary is in routeDetails. -->
           <div id="distance" style="display:none"></div>
 
           <!-- Maneuvers -->
@@ -546,6 +498,13 @@
         </div>
 
         <div class="sidebar-secondary" data-view-only="tools assistant" aria-label="Weitere Werkzeuge">
+        <section class="maps-more" data-view-only="tools" aria-label="Weitere Ansichten">
+          <div class="maps-more-destinations">
+            <button type="button" data-map-view="maps"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-layers"/></svg><span><strong>Kartenebenen</strong><small>Ansicht und Offline-Karten</small></span><svg class="ui-icon more-chevron" aria-hidden="true" focusable="false"><use href="#icon-chevron"/></svg></button>
+            <button type="button" data-map-view="edit"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-map"/></svg><span><strong>Karte bearbeiten</strong><small>OpenStreetMap ergänzen</small></span><svg class="ui-icon more-chevron" aria-hidden="true" focusable="false"><use href="#icon-chevron"/></svg></button>
+          </div>
+          <button id="themeToggle" class="maps-appearance-toggle" title="Design wechseln" aria-label="Dunkles Design" aria-pressed="false"> <svg id="themeIconMoon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg> <svg id="themeIconSun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="display:none" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg><span>Dunkles Design</span><span class="appearance-switch" aria-hidden="true"></span></button>
+        </section>
         <details class="card gis-tools geo-workbench" id="geoWorkbench" data-view-only="tools">
           <summary>GIS-Werkbank</summary>
           <p class="settings-hint">GeoJSON prüfen, Attribute bearbeiten und Daten verknüpfen. Der Arbeitsstand bleibt in dieser Browser-Sitzung; zum Speichern exportieren.</p>
@@ -1125,6 +1084,25 @@
         </div>
 
         </div>
+        <section id="routeFooter" class="route-footer" data-view-only="route" aria-label="Route berechnen">
+          <!-- Compute row -->
+          <div class="compute-row">
+            <button id="go" class="btn btn-primary">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              Route berechnen
+            </button>
+            <button id="clear" class="btn btn-ghost" title="Zurücksetzen" aria-label="Route zurücksetzen">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.5"/></svg>
+            </button>
+          </div>
+
+          <!-- Status bar -->
+          <div class="status-bar">
+            <span id="status" role="status" aria-live="polite" class="status-text">Bereit</span>
+            <div id="spinner" class="spinner" aria-hidden="true" style="display:none"></div>
+          </div>
+
+        </section>
       </aside>
 
       <div class="map-pane">

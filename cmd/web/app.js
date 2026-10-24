@@ -1319,7 +1319,7 @@ let waypointSeq = 1;
 // Prevent unwanted browser autofill on input fields.
 function preventAutofill() {
 	// Create dynamic input fields to avoid autofill popups.
-  function createDynamicInput(containerId, fieldId, placeholder) {
+  function createDynamicInput(containerId, fieldId, label) {
     const container = document.getElementById(containerId);
     if (!container) return null;
     
@@ -1330,7 +1330,7 @@ function preventAutofill() {
     const input = document.createElement('input');
     input.id = fieldId;
     input.type = 'text';
-    input.placeholder = placeholder;
+    input.placeholder = 'Adresse oder Ort';
     input.className = 'dynamic-input';
     input.setAttribute('autocomplete', 'off');
     input.setAttribute('autocorrect', 'off');
@@ -1338,7 +1338,7 @@ function preventAutofill() {
     input.setAttribute('spellcheck', 'false');
     input.setAttribute('data-lpignore', 'true');
     input.setAttribute('inputmode', 'search');
-    input.setAttribute('aria-label', placeholder);
+    input.setAttribute('aria-label', label);
 
     const clearBtn = document.createElement('button');
     clearBtn.type = 'button';
@@ -1388,16 +1388,24 @@ preventAutofill();
 
 // Theme Management
 function initTheme() {
-  const saved = localStorage.getItem('theme-mode');
-  const isDark = saved === 'dark';
-  
-  document.documentElement.classList.toggle('light-mode', !isDark);
-  updateThemeButton();
+  const systemTheme = window.matchMedia?.('(prefers-color-scheme: dark)');
+  function applyTheme() {
+    const saved = localStorage.getItem('theme-mode');
+    const isDark = saved === 'dark' || (saved !== 'light' && !!systemTheme?.matches);
+    document.documentElement.classList.toggle('light-mode', !isDark);
+    updateThemeButton();
+  }
+  applyTheme();
+  systemTheme?.addEventListener?.('change', () => {
+    if (!['light', 'dark'].includes(localStorage.getItem('theme-mode'))) applyTheme();
+  });
 }
 
 function updateThemeButton() {
   const isDark = !document.documentElement.classList.contains('light-mode');
   document.getElementById('themeToggle').setAttribute('aria-pressed', String(isDark));
+  document.getElementById('themeToggle').setAttribute('title', isDark ? 'Helles Design verwenden' : 'Dunkles Design verwenden');
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', isDark ? '#1c1c1e' : '#f5f5f7');
   const moon = document.getElementById('themeIconMoon');
   const sun  = document.getElementById('themeIconSun');
   if (moon) moon.style.display = isDark ? 'block' : 'none';
@@ -1603,10 +1611,11 @@ function renderStopList(orderIds) {
     el.innerHTML = '';
 
     if (order.length === 0) {
-      el.innerHTML = '<div style="padding:10px; color:#8aaedc; font-style:italic; font-size:12px;">Keine Marker auf der Karte</div>';
+      el.hidden = true;
       return;
     }
 
+    el.hidden = false;
     const toolbar = document.createElement('div');
     toolbar.className = 'stop-list-toolbar';
     const title = document.createElement('span');
@@ -1866,15 +1875,12 @@ function renderPath(path, meta){
     maxLon: Math.max(bb.maxLon, c[1]),
   }), {minLat: coords[0][0], minLon: coords[0][1], maxLat: coords[0][0], maxLon: coords[0][1]});
   polyline = makeRouteLine(coords.map(c => [c[1], c[0]]));
-  startMarker = new maplibregl.Marker({ element: dotElement('#6ef2a0'), anchor: 'center' }).setLngLat([coords[0][1], coords[0][0]]).addTo(map);
-  endMarker = new maplibregl.Marker({ element: dotElement('#ffcc66'), anchor: 'center' }).setLngLat([coords[coords.length-1][1], coords[coords.length-1][0]]).addTo(map);
+  startMarker = new maplibregl.Marker({ element: dotElement('#0a84ff'), anchor: 'center' }).setLngLat([coords[0][1], coords[0][0]]).addTo(map);
+  endMarker = new maplibregl.Marker({ element: dotElement('#ff453a'), anchor: 'center' }).setLngLat([coords[coords.length-1][1], coords[coords.length-1][0]]).addTo(map);
   map.fitBounds(polyline.getBounds(),{padding: mapsCameraPadding()});
   
   const distKm = (meta.distance_m / 1000).toFixed(2);
-  const durMin = Math.round(meta.duration_s / 60);
-  const durHours = Math.floor(durMin / 60);
-  const durMins = durMin % 60;
-  const durationText = durHours > 0 ? `${durHours}h ${durMins}min` : `${durMin} min`;
+  const durationText = formatDuration(meta.duration_s) || '< 1 min';
   
   document.getElementById('distance').innerHTML = `<strong>${distKm} km</strong> • ${durationText}`;
   
@@ -1882,7 +1888,7 @@ function renderPath(path, meta){
   const detailsEl = document.getElementById('routeDetails');
   if (detailsEl) {
     detailsEl.style.display = 'block';
-    document.getElementById('detailDistance').textContent = `${distKm} km`;
+    document.getElementById('detailDistance').textContent = formatMeters(meta.distance_m);
     document.getElementById('detailDuration').textContent = durationText;
     const eta = new Date(Date.now() + meta.duration_s * 1000);
     document.getElementById('detailETA').textContent = eta.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'});
@@ -1906,6 +1912,10 @@ function renderPath(path, meta){
   if (actionsEl) actionsEl.style.display = 'flex';
 
   updateTerritoryRouteTransitions(path);
+  if (document.querySelector('.maps-shell')?.dataset.view === 'route') {
+    document.getElementById('mapsPanelTitle').textContent = 'Deine Route';
+    document.getElementById('mapsPanelContent').scrollTop = 0;
+  }
 }
 
 let routeRequest = null;
@@ -1995,10 +2005,11 @@ async function compute() {
         }
         if (steps && steps.length) renderManeuvers(steps);
       })();
-      document.getElementById('status').textContent = '✅ Route gefunden';
+      document.getElementById('status').textContent = 'Route gefunden';
       renderStopList([]);
       setMapsLinks(data.google_maps_url, data.apple_maps_url);
       showToast(`Route berechnet: ${(data.distance_m/1000).toFixed(1)} km`, 'success', 2000);
+      showComputedRouteOnMap(data);
     } else {
       const data = await apiTripSolve(from, to, options, request.signal);
       if (routeRequest !== request) return;
@@ -2023,6 +2034,7 @@ async function compute() {
       } else if (data.vehicle_capacity) {
         showToast(`Ladung: ${data.total_demand} / ${data.vehicle_capacity}`, 'info', 3000);
       }
+      showComputedRouteOnMap(data);
     }
   } catch (e) {
     if (routeRequest !== request || e?.name === 'AbortError') return;
@@ -2057,57 +2069,89 @@ function formatDuration(s) {
   if (mins >= 60) {
     const h = Math.floor(mins/60);
     const m = mins % 60;
-    return `${h}h ${m}m`;
+    return m ? `${h} Std. ${m} Min.` : `${h} Std.`;
   }
-  return `${mins} min`;
+  return mins < 1 ? '< 1 min' : `${mins} min`;
 }
 
 function iconForType(t) {
-  switch(t) {
-    case 'turn-left': return '⬅️';
-    case 'turn-right': return '➡️';
-    case 'uturn': return '⤴️';
-    case 'depart': return '🚦';
-    case 'arrive': return '🏁';
-    case 'continue': return '➡️';
-    default: return '➡️';
-  }
+  const paths = {
+    'turn-left': '<path d="M18 20v-7a5 5 0 0 0-5-5H4m5-5L4 8l5 5"/>',
+    'turn-right': '<path d="M6 20v-7a5 5 0 0 1 5-5h9m-5-5 5 5-5 5"/>',
+    uturn: '<path d="M6 20V9a6 6 0 0 1 12 0v7m-4-4 4 4 4-4"/>',
+    depart: '<path d="M12 21V4m-5 5 5-5 5 5M5 21h14"/>',
+    arrive: '<path d="M5 21V3m0 1h14l-3 4 3 4H5"/>',
+    turn: '<path d="M7 21v-8a5 5 0 0 1 5-5h7m-4-4 4 4-4 4"/>',
+    continue: '<path d="M12 21V3m-6 6 6-6 6 6"/>',
+  };
+  const path = Object.hasOwn(paths, t) ? paths[t] : paths.continue;
+  return `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${path}</svg>`;
 }
 
 function renderManeuvers(steps) {
   const el = document.getElementById('maneuvers');
   if (!el) return;
   el.innerHTML = '';
-  if (!steps || steps.length === 0) { el.style.display = 'none'; return; }
+  const validSteps = Array.isArray(steps) ? steps.filter(s => s && typeof s === 'object') : [];
+  if (validSteps.length === 0) { el.style.display = 'none'; return; }
   const list = document.createElement('div');
   list.className = 'maneuver-list';
-  steps.forEach((s) => {
-    const row = document.createElement('div');
-    row.className = 'maneuver-row';
+  list.setAttribute('role', 'group');
+  list.setAttribute('aria-label', 'Wegbeschreibung');
+  const labels = { 'turn-left': 'Links abbiegen', 'turn-right': 'Rechts abbiegen', uturn: 'Wenden', depart: 'Losfahren', arrive: 'Ziel erreicht', continue: 'Geradeaus weiter', turn: 'Abbiegen' };
+  validSteps.forEach((s) => {
+    const type = String(s.type ?? s.Type ?? '');
+    const instruction = String(s.instruction ?? s.Instruction ?? '').trim()
+      || (Object.hasOwn(labels, type) ? labels[type] : 'Route folgen');
+    const lat = s.lat ?? s.Lat;
+    const lon = s.lon ?? s.Lon;
+    const hasLocation = Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
+    const row = document.createElement(hasLocation ? 'button' : 'div');
+    row.className = `maneuver-row ${hasLocation ? 'maneuver-interactive' : 'maneuver-static'}`;
+    if (hasLocation) row.type = 'button';
+    row.title = instruction;
 
-    const left = document.createElement('div');
+    const left = document.createElement('span');
     left.className = 'maneuver-left';
 
-    const ic = document.createElement('div');
+    const ic = document.createElement('span');
     ic.className = 'maneuver-icon';
-    ic.textContent = iconForType(s.type || s.Type || '');
+    ic.innerHTML = iconForType(type);
 
-    const txt = document.createElement('div');
+    const txt = document.createElement('span');
     txt.className = 'maneuver-text';
-    txt.innerHTML = `<div class="maneuver-instr">${escapeHtml(s.instruction || s.Instruction || '')}</div>`
-                  + `<div class="maneuver-type">${escapeHtml((s.type||s.Type||'').toString())}</div>`;
+    const text = document.createElement('span');
+    text.className = 'maneuver-instr';
+    text.textContent = instruction;
+    txt.appendChild(text);
     left.append(ic, txt);
 
-    const right = document.createElement('div');
+    const right = document.createElement('span');
     right.className = 'maneuver-right';
-    right.innerHTML = `<div class="maneuver-dist">${formatMeters(s.distance_m || s.DistanceM || 0)}</div>`
-                    + `<div class="maneuver-dur">${formatDuration(s.duration_s || s.DurationS || 0)}</div>`;
+    const distance = s.distance_m ?? s.DistanceM;
+    const duration = s.duration_s ?? s.DurationS;
+    const metrics = [];
+    if (Number.isFinite(distance) && distance > 0) {
+      const value = document.createElement('span');
+      value.className = 'maneuver-dist';
+      value.textContent = formatMeters(distance);
+      metrics.push(value.textContent);
+      right.appendChild(value);
+    }
+    if (Number.isFinite(duration) && duration > 0) {
+      const value = document.createElement('span');
+      value.className = 'maneuver-dur';
+      value.textContent = duration < 60 ? '< 1 min' : formatDuration(duration);
+      metrics.push(value.textContent);
+      right.appendChild(value);
+    }
 
-    row.append(left, right);
-    row.addEventListener('click', () => {
-      const lat = s.lat || s.Lat; const lon = s.lon || s.Lon;
-      if (lat && lon) map.panTo([lon, lat]);
-    });
+    row.appendChild(left);
+    if (metrics.length) row.appendChild(right);
+    if (hasLocation) {
+      row.setAttribute('aria-label', [instruction, ...metrics, 'Auf Karte anzeigen'].join(' · '));
+      row.addEventListener('click', () => map.panTo([lon, lat]));
+    }
     list.appendChild(row);
   });
   el.appendChild(list);
@@ -2157,14 +2201,15 @@ document.getElementById('clear').addEventListener('click', () => {
   if (actionsEl) actionsEl.style.display = 'none';
   if (maneuversEl) maneuversEl.style.display = 'none';
   setMapsLinks('', '');
+  setMapsPanelCollapsed(false);
   showToast('Zurückgesetzt', 'info', 1500);
 });
 
 // Route control buttons
 document.getElementById('zoomToRoute')?.addEventListener('click', () => {
   if (polyline) {
+    setMapsPanelCollapsed(true);
     map.fitBounds(polyline.getBounds(), {padding: mapsCameraPadding()});
-    showToast('Route zentriert', 'info', 1500);
   }
 });
 
@@ -2184,6 +2229,10 @@ document.getElementById('clearRoute')?.addEventListener('click', () => {
   document.getElementById('status').textContent = 'Bereit';
   document.getElementById('distance').textContent = '';
   setMapsLinks('', '');
+  const maneuversEl = document.getElementById('maneuvers');
+  if (maneuversEl) maneuversEl.style.display = 'none';
+  updateTerritoryRouteTransitions(null);
+  setMapsPanelCollapsed(false);
   showToast('Route gelöscht', 'info', 1500);
 });
 
@@ -2449,15 +2498,15 @@ function addWaypoint() {
 
   const input = document.createElement('input');
   input.type = 'text';
-  input.placeholder = 'Zwischenstopp: Adresse oder Koordinaten';
+  input.placeholder = 'Zwischenstopp';
   input.setAttribute('autocomplete', 'off');
   input.setAttribute('autocorrect', 'off');
   input.setAttribute('spellcheck', 'false');
   input.setAttribute('inputmode', 'search');
   input.setAttribute('aria-label', 'Zwischenstopp ' + id);
   
-  inputGroup.appendChild(suggestDiv);
   inputGroup.appendChild(input);
+  inputGroup.appendChild(suggestDiv);
 
   // Optional per-stop load, compared against Einstellungen > Trip-Optionen >
   // Fahrzeugkapazität on the server (Lieferdienst/Spedition use case).
@@ -6229,14 +6278,19 @@ function appendAITargetChoices(container, data) {
 
 
 function mapsCameraPadding() {
+  const canvas = document.getElementById('map').getBoundingClientRect();
+  const panel = document.querySelector('.sidebar').getBoundingClientRect();
   const mobile = window.innerWidth <= 768;
-  const panelHeight = document.querySelector('.sidebar')?.getBoundingClientRect().height || 0;
-  if (!mobile && document.querySelector('.maps-shell')?.classList.contains('panel-collapsed')) {
-    return { top: panelHeight + 28, right: 50, bottom: 40, left: 40 };
+  const padding = { top: mobile ? 64 : 76, right: 68, bottom: 24, left: 16 };
+  // The desktop panel is docked beside the canvas. Only reserve space for
+  // the mobile sheet or the floating header in the collapsed desktop view.
+  if (panel.right > canvas.left && panel.left < canvas.right) {
+    if (mobile) padding.bottom = Math.max(24, canvas.bottom - panel.top + 12);
+    else padding.top = Math.max(padding.top, panel.bottom - canvas.top + 12);
   }
-  return mobile
-    ? { top: 60, right: 40, bottom: Math.min(panelHeight + 48, window.innerHeight * .5), left: 40 }
-    : { top: 80, right: 50, bottom: 40, left: (document.querySelector('.sidebar')?.getBoundingClientRect().right || 370) + 24 };
+  padding.top = Math.min(padding.top, canvas.height * .2);
+  padding.bottom = Math.min(padding.bottom, Math.max(0, canvas.height - padding.top - 80));
+  return padding;
 }
 
 let layersReturnState = null;
@@ -6255,7 +6309,7 @@ function closeLayersPanel() {
     document.querySelector('.maps-shell')?.classList.toggle('panel-expanded', previous.expanded);
     const expand = document.getElementById('mapsPanelExpand');
     expand?.setAttribute('aria-pressed', String(previous.expanded));
-    if (expand) expand.textContent = previous.expanded ? 'Weniger Platz' : 'Mehr Platz';
+    if (expand) expand.setAttribute('aria-label', previous.expanded ? 'Ansicht verkleinern' : 'Ansicht vergrößern');
     setMapsPanelCollapsed(previous.collapsed);
     const content = document.getElementById('mapsPanelContent');
     if (content) content.scrollTop = previous.scroll;
@@ -6268,15 +6322,13 @@ function setMapsView(view) {
   if (!['explore', 'route', 'tools', 'assistant', 'maps', 'edit'].includes(view)) return;
   if (view !== 'tools') window.planningTools?.cancel();
   document.querySelector('.maps-shell')?.setAttribute('data-view', view);
-  document.getElementById('mapsPanelTitle').textContent = {explore:'Entdecken',route:'Route planen',assistant:'Kartenassistent',tools:'Werkzeuge',maps:'Kartenebenen',edit:'OSM-Edit'}[view];
+  document.getElementById('mapsPanelTitle').textContent = {explore:'Entdecken',route:currentRouteMeta ? 'Deine Route' : 'Route planen',assistant:'Kartenassistent',tools:'Werkzeuge',maps:'Kartenebenen',edit:'OSM-Edit'}[view];
   const back = document.getElementById('mapsPanelBack');
   if (back) back.hidden = view !== 'maps';
   if (view !== 'maps') layersReturnState = null;
   if (view === 'edit') window.osmEditor?.enter(); else window.osmEditor?.leave();
   setMapsPanelCollapsed(false);
-  document.querySelectorAll('.maps-rail [data-map-view]').forEach(button => {
-    button.setAttribute('aria-pressed', String(button.dataset.mapView === view));
-  });
+  syncMapsNavigation();
   if (view === 'assistant' && document.getElementById('aiBody')?.style.display === 'none') {
     document.getElementById('aiToggle')?.click();
   }
@@ -6290,18 +6342,42 @@ function setMapsView(view) {
   map.setPadding?.(mapsCameraPadding());
 }
 
+function syncMapsNavigation() {
+  const view = document.querySelector('.maps-shell')?.dataset.view;
+  const compact = window.innerWidth <= 768;
+  document.querySelectorAll('.maps-rail [data-map-view]').forEach(button => {
+    const selected = button.dataset.mapView === view || (compact && button.dataset.mapView === 'tools' && ['maps', 'edit'].includes(view));
+    button.setAttribute('aria-pressed', String(selected));
+  });
+  if (view === 'tools') document.getElementById('mapsPanelTitle').textContent = compact ? 'Mehr' : 'Werkzeuge';
+}
+
 if (typeof ResizeObserver !== 'undefined') {
-  const mapsPanelObserver = new ResizeObserver(() => map.setPadding?.(mapsCameraPadding()));
+  const mapsPanelObserver = new ResizeObserver(() => {
+    map.resize();
+    map.setPadding?.(mapsCameraPadding());
+  });
   const mapsPanel = document.querySelector('.sidebar');
   if (mapsPanel) mapsPanelObserver.observe(mapsPanel);
+  const mapPane = document.querySelector('.map-pane');
+  if (mapPane) mapsPanelObserver.observe(mapPane);
 }
-window.addEventListener('resize', () => map.setPadding?.(mapsCameraPadding()));
+window.addEventListener('resize', () => {
+  syncMapsNavigation();
+  map.setPadding?.(mapsCameraPadding());
+});
 
 document.querySelectorAll('[data-map-view]').forEach(button => {
   button.addEventListener('click', () => {
+    // Use the same return path as the floating layers button, including More.
+    if (button.dataset.mapView === 'maps' && document.querySelector('.maps-shell')?.dataset.view !== 'maps') {
+      document.getElementById('mapsLayers').click();
+      if (button.closest('.maps-more-destinations')) document.getElementById('mapsPanelBack')?.focus();
+      return;
+    }
     setMapsView(button.dataset.mapView);
     // The Werkzeuge view has its own first action; focusing search there just adds a stray focus ring.
-    const focusTarget = {route: 'from', assistant: 'aiPrompt', explore: 'placeSearch'}[button.dataset.mapView];
+    const focusTarget = {route: currentRouteMeta ? null : 'from', assistant: 'aiPrompt', explore: 'placeSearch'}[button.dataset.mapView];
     if (focusTarget) document.getElementById(focusTarget)?.focus();
   });
 });
@@ -6482,21 +6558,43 @@ document.querySelectorAll('[data-ai-starter]').forEach(button => {
 });
 
 
+function showComputedRouteOnMap(data) {
+  // A failed/empty result or a background calculation must not close a tool
+  // the user has switched to while the request was in flight.
+  if (!data.path?.length || window.innerWidth > 768 || document.querySelector('.maps-shell')?.dataset.view !== 'route') return;
+  setMapsPanelCollapsed(true);
+  if (polyline) map.fitBounds(polyline.getBounds(), { padding: mapsCameraPadding() });
+}
+
 function setMapsPanelCollapsed(collapsed) {
   const shell = document.querySelector('.maps-shell');
   shell.classList.toggle('panel-collapsed', collapsed);
   const content = document.getElementById('mapsPanelContent');
+  const footer = document.getElementById('routeFooter');
+  const moveFocus = collapsed && (content.contains?.(document.activeElement) || footer?.contains?.(document.activeElement));
   content.hidden = collapsed;
+  if (footer) footer.hidden = collapsed;
   const toggle = document.getElementById('mapsPanelToggle');
   toggle.setAttribute('aria-expanded', String(!collapsed));
-  toggle.setAttribute('aria-label', collapsed ? 'Sidebar aufklappen' : 'Sidebar einklappen');
-  toggle.setAttribute('title', collapsed ? 'Sidebar aufklappen' : 'Sidebar einklappen');
+  toggle.setAttribute('aria-label', collapsed ? 'Seitenleiste öffnen' : 'Karte ansehen');
+  toggle.setAttribute('title', collapsed ? 'Seitenleiste öffnen' : 'Karte ansehen');
+  const label = document.getElementById('mapsPanelToggleLabel');
+  if (label) label.textContent = collapsed ? 'Öffnen' : 'Karte';
+  const summary = document.getElementById('mapsPanelSummary');
+  if (summary) {
+    summary.hidden = !collapsed || shell.dataset.view !== 'route' || !currentRouteMeta;
+    summary.textContent = currentRouteMeta ? `${formatDuration(currentRouteMeta.duration_s) || '< 1 min'} · ${formatMeters(currentRouteMeta.distance_m)}` : '';
+  }
+  const title = document.getElementById('mapsPanelTitle');
+  if (title && shell.dataset.view === 'route') title.textContent = currentRouteMeta ? 'Deine Route' : 'Route planen';
+  if (moveFocus) toggle.focus({ preventScroll: true });
   syncLayersButton();
   if (collapsed) {
     shell.classList.remove('panel-expanded');
     document.getElementById('mapsPanelExpand').setAttribute('aria-pressed', 'false');
-    document.getElementById('mapsPanelExpand').textContent = 'Mehr Platz';
+    document.getElementById('mapsPanelExpand').setAttribute('aria-label', 'Ansicht vergrößern');
   }
+  map.resize();
   map.setPadding?.(mapsCameraPadding());
 }
 document.getElementById('mapsPanelToggle')?.addEventListener('click', () => {
@@ -6509,7 +6607,7 @@ document.getElementById('mapsPanelExpand')?.addEventListener('click', () => {
   shell.classList.toggle('panel-expanded', expanded);
   const button = document.getElementById('mapsPanelExpand');
   button.setAttribute('aria-pressed', String(expanded));
-  button.textContent = expanded ? 'Weniger Platz' : 'Mehr Platz';
+  button.setAttribute('aria-label', expanded ? 'Ansicht verkleinern' : 'Ansicht vergrößern');
 });
 document.addEventListener('keydown', event => {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
