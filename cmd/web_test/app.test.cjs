@@ -138,18 +138,20 @@ test('destroy detaches input handlers and silences late network failures', async
 });
 
 function routeHarness() {
-  const elements = Object.fromEntries(['from', 'to', 'status', 'routeDetails', 'routeActions', 'optimize'].map(id => [id, new Element()]));
+  const elements = Object.fromEntries(['from', 'to', 'status', 'routeDetails', 'routeActions', 'optimize', 'routeEditor', 'routeResult', 'go', 'clear', 'editRoute', 'zoomToRoute', 'returnToRoute', 'routeFooter', 'goLabel', 'routeError'].map(id => [id, new Element()]));
   elements.from.value = 'Start';
   elements.to.value = 'Ziel';
-  const requests = [], rendered = [], toasts = [], busy = [], mapResults = [];
+  const requests = [], rendered = [], toasts = [], busy = [], mapResults = [], panelChanges = [];
+  const shell = { dataset: { view: 'route' } };
   const request = (from, to, options, signal) => {
     const pending = deferred();
     requests.push({ signal, ...pending });
     return pending.promise;
   };
   const context = vm.createContext({
-    AbortController, console,
-    document: { getElementById: id => elements[id] },
+    AbortController, console: { error() {} }, currentRouteMeta: null,
+    document: { getElementById: id => elements[id], querySelector: () => shell },
+    setMapsPanelCollapsed: collapsed => panelChanges.push(collapsed),
     debouncedCompute: { cancel() {} },
     routeLocationForInput: input => ({ query: input.value }),
     routeLocationHasValue: location => Boolean(location.query),
@@ -162,8 +164,8 @@ function routeHarness() {
     showComputedRouteOnMap: data => mapResults.push(data),
     showToast: (...args) => toasts.push(args),
   });
-  vm.runInContext(section('let routeRequest = null;', '\nfunction formatMeters('), context);
-  return { context, elements, requests, rendered, toasts, busy, mapResults };
+  vm.runInContext(section('function setRouteEditing(', '\nfunction formatMeters('), context);
+  return { context, elements, requests, rendered, toasts, busy, mapResults, panelChanges, shell };
 }
 
 test('only the latest route may render or release the busy state', async () => {
@@ -207,8 +209,90 @@ test('a failed superseded route cannot replace the current status', async () => 
   await first;
   assert.equal(h.elements.status.textContent, 'Berechne...');
   assert.equal(h.toasts.length, 0);
-  h.requests[1].resolve({ path: [], distance_m: 200 });
+  h.requests[1].resolve({ path: ['new'], distance_m: 200 });
   await second;
+});
+
+test('failed route edits preserve the previous result and expose a persistent error', async () => {
+  const h = routeHarness();
+  h.context.currentRouteMeta = { distance_m: 1200 };
+  h.elements.routeDetails.style.display = 'block';
+  h.elements.routeActions.style.display = 'flex';
+  h.context.setRouteEditing(false);
+  assert.equal(h.elements.routeEditor.hidden, true);
+  assert.equal(h.elements.go.hidden, true);
+  assert.equal(h.elements.zoomToRoute.hidden, false);
+  const pending = h.context.compute();
+  assert.equal(h.elements.routeDetails.style.display, 'block');
+  h.requests[0].reject(new Error('Keine Verbindung'));
+  await pending;
+  assert.equal(h.context.currentRouteMeta.distance_m, 1200);
+  assert.equal(h.elements.routeError.hidden, false);
+  assert.equal(h.elements.routeError.textContent, 'Keine Verbindung. Die bisherige Route bleibt auf der Karte.');
+  assert.deepEqual(h.panelChanges, [false], 'show the persistent error if the route panel was collapsed');
+  assert.equal(h.elements.routeEditor.hidden, false);
+  assert.equal(h.elements.returnToRoute.hidden, false);
+  assert.equal(h.elements.goLabel.textContent, 'Neu berechnen');
+  assert.equal(h.elements.routeActions.style.display, 'flex');
+  assert.equal(h.toasts.length, 0, 'the inline error does not need a second floating message');
+  h.context.setRouteError('');
+  h.context.setRouteEditing(false);
+  assert.equal(h.elements.status.textContent, 'Bereit');
+  assert.equal(h.elements.routeError.hidden, true);
+  assert.equal(h.elements.routeResult.hidden, false);
+});
+
+test('missing destination stays editable and never starts a route request', async () => {
+  const h = routeHarness();
+  h.elements.to.value = '';
+  await h.context.compute();
+  assert.equal(h.requests.length, 0);
+  assert.equal(h.elements.routeEditor.hidden, false);
+  assert.equal(h.elements.routeError.hidden, false);
+  assert.match(h.elements.routeError.textContent, /Ziel eingeben/);
+  assert.equal(h.busy.at(-1), false);
+});
+
+test('an empty API route preserves the old route without reporting success or interrupting another tool', async () => {
+  const h = routeHarness();
+  h.context.currentRouteMeta = { distance_m: 1200 };
+  h.shell.dataset.view = 'tools';
+  const pending = h.context.compute();
+  h.requests[0].resolve({ path: [], distance_m: 0 });
+  await pending;
+  assert.equal(h.rendered.length, 0);
+  assert.equal(h.context.currentRouteMeta.distance_m, 1200);
+  assert.equal(h.mapResults.length, 0);
+  assert.equal(h.toasts.some(toast => toast[1] === 'success'), false);
+  assert.equal(h.panelChanges.length, 0);
+  assert.match(h.elements.routeError.textContent, /Keine befahrbare Route/);
+  assert.equal(h.toasts.length, 1, 'a background failure still needs a visible notification');
+});
+
+test('route lookup and connection errors explain how to recover', () => {
+  const { context } = routeHarness();
+  assert.match(context.routeErrorMessage(new Error('from: not found: Unknown')), /^Start wurde nicht gefunden/);
+  assert.match(context.routeErrorMessage(new Error('to: not found: Unknown')), /^Ziel wurde nicht gefunden/);
+  assert.match(context.routeErrorMessage({ message: 'ambiguous', details: { target: 'from', ambiguous: true } }), /^Start ist nicht eindeutig/);
+  assert.match(context.routeErrorMessage(new Error('Failed to fetch')), /^Keine Verbindung zum Server/);
+  assert.equal(context.routeErrorMessage(new Error('Standortzugriff wurde abgelehnt.')), 'Standortzugriff wurde abgelehnt.');
+});
+
+test('switching between a result and its editor keeps keyboard focus on a visible control', () => {
+  const h = routeHarness();
+  h.context.currentRouteMeta = { distance_m: 1200 };
+  const focused = [];
+  h.elements.from.focus = () => focused.push('from');
+  h.elements.zoomToRoute.focus = () => focused.push('map');
+  h.context.document.activeElement = h.elements.editRoute;
+  h.context.setRouteEditing(true);
+  assert.equal(h.elements.from.hidden, undefined);
+  assert.deepEqual(focused, ['from']);
+  h.context.document.activeElement = h.elements.returnToRoute;
+  h.elements.routeEditor.children.push(h.elements.returnToRoute);
+  h.context.setRouteEditing(false);
+  assert.equal(h.elements.zoomToRoute.hidden, false);
+  assert.deepEqual(focused, ['from', 'map']);
 });
 
 test('swapping endpoints invalidates a pending search without editing its label', async () => {
@@ -246,7 +330,7 @@ test('batch waypoint removal does not issue intermediate route requests', () => 
   let computes = 0, destroyed = 0, removed = 0;
   const context = vm.createContext({
     compute() { computes++; },
-    waypoints: [1, 2, 3].map(id => ({ id, suggestHandle: { destroy() { destroyed++; } }, wrapper: { remove() { removed++; } } })),
+    waypoints: [1, 2, 3].map(id => ({ id, input: { value: 'Stopp' }, suggestHandle: { destroy() { destroyed++; } }, wrapper: { remove() { removed++; } } })),
   });
   vm.runInContext(section('function removeWaypoint(', '\nfunction makeSuggest('), context);
   context.removeWaypoint(1, false);
@@ -447,13 +531,14 @@ function placesHarness() {
     return el;
   }
   elements.placeResults = element();
-  const requests = [], views = [], markers = [], selections = [];
+  const requests = [], views = [], markers = [], selections = [], editing = [];
   let clears = 0;
   const context = vm.createContext({
     document: {getElementById: id => elements[id], querySelector: () => null, querySelectorAll: () => [], createElement: element},
     AbortController, URLSearchParams, clearTimeout,
     map: {getCenter: () => ({lat:48.63,lng:12.49}), flyTo(){}},
     setMapsView: view => views.push(view),
+    setRouteEditing: value => editing.push(value),
     normalizeSearchResult: value => Number.isFinite(value.lat) && Number.isFinite(value.lon) ? value : null,
     getResultPrimary: value => value.label, getResultSecondary: () => '',
     showSearchResultsOnMap: values => markers.push(values),
@@ -462,7 +547,7 @@ function placesHarness() {
     fetch(url, options) { const response = deferred(); requests.push({url, options, ...response}); return response.promise; },
   });
   vm.runInContext(section('let placeSearchRequest = null;', "document.getElementById('placeSearchForm')?"), context);
-  return {elements, requests, views, markers, selections, context, get clears() { return clears; }};
+  return {elements, requests, views, markers, selections, editing, context, get clears() { return clears; }};
 }
 
 test('discovery search discards an old response after a newer search completes', async () => {
@@ -494,6 +579,7 @@ test('category search uses the map center and preserves coordinates for routing'
   assert.equal(h.selections[0].input, h.elements.to);
   assert.equal(h.selections[0].place.lon, 12.49);
   assert.equal(h.views.at(-1), 'route');
+  assert.equal(h.editing.at(-1), true, 'a new destination opens the editor even when a previous route exists');
 });
 
 test('discovery search provides empty and error states without showing stale rows', async () => {

@@ -747,6 +747,8 @@ input:-webkit-autofill:focus {
   transition: background var(--dur) var(--ease);
 }
 .suggest .item:last-child { border-bottom: none; }
+.suggest .item.suggest-empty { color: var(--text-2); cursor: default; font-size: 12px; line-height: 1.5; }
+.suggest .item.suggest-empty:hover { background: transparent; }
 .suggest .item:hover { background: var(--primary-dim); }
 .suggest .item.active { background: linear-gradient(90deg, var(--primary), var(--primary-hover)); color: var(--on-primary); }
 .suggest .item mark {
@@ -2792,6 +2794,7 @@ button.section-header .section-header-title { text-align: left; }
 .route-edit-actions { display: flex; align-items: center; gap: 8px; margin: 8px 0 0; }
 .route-options { margin: 4px 2px 0; }
 .route-options > summary { min-height: 40px; padding: 10px 2px; cursor: pointer; font-size: 12px; color: var(--text-2); }
+.route-options > summary span { float: right; color: var(--text); font-weight: 500; }
 .route-options > summary::marker { color: var(--primary); }
 .route-options .route-objective-toggle { margin: 0 0 8px; }
 .route-options .route-objective-btn { min-height: 44px; }
@@ -2870,9 +2873,8 @@ button.section-header .section-header-title { text-align: left; }
 .route-result-icon .ui-icon { width: 22px; height: 22px; }
 .route-result-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; color: var(--text-2); font-size: 12px; font-variant-numeric: tabular-nums; }
 .route-result-meta strong { font-weight: 500; }
-.route-card .route-actions { flex-direction: column; gap: 0; margin: 8px 0 14px; animation: none; }
-.route-show-map { justify-content: center; min-height: 44px; border: 0; border-radius: 12px; background: var(--primary-dim); color: var(--primary); font-size: 13px; font-weight: 600; }
-.route-show-map .ui-icon { width: 17px; height: 17px; }
+.route-endpoints { margin: 8px 0 0; color: var(--text-2); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.route-card .route-actions { flex-direction: column; gap: 0; margin: 0; animation: none; }
 .route-more-actions { margin-top: 4px; }
 .route-more-actions > summary { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px; list-style: none; color: var(--text-2); font-size: 12px; cursor: pointer; }
 .route-more-actions > summary::-webkit-details-marker { display: none; }
@@ -2895,6 +2897,22 @@ button.section-header .section-header-title { text-align: left; }
 .route-footer .btn-ghost { width: 44px; border: 0; border-radius: 12px; background: var(--card-bg); color: var(--text-2); }
 .route-footer .status-text { font-size: 11px; font-weight: 400; }
 .route-footer .status-bar { min-height: 20px; margin-top: 3px; padding-inline: 2px; }
+.route-footer .btn[hidden], .route-return[hidden], .route-directions[hidden] { display: none; }
+.route-footer #zoomToRoute { flex: 1; justify-content: center; gap: 8px; }
+.route-footer .route-edit-button { background: var(--card-bg); color: var(--primary); border: 1px solid var(--border); border-radius: 12px; padding-inline: 16px; font-size: 13px; font-weight: 600; }
+.route-footer[data-mode="result"]:not([data-busy="true"]) .status-bar { display: none; }
+.route-footer[data-mode="result"] { padding-bottom: 12px; }
+.route-return { display: flex; align-items: center; gap: 6px; border: 0; padding: 0 2px; min-height: 36px; margin-bottom: 8px; background: transparent; color: var(--primary); font-size: 12px; cursor: pointer; }
+.route-return .ui-icon { width: 15px; height: 15px; transform: rotate(180deg); }
+.route-error { border: 1px solid var(--error); border-radius: 12px; padding: 12px; margin-bottom: 12px; color: var(--text); background: var(--card-bg); font-size: 13px; line-height: 1.5; }
+.route-error:focus { outline: 2px solid var(--primary); outline-offset: 2px; }
+.route-directions { border: 1px solid var(--border); border-radius: 14px; overflow: hidden; background: var(--card-bg); }
+.route-directions > summary { display: flex; align-items: center; gap: 8px; padding: 12px; min-height: 44px; list-style: none; cursor: pointer; font-size: 13px; font-weight: 500; }
+.route-directions > summary::-webkit-details-marker { display: none; }
+.route-step-count { margin-left: auto; color: var(--text-2); font-size: 11px; font-weight: 400; }
+.route-directions > summary .ui-icon { width: 13px; height: 13px; color: var(--text-2); transform: rotate(90deg); }
+.route-directions[open] > summary .ui-icon { transform: rotate(-90deg); }
+.route-card .route-directions .maneuvers { border: 0; border-top: 1px solid var(--border); border-radius: 0; margin: 0; }
 .maps-rail { background: var(--sidebar-bg); }
 .maps-rail button { color: var(--text-2); font-size: 10.5px; font-weight: 500; }
 .maps-rail button > span[aria-hidden="true"] { width: 48px; height: 34px; }

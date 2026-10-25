@@ -1866,7 +1866,7 @@ function renderPath(path, meta){
   polyline = null;
   if(startMarker) startMarker.remove(); if(endMarker) endMarker.remove();
   lastRoutePath = path;
-  if(coords.length===0) { updateTerritoryRouteTransitions(null); return; }
+  if(coords.length===0) { updateTerritoryRouteTransitions(null); setRouteEditing(true); return; }
   // Track route bounding box for poi_on_route queries
   currentRouteBBox = coords.reduce((bb, c) => ({
     minLat: Math.min(bb.minLat, c[0]),
@@ -1890,6 +1890,13 @@ function renderPath(path, meta){
     detailsEl.style.display = 'block';
     document.getElementById('detailDistance').textContent = formatMeters(meta.distance_m);
     document.getElementById('detailDuration').textContent = durationText;
+    const endpoints = document.getElementById('routeEndpoints');
+    if (endpoints) {
+      const from = meta.from?.label || document.getElementById('from').value || 'Start';
+      const to = meta.to?.label || document.getElementById('to').value || 'Rundtour';
+      endpoints.textContent = `${from} → ${to}`;
+      endpoints.title = endpoints.textContent;
+    }
     const eta = new Date(Date.now() + meta.duration_s * 1000);
     document.getElementById('detailETA').textContent = eta.toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'});
     document.getElementById('detailEngine').textContent = meta.engine || 'astar';
@@ -1912,10 +1919,66 @@ function renderPath(path, meta){
   if (actionsEl) actionsEl.style.display = 'flex';
 
   updateTerritoryRouteTransitions(path);
+  setRouteEditing(false);
   if (document.querySelector('.maps-shell')?.dataset.view === 'route') {
     document.getElementById('mapsPanelTitle').textContent = 'Deine Route';
     document.getElementById('mapsPanelContent').scrollTop = 0;
   }
+}
+
+function setRouteEditing(editing) {
+  editing = editing || !currentRouteMeta;
+  const editor = document.getElementById('routeEditor');
+  const result = document.getElementById('routeResult');
+  const go = document.getElementById('go');
+  const clear = document.getElementById('clear');
+  const edit = document.getElementById('editRoute');
+  const show = document.getElementById('zoomToRoute');
+  const returnButton = document.getElementById('returnToRoute');
+  const footer = document.getElementById('routeFooter');
+  const active = document.activeElement;
+  const moveFocus = editing
+    ? result?.contains(active) || active === edit || active === show
+    : editor?.contains(active) || active === go || active === clear;
+  if (editor) editor.hidden = !editing;
+  if (result) result.hidden = editing;
+  if (go) go.hidden = !editing;
+  if (clear) clear.hidden = !editing || !!currentRouteMeta;
+  if (edit) edit.hidden = editing;
+  if (show) show.hidden = editing;
+  if (returnButton) returnButton.hidden = !editing || !currentRouteMeta;
+  if (footer) footer.dataset.mode = editing ? 'editing' : 'result';
+  const label = document.getElementById('goLabel');
+  if (label) label.textContent = currentRouteMeta ? 'Neu berechnen' : 'Route berechnen';
+  if (moveFocus) (editing ? document.getElementById('from') : show)?.focus({ preventScroll: true });
+}
+
+function setRouteError(message) {
+  const error = document.getElementById('routeError');
+  if (!error) return;
+  if (!message && error.textContent) document.getElementById('status').textContent = 'Bereit';
+  error.textContent = message;
+  error.hidden = !message;
+  // A background request must not replace another tool. In the route view,
+  // expose the error even if the sheet was closed while waiting for the server.
+  if (message && document.querySelector('.maps-shell')?.dataset.view === 'route') {
+    setMapsPanelCollapsed(false);
+    const content = document.getElementById('mapsPanelContent');
+    if (content) content.scrollTop = 0;
+    error.focus({ preventScroll: true });
+  }
+}
+
+function routeErrorMessage(error) {
+  const message = error?.message || 'Bitte Start, Ziel und Verbindung prüfen.';
+  const target = error?.details?.target || message.match(/^(from|to):/)?.[1];
+  const label = target === 'from' ? 'Start' : 'Ziel';
+  if (error?.details?.ambiguous) return `${label} ist nicht eindeutig. Bitte einen der Vorschläge auswählen.`;
+  if (/^(from|to): not found:/.test(message)) return `${label} wurde nicht gefunden. Bitte die Eingabe prüfen oder einen Punkt auf der Karte auswählen.`;
+  if (/^(Failed to fetch|Load failed|NetworkError when attempting to fetch resource\.?)$/.test(message)) {
+    return 'Keine Verbindung zum Server. Bitte die Verbindung prüfen und erneut versuchen.';
+  }
+  return message;
 }
 
 let routeRequest = null;
@@ -1945,21 +2008,16 @@ async function compute() {
   syncInputClearState('from');
   syncInputClearState('to');
   const options = routeOptionsFromUI();
+  setRouteError('');
   document.getElementById('status').textContent = 'Berechne...';
-  setMapsLinks('', '');
   showSpinner(true);
   setComputeDisabled(true);
-  
-  // Hide route details while computing
-  const detailsEl = document.getElementById('routeDetails');
-  const actionsEl = document.getElementById('routeActions');
-  if (detailsEl) detailsEl.style.display = 'none';
-  if (actionsEl) actionsEl.style.display = 'none';
 
   try {
     if (!hasWaypoints && !hasStops && !routeLocationHasValue(to)) {
       document.getElementById('status').textContent = 'Ziel fehlt';
-      showToast('Bitte zuerst ein Ziel eingeben', 'info');
+      setRouteEditing(true);
+      setRouteError('Bitte ein Ziel eingeben oder auf der Karte auswählen.');
       toEl?.focus();
       return;
     }
@@ -1983,11 +2041,13 @@ async function compute() {
     if (!hasWaypoints && !hasStops) {
       if (!routeLocationHasValue(from) || !routeLocationHasValue(to)) {
         document.getElementById('status').textContent = 'Start oder Ziel fehlt';
-        showToast('Bitte Start und Ziel eingeben', 'info');
+        setRouteEditing(true);
+        setRouteError('Bitte Start und Ziel eingeben.');
         return;
       }
       const data = await apiRoute(from, to, options, request.signal);
       if (routeRequest !== request) return;
+      if (!Array.isArray(data.path) || !data.path.length) throw new Error('Keine befahrbare Route gefunden.');
       renderPath(data.path, data);
       // Preserve the exact resolved positions behind the friendly labels. A
       // later change of profile/objective must route to this same point rather
@@ -2003,7 +2063,7 @@ async function compute() {
           steps = [];
           data.legs.forEach(l => { if (l && l.steps) steps = steps.concat(l.steps); });
         }
-        if (steps && steps.length) renderManeuvers(steps);
+        renderManeuvers(steps);
       })();
       document.getElementById('status').textContent = 'Route gefunden';
       renderStopList([]);
@@ -2013,6 +2073,7 @@ async function compute() {
     } else {
       const data = await apiTripSolve(from, to, options, request.signal);
       if (routeRequest !== request) return;
+      if (!Array.isArray(data.path) || !data.path.length) throw new Error('Keine befahrbare Route gefunden.');
       renderPath(data.path, data);
       // aggregate maneuvers from legs if present
       (function(){
@@ -2021,10 +2082,10 @@ async function compute() {
           steps = [];
           data.legs.forEach(l => { if (l && l.steps) steps = steps.concat(l.steps); });
         }
-        if (steps && steps.length) renderManeuvers(steps);
+        renderManeuvers(steps);
       })();
       const optText = document.getElementById('optimize').checked ? 'optimiert' : 'fix';
-      document.getElementById('status').textContent = '✅ Trip (' + optText + ')';
+      document.getElementById('status').textContent = 'Tour berechnet · ' + optText;
       syncStopIcons(data.order || []);
       renderStopList(data.order || []);
       setMapsLinks(data.google_maps_url, data.apple_maps_url);
@@ -2038,15 +2099,19 @@ async function compute() {
     }
   } catch (e) {
     if (routeRequest !== request || e?.name === 'AbortError') return;
-    document.getElementById('status').textContent = '❌ Fehler';
+    document.getElementById('status').textContent = 'Route konnte nicht berechnet werden';
+    setRouteEditing(true);
+    const message = routeErrorMessage(e);
+    setRouteError(currentRouteMeta ? `${message.replace(/[.!?]$/, '')}. Die bisherige Route bleibt auf der Karte.` : message);
     if (requestedGPSForStart && !fromEl?.value.trim()) fromEl?.focus();
     try {
       if (e && e.details && Array.isArray(e.details.suggestions) && e.details.suggestions.length > 0) {
         renderDisambiguationButtons(e.details);
-        showToast('Mehrdeutiges Ziel: Bitte einen Vorschlag auswählen', 'info', 2600);
       }
     } catch (de) { /* non-fatal */ }
-    showToast(e.message || 'Fehler bei der Routenberechnung', 'error', 4000);
+    if (document.querySelector('.maps-shell')?.dataset.view !== 'route') {
+      showToast(message, 'error', 4000);
+    }
     console.error(e);
   }
   finally {
@@ -2093,6 +2158,10 @@ function renderManeuvers(steps) {
   if (!el) return;
   el.innerHTML = '';
   const validSteps = Array.isArray(steps) ? steps.filter(s => s && typeof s === 'object') : [];
+  const directions = document.getElementById('routeDirections');
+  if (directions) directions.hidden = validSteps.length === 0;
+  const count = document.getElementById('routeStepCount');
+  if (count) count.textContent = `${validSteps.length} Schritte`;
   if (validSteps.length === 0) { el.style.display = 'none'; return; }
   const list = document.createElement('div');
   list.className = 'maneuver-list';
@@ -2201,11 +2270,26 @@ document.getElementById('clear').addEventListener('click', () => {
   if (actionsEl) actionsEl.style.display = 'none';
   if (maneuversEl) maneuversEl.style.display = 'none';
   setMapsLinks('', '');
+  setRouteError('');
+  setRouteEditing(true);
+  updateTerritoryRouteTransitions(null);
   setMapsPanelCollapsed(false);
   showToast('Zurückgesetzt', 'info', 1500);
 });
 
 // Route control buttons
+document.getElementById('editRoute')?.addEventListener('click', () => {
+  cancelRouteComputation();
+  setRouteEditing(true);
+  document.getElementById('mapsPanelContent').scrollTop = 0;
+  document.getElementById('from')?.focus();
+});
+document.getElementById('returnToRoute')?.addEventListener('click', () => {
+  cancelRouteComputation();
+  setRouteError('');
+  setRouteEditing(false);
+  document.getElementById('mapsPanelContent').scrollTop = 0;
+});
 document.getElementById('zoomToRoute')?.addEventListener('click', () => {
   if (polyline) {
     setMapsPanelCollapsed(true);
@@ -2232,6 +2316,8 @@ document.getElementById('clearRoute')?.addEventListener('click', () => {
   const maneuversEl = document.getElementById('maneuvers');
   if (maneuversEl) maneuversEl.style.display = 'none';
   updateTerritoryRouteTransitions(null);
+  setRouteError('');
+  setRouteEditing(true);
   setMapsPanelCollapsed(false);
   showToast('Route gelöscht', 'info', 1500);
 });
@@ -2477,6 +2563,18 @@ restoreCustomMarkers();
 makeSuggest('from-suggest','from'); 
 makeSuggest('to-suggest','to');
 
+function handleRouteEntryKeyDown(event) {
+  if (event.key !== 'Enter' || event.defaultPrevented || event.isComposing || event.keyCode === 229
+    || event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;
+  event.preventDefault();
+  compute();
+}
+
+// Let a selected suggestion consume Enter before submitting the route.
+for (const id of ['from', 'to']) {
+  document.getElementById(id)?.addEventListener('keydown', handleRouteEntryKeyDown);
+}
+
 function addWaypoint() {
   const id = 'WP' + (waypointSeq++);
   const container = document.getElementById('waypointsContainer');
@@ -2536,13 +2634,7 @@ function addWaypoint() {
   
   input.addEventListener('change', debouncedCompute);
   
-  // Also trigger on Enter key for immediate compute
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.defaultPrevented) {
-      e.preventDefault();
-      compute();
-    }
-  });
+  input.addEventListener('keydown', handleRouteEntryKeyDown);
 
   input.focus();
 }
@@ -2561,10 +2653,11 @@ function addWaypointWithValue(val) {
 function removeWaypoint(id, recompute = true) {
   const idx = waypoints.findIndex(w => w.id === id);
   if (idx >= 0) {
+    const hadLocation = waypoints[idx].input.value.trim() !== '';
     waypoints[idx].suggestHandle?.destroy();
     waypoints[idx].wrapper.remove();
     waypoints.splice(idx, 1);
-    if (recompute) compute();
+    if (recompute && hadLocation) compute();
   }
 }
 
@@ -2638,7 +2731,15 @@ function makeSuggest(containerId, inputOrId) {
         if (mySeq !== seq) return;
         container.innerHTML = '';
         selectedIndex = -1;
-        if (!Array.isArray(data) || data.length === 0) { hide(); return; }
+        if (!Array.isArray(data) || data.length === 0) {
+          const message = document.createElement('div');
+          message.className = 'item suggest-empty';
+          message.setAttribute('role', 'status');
+          message.textContent = 'Keine Vorschläge. Adresse oder Ort genauer eingeben.';
+          container.appendChild(message);
+          show();
+          return;
+        }
 
         data.slice(0, 6).forEach((item, i) => {
           const el = document.createElement('div');
@@ -2700,8 +2801,13 @@ function makeSuggest(containerId, inputOrId) {
 
   // keyboard navigation for suggestions
   function onKeyDown(ev) {
-    if (ev.key === 'Escape') { hide(); return; }
-    const items = Array.from(container.querySelectorAll('.item:not(.suggest-loading)'));
+    if (ev.isComposing || ev.keyCode === 229) return;
+    if (ev.key === 'Escape') {
+      if (container.style.display === 'block') ev.preventDefault();
+      hide();
+      return;
+    }
+    const items = Array.from(container.querySelectorAll('[role="option"]'));
     if (!items.length) return;
     if (ev.key === 'ArrowDown') {
       ev.preventDefault();
@@ -2720,7 +2826,7 @@ function makeSuggest(containerId, inputOrId) {
   input.addEventListener('keydown', onKeyDown);
 
   function updateActive() {
-    const items = Array.from(container.querySelectorAll('.item:not(.suggest-loading)'));
+    const items = Array.from(container.querySelectorAll('[role="option"]'));
     items.forEach((it, idx) => {
       const active = idx === selectedIndex;
       it.classList.toggle('active', active);
@@ -3139,6 +3245,8 @@ document.getElementById('objective').addEventListener('change', compute);
 // sync with it in both directions rather than duplicating routing logic.
 function syncRouteObjectiveToggle() {
   const current = document.getElementById('objective')?.value || 'distance';
+  const summary = document.getElementById('routeObjectiveSummary');
+  if (summary) summary.textContent = { duration: 'Schnellste', distance: 'Kürzeste', economy: 'Ausgewogen' }[current] || current;
   document.querySelectorAll('.route-objective-btn').forEach((btn) => {
     btn.classList.toggle('is-active', btn.dataset.objective === current);
     btn.setAttribute('aria-pressed', String(btn.dataset.objective === current));
@@ -5611,6 +5719,10 @@ function showSpinner(on) {
 }
 
 function setComputeDisabled(dis) {
+  const footer = document.getElementById('routeFooter');
+  if (footer) footer.dataset.busy = String(dis);
+  const label = document.getElementById('goLabel');
+  if (label) label.textContent = dis ? 'Wird berechnet…' : currentRouteMeta ? 'Neu berechnen' : 'Route berechnen';
   const btn = document.getElementById('go');
   if (!btn) return;
   if (dis) { btn.setAttribute('disabled','disabled'); btn.setAttribute('aria-disabled','true'); }
@@ -5628,15 +5740,11 @@ function highlight(text, q) {
 
 // keyboard shortcuts
 document.addEventListener('keydown', (ev) => {
+  if (ev.defaultPrevented || ev.isComposing || ev.keyCode === 229) return;
   // Cmd/Ctrl + Enter to compute
   if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter') {
     ev.preventDefault(); 
     compute();
-  }
-  // Cmd/Ctrl + K to focus start input
-  if ((ev.ctrlKey || ev.metaKey) && ev.key === 'k') {
-    ev.preventDefault();
-    document.getElementById('from')?.focus();
   }
   // Escape to blur active input
   if (ev.key === 'Escape') {
@@ -5713,6 +5821,7 @@ const aiOutput = AIOutput.create(map, prompt => {
     cancelRouteComputation();
     applySearchResultToInput(document.getElementById('to'), place);
     setMapsView('route');
+    setRouteEditing(true);
     document.getElementById('from')?.focus();
     showToast('Ziel übernommen. Start wählen und Route berechnen.', 'info', 2500);
   },
@@ -6446,6 +6555,7 @@ function renderPlaceResults(results) {
     route.addEventListener('click', () => {
       applySearchResultToInput(document.getElementById('to'), place);
       setMapsView('route');
+      setRouteEditing(true);
       document.getElementById('from')?.focus();
     });
     const ask = document.createElement('button');
@@ -6610,6 +6720,7 @@ document.getElementById('mapsPanelExpand')?.addEventListener('click', () => {
   button.setAttribute('aria-label', expanded ? 'Ansicht verkleinern' : 'Ansicht vergrößern');
 });
 document.addEventListener('keydown', event => {
+  if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
     if (!document.getElementById('mapWelcomeOverlay')?.hidden) return;
     event.preventDefault();
@@ -6662,6 +6773,7 @@ window.addEventListener('osmmini:route-object', event => {
   if (!Number.isFinite(point.lat)||!Number.isFinite(point.lon)) return;
   applySearchResultToInput(document.getElementById('to'),point);
   setMapsView('route');
+  setRouteEditing(true);
   document.getElementById('from')?.focus();
 });
 
@@ -6675,6 +6787,7 @@ window.mapContext = MapContext.create(map, [
   } },
   ...[['from', 'Route von hier'], ['to', 'Route hierher']].map(([id, label]) => ({label, run(point) {
     setMapsView('route');
+    setRouteEditing(true);
     const input = document.getElementById(id);
     setResolvedRoutePoint(input, {lat: point.lat, lon: point.lng});
     input.dispatchEvent(new Event('routepointchange'));

@@ -94,86 +94,91 @@
         <!-- ── Route card ── -->
         <section class="card route-card" data-view-only="route">
 
-          <!-- The result leads with information needed on the journey. -->
-          <div id="routeDetails" class="route-details" style="display:none" aria-label="Routenergebnis">
-            <div class="route-overview">
-              <div><span class="route-result-label">Fahrzeit</span><strong id="detailDuration">—</strong></div>
-              <span class="route-result-icon" aria-hidden="true"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-route"/></svg></span>
-            </div>
-            <div class="route-result-meta"><span id="detailDistance">—</span><span aria-hidden="true">·</span><span>Ankunft <strong id="detailETA">—</strong></span></div>
-            <div id="territoryTransitions" class="territory-transitions" style="display:none"></div>
-          </div>
-          <div class="route-actions" id="routeActions" style="display:none">
-            <button id="zoomToRoute" class="btn btn-action route-show-map" type="button">
-              <svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-map"/></svg>Auf Karte ansehen
-            </button>
-            <details class="route-more-actions">
-              <summary>Weitere Aktionen<svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-chevron"/></svg></summary>
-              <div class="route-action-grid">
-                <button id="exportRouteGPX" class="btn btn-action" type="button" title="Route als GPX exportieren (Navi, GPS-Apps)">GPX exportieren</button>
-                <button id="exportRoute" class="btn btn-action" type="button" title="Route als GeoJSON exportieren (GIS)">GeoJSON exportieren</button>
-                <a id="gmaps" class="link-ext" href="#" target="_blank" rel="noopener" style="display:none">Google Maps ↗</a>
-                <a id="amaps" class="link-ext" href="#" target="_blank" rel="noopener" style="display:none">Apple Maps ↗</a>
+          <div id="routeResult" hidden>
+            <div id="routeDetails" class="route-details" style="display:none" aria-label="Routenergebnis">
+              <div class="route-overview">
+                <div><span class="route-result-label">Fahrzeit</span><strong id="detailDuration">—</strong></div>
+                <span class="route-result-icon" aria-hidden="true"><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-route"/></svg></span>
               </div>
-              <div class="route-diagnostics"><span>Routing: <span id="detailEngine">—</span></span><span id="detailComputePill" title="Serverseitige Berechnungszeit der Route"><span id="detailComputeMs">—</span></span></div>
-              <button id="clearRoute" class="btn btn-action route-delete" type="button">Route entfernen</button>
+              <div class="route-result-meta"><span id="detailDistance">—</span><span aria-hidden="true">·</span><span>Ankunft <strong id="detailETA">—</strong></span></div>
+              <p id="routeEndpoints" class="route-endpoints"></p>
+              <div id="territoryTransitions" class="territory-transitions" style="display:none"></div>
+            </div>
+            <div class="route-actions" id="routeActions" style="display:none">
+              <details class="route-more-actions">
+                <summary>Weitere Aktionen<svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-chevron"/></svg></summary>
+                <div class="route-action-grid">
+                  <button id="exportRouteGPX" class="btn btn-action" type="button" title="Route als GPX exportieren (Navi, GPS-Apps)">GPX exportieren</button>
+                  <button id="exportRoute" class="btn btn-action" type="button" title="Route als GeoJSON exportieren (GIS)">GeoJSON exportieren</button>
+                  <a id="gmaps" class="link-ext" href="#" target="_blank" rel="noopener" style="display:none">Google Maps ↗</a>
+                  <a id="amaps" class="link-ext" href="#" target="_blank" rel="noopener" style="display:none">Apple Maps ↗</a>
+                </div>
+                <div class="route-diagnostics"><span>Routing: <span id="detailEngine">—</span></span><span id="detailComputePill" title="Serverseitige Berechnungszeit der Route"><span id="detailComputeMs">—</span></span></div>
+                <button id="clearRoute" class="btn btn-action route-delete" type="button">Route entfernen</button>
+              </details>
+            </div>
+
+            <details id="routeDirections" class="route-directions" hidden>
+              <summary><span>Wegbeschreibung</span><span id="routeStepCount" class="route-step-count"></span><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-chevron"/></svg></summary>
+              <div id="maneuvers" class="maneuvers" style="display:none"></div>
             </details>
           </div>
 
-          <div class="route-inputs">
-            <!-- From -->
-            <div class="route-input-row" id="from-group">
-              <div class="route-dot route-dot-start"></div>
-              <div class="route-input-wrap">
-                <label for="from" class="route-field-label">Start</label>
-                <div id="from-container"></div>
-                <div id="from-suggest" class="suggest"></div>
+          <div id="routeEditor">
+            <button id="returnToRoute" class="route-return" type="button" hidden><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-arrow"/></svg>Zur berechneten Route</button>
+            <div id="routeError" class="route-error" role="alert" tabindex="-1" hidden></div>
+            <div class="route-inputs">
+              <!-- From -->
+              <div class="route-input-row" id="from-group">
+                <div class="route-dot route-dot-start"></div>
+                <div class="route-input-wrap">
+                  <label for="from" class="route-field-label">Start</label>
+                  <div id="from-container"></div>
+                  <div id="from-suggest" class="suggest"></div>
+                </div>
+              </div>
+              <p id="routeStartHint" class="route-start-hint">Ohne Startadresse: aktuellen Standort verwenden.</p>
+
+              <!-- Waypoints -->
+              <div id="waypointsContainer" class="waypoints"></div>
+
+              <!-- To -->
+              <div class="route-input-row" id="to-group">
+                <div class="route-dot route-dot-end"></div>
+                <div class="route-input-wrap">
+                  <label for="to" class="route-field-label">Ziel</label>
+                  <div id="to-container"></div>
+                  <div id="to-suggest" class="suggest"></div>
+                </div>
               </div>
             </div>
-            <p id="routeStartHint" class="route-start-hint">Ohne Startadresse: aktuellen Standort verwenden.</p>
 
-            <!-- Waypoints -->
-            <div id="waypointsContainer" class="waypoints"></div>
+            <div class="route-edit-actions">
+              <button id="addWaypoint" class="btn-add-wp">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                Zwischenstopp
+              </button>
+              <button id="swapFromTo" class="btn-swap" title="Start und Ziel tauschen" aria-label="Start und Ziel tauschen">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/><polyline points="5 12 12 5 19 12" style="transform:rotate(180deg);transform-origin:50% 50%"/></svg>
+              </button>
+            </div>
 
-            <!-- To -->
-            <div class="route-input-row" id="to-group">
-              <div class="route-dot route-dot-end"></div>
-              <div class="route-input-wrap">
-                <label for="to" class="route-field-label">Ziel</label>
-                <div id="to-container"></div>
-                <div id="to-suggest" class="suggest"></div>
+            <details class="route-options">
+              <summary>Routenoptionen<span id="routeObjectiveSummary">Schnellste</span></summary>
+              <!-- Mirrors the objective select in Einstellungen > Routing. -->
+              <div id="routeObjectiveToggle" class="route-objective-toggle" role="group" aria-label="Routenziel">
+                <button type="button" class="route-objective-btn" data-objective="duration">Schnellste</button>
+                <button type="button" class="route-objective-btn" data-objective="distance">Kürzeste</button>
+                <button type="button" class="route-objective-btn" data-objective="economy">Ausgewogen</button>
               </div>
-            </div>
+            </details>
+
+            <!-- Legacy distance output; the visible summary is in routeDetails. -->
+            <div id="distance" style="display:none"></div>
+
+            <!-- Stop list -->
+            <div id="stopList" class="stop-list"></div>
           </div>
-
-          <div class="route-edit-actions">
-            <button id="addWaypoint" class="btn-add-wp">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-              Zwischenstopp
-            </button>
-            <button id="swapFromTo" class="btn-swap" title="Start und Ziel tauschen" aria-label="Start und Ziel tauschen">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/><polyline points="5 12 12 5 19 12" style="transform:rotate(180deg);transform-origin:50% 50%"/></svg>
-            </button>
-          </div>
-
-          <details class="route-options">
-            <summary>Routenoptionen</summary>
-            <!-- Mirrors the objective select in Einstellungen > Routing. -->
-            <div id="routeObjectiveToggle" class="route-objective-toggle" role="group" aria-label="Routenziel">
-              <button type="button" class="route-objective-btn" data-objective="duration">Schnellste</button>
-              <button type="button" class="route-objective-btn" data-objective="distance">Kürzeste</button>
-              <button type="button" class="route-objective-btn" data-objective="economy">Ausgewogen</button>
-            </div>
-          </details>
-
-          <!-- Legacy distance output; the visible summary is in routeDetails. -->
-          <div id="distance" style="display:none"></div>
-
-          <!-- Maneuvers -->
-          <div id="maneuvers" class="maneuvers" style="display:none"></div>
-
-          <!-- Stop list -->
-          <div id="stopList" class="stop-list"></div>
 
         </section>
 
@@ -1084,16 +1089,18 @@
         </div>
 
         </div>
-        <section id="routeFooter" class="route-footer" data-view-only="route" aria-label="Route berechnen">
+        <section id="routeFooter" class="route-footer" data-view-only="route" data-mode="editing" aria-label="Routenaktionen">
           <!-- Compute row -->
           <div class="compute-row">
             <button id="go" class="btn btn-primary">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-              Route berechnen
+              <span id="goLabel">Route berechnen</span>
             </button>
             <button id="clear" class="btn btn-ghost" title="Zurücksetzen" aria-label="Route zurücksetzen">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.5"/></svg>
             </button>
+            <button id="zoomToRoute" class="btn btn-primary" type="button" hidden><svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#icon-map"/></svg>Auf Karte ansehen</button>
+            <button id="editRoute" class="btn route-edit-button" type="button" aria-label="Route ändern" hidden>Ändern</button>
           </div>
 
           <!-- Status bar -->
