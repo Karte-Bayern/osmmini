@@ -98,7 +98,11 @@ struct DemoPlaceSearch: View {
     #endif
     .onAppear {
       model.resumeSearch(for: presentationID)
-      focused = !trimmedQuery.isEmpty || (model.places.saved.isEmpty && model.places.recent.isEmpty)
+      #if os(macOS)
+        focused = true
+      #else
+        focused = !trimmedQuery.isEmpty || (model.places.saved.isEmpty && model.places.recent.isEmpty)
+      #endif
     }
     .onDisappear { model.suspendSearch(for: presentationID) }
     .alert(

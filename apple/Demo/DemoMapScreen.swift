@@ -11,8 +11,7 @@ struct DemoMapScreen: View {
   let showRegions: () -> Void
   @Environment(\.openURL) private var openURL
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-  @State private var searching = false
-  @State private var searchTarget: DemoModel.RoutePoint?
+  @State private var searchRequest: SearchRequest?
   @State private var planning = false
   @State private var directions = false
   @State private var locationRequest: LocationRequest?
@@ -28,6 +27,11 @@ struct DemoMapScreen: View {
   private struct NearbySelection: Identifiable {
     let id = UUID()
     let places: [MapSelection]
+  }
+
+  private struct SearchRequest: Identifiable {
+    let id = UUID()
+    let target: DemoModel.RoutePoint?
   }
 
   private var inspectedPlaceKey: String? {
@@ -124,17 +128,17 @@ struct DemoMapScreen: View {
         search: { openSearch(for: nil) }, plan: togglePlanning, showRegions: showRegions,
         isEnabled: model.engine != nil)
     )
-    .sheet(isPresented: $searching) {
-      DemoPlaceSearch(model: model, target: searchTarget, showRegions: showRegions) { place in
+    .sheet(item: $searchRequest) { request in
+      DemoPlaceSearch(model: model, target: request.target, showRegions: showRegions) { place in
         guard !model.busy, model.contains(place.coordinate) else { return }
         cancelLocationSelection()
-        if let searchTarget {
-          model.usePlace(place, as: searchTarget, minimumZoom: 14)
+        if let target = request.target {
+          model.usePlace(place, as: target, minimumZoom: 14)
           planning = true
         } else {
           model.inspect(place, minimumZoom: 14)
         }
-        searching = false
+        searchRequest = nil
       }
     }
     .sheet(isPresented: $directions) { directionsSheet }
@@ -145,8 +149,7 @@ struct DemoMapScreen: View {
     .onChange(of: locationRequest?.id) { _, _ in updateLocationSelection() }
     .onChange(of: model.activeDirectory) { _, _ in
       planning = false
-      searching = false
-      searchTarget = nil
+      searchRequest = nil
       directions = false
       cancelLocationSelection()
       mapTarget = nil
@@ -179,7 +182,6 @@ struct DemoMapScreen: View {
 
   private var showsExpandedInspector: Bool {
     mapTarget != nil || model.inspectedPlace != nil || (planning && routeDetailsExpanded) || model.busy
-      || location.state != .idle
   }
 
   private func togglePlanning() {
@@ -201,7 +203,7 @@ struct DemoMapScreen: View {
       } else if let place = model.inspectedPlace {
         placeCard(place, compact: compactPlaces).padding()
       } else if planning {
-        routeCard.padding()
+        routeCard.padding(.horizontal).padding(.vertical, routeDetailsExpanded ? 16 : 8)
       } else if model.busy {
         ActivityProgress(model: model).padding()
       } else if model.start != nil || model.destination != nil {
@@ -244,8 +246,7 @@ struct DemoMapScreen: View {
     cancelLocationSelection()
     mapTarget = nil
     if let point { model.chooseRoutePoint(point) }
-    searchTarget = point
-    searching = true
+    searchRequest = SearchRequest(target: point)
   }
 
   private func selectMapPoint(_ selection: MapSelection) {
@@ -898,10 +899,11 @@ struct DemoMapScreen: View {
       .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
       .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
       .contentShape(RoundedRectangle(cornerRadius: 10))
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel("\(point == .start ? "Start" : "Ziel"): \(name ?? "Noch nicht gewählt")")
     }
     .menuStyle(.button).menuIndicator(.hidden)
     .buttonStyle(.plain).frame(maxWidth: .infinity).disabled(model.busy)
-    .accessibilityElement(children: .combine)
     .accessibilityLabel("\(point == .start ? "Start" : "Ziel"): \(name ?? "Noch nicht gewählt")")
     .accessibilityHint("Suche, Kartenpunkt oder eigenen Standort auswählen")
   }
