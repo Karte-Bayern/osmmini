@@ -5,6 +5,43 @@ import Testing
 @testable import OSMminiDemoCLI
 
 struct DemoPlaceDetailsTests {
+  @Test func barePOICategoryLabelsHaveReadableNames() throws {
+    let names = [
+      "bicycle_parking": "Fahrradstellplatz", "artwork": "Kunstwerk",
+      "recycling": "Recyclingstelle", "telephone": "Öffentliches Telefon",
+    ]
+    for (category, expected) in names {
+      let coordinate = Coordinate(lat: 48.5, lon: 12.5)
+      let feature = MapFeature(
+        name: category, kind: "node", category: category, sourceIdentity: "node/1")
+      let selection = DemoPlace(MapSelection(coordinate: coordinate, feature: feature))
+      #expect(selection.name == expected)
+      #expect(selection.coordinate == coordinate)
+      #expect(selection.sourceIdentity == "node/1")
+      let result = try JSONDecoder().decode(
+        SearchResult.self,
+        from: Data(
+          """
+          {"id":1,"kind":"way","label":"\(category)","category":"\(category)",
+           "coordinate":{"lat":48.5,"lon":12.5}}
+          """.utf8))
+      #expect(DemoPlace(result).name == expected)
+    }
+  }
+
+  @Test func namedPlacesAndPersonalNamesAreNotRewrittenAsCategories() {
+    let coordinate = Coordinate(lat: 48.5, lon: 12.5)
+    for name in ["Schwalbe", "artwork am Bahnhof", "artwork · Passau"] {
+      let feature = MapFeature(name: name, kind: "node", category: "artwork")
+      #expect(DemoPlace(MapSelection(coordinate: coordinate, feature: feature)).name == name)
+    }
+    let street = MapFeature(name: "artwork", kind: "street", category: "artwork")
+    #expect(DemoPlace(MapSelection(coordinate: coordinate, feature: street)).name == "artwork")
+    let saved = DemoPlace(coordinate: coordinate, name: "artwork", category: "artwork", kind: "node")
+    #expect(saved.name == "artwork")
+    #expect(DemoPlace(MapSelection(coordinate: coordinate)).name == "Ausgewählter Kartenpunkt")
+  }
+
   @Test func openingHoursSummaryDoesNotInferALiveOpeningStatus() {
     #expect(DemoPlaceText.hoursSummary("24/7") == "Rund um die Uhr · laut Offline-Karte")
     #expect(DemoPlaceText.hoursSummary("off") == "Als geschlossen eingetragen")

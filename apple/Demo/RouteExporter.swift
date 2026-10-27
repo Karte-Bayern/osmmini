@@ -13,6 +13,11 @@ enum FileDialogError {
 
 struct RouteDocument: FileDocument {
   static var readableContentTypes: [UTType] { [.json, .xml, .data] }
+  // fileExporter requires the exact selected type in this list. A conforming
+  // parent such as .xml is insufficient; otherwise it falls back to JSON.
+  static var writableContentTypes: [UTType] {
+    [RouteExportFormat.geoJSON.contentType, RouteExportFormat.gpx.contentType]
+  }
   var data: Data
   init(data: Data) { self.data = data }
   init(configuration: ReadConfiguration) throws {

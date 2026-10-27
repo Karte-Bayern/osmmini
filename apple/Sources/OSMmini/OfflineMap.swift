@@ -198,8 +198,11 @@ public struct OfflineMap: View {
           let point = screen(selection, size: canvasSize)
           let pin = Path(
             ellipseIn: CGRect(x: point.x - 15, y: point.y - 15, width: 30, height: 30))
-          context.stroke(pin, with: .color(.white), lineWidth: 6)
-          context.stroke(pin, with: .color(.orange), lineWidth: 3)
+          context.fill(pin, with: .color(Color(red: 0.75, green: 0.29, blue: 0.09)))
+          context.stroke(pin, with: .color(.white), lineWidth: 3)
+          context.draw(
+            Text(Image(systemName: "mappin"))
+              .font(.system(size: 17, weight: .semibold)).foregroundStyle(.white), at: point)
         }
         for marker in displayedMarkers {
           let p = screen(marker.coordinate, size: canvasSize)
@@ -548,6 +551,7 @@ public struct OfflineMap: View {
   }
 
   private func drawPOIs(_ markers: [OfflineMapPOILayout.Marker], context: inout GraphicsContext) {
+    let groupInk = Color(red: 0.24, green: 0.27, blue: 0.42)
     for marker in markers {
       let radius = marker.radius(at: zoom)
       let category = POICategory(marker.feature.category)
@@ -555,18 +559,24 @@ public struct OfflineMap: View {
         ellipseIn: CGRect(
           x: marker.point.x - radius, y: marker.point.y - radius,
           width: radius * 2, height: radius * 2))
-      context.fill(dot, with: .color(marker.isGroup ? .indigo : category.tint))
-      context.stroke(dot, with: .color(.white), lineWidth: 2)
       if marker.isGroup {
+        // A pale badge keeps the map legible; the dark count retains contrast
+        // over every underlying map color without competing with selection.
+        context.fill(dot, with: .color(.white.opacity(0.9)))
+        context.stroke(dot, with: .color(groupInk.opacity(0.45)), lineWidth: 1)
         let count = marker.members.count > 99 ? "99+" : String(marker.members.count)
         context.draw(
-          Text(count).font(.system(size: 11, weight: .bold)).foregroundStyle(.white),
+          Text(count).font(.system(size: 10, weight: .semibold)).foregroundStyle(groupInk),
           at: marker.point)
-      } else if zoom >= 16 {
-        let symbol = context.resolve(
-          Text(Image(systemName: POICategory.symbolName(for: marker.feature.category)))
-            .font(.system(size: 10, weight: .semibold)).foregroundStyle(.white))
-        context.draw(symbol, at: marker.point)
+      } else {
+        context.fill(dot, with: .color(category.tint))
+        context.stroke(dot, with: .color(.white), lineWidth: 2)
+        if zoom >= 16 {
+          let symbol = context.resolve(
+            Text(Image(systemName: POICategory.symbolName(for: marker.feature.category)))
+              .font(.system(size: 10, weight: .semibold)).foregroundStyle(.white))
+          context.draw(symbol, at: marker.point)
+        }
       }
     }
   }

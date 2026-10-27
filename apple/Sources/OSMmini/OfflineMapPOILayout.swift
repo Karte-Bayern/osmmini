@@ -13,7 +13,7 @@ enum OfflineMapPOILayout {
     let point: CGPoint
     var members: [Member]
     var isGroup: Bool { members.count > 1 }
-    func radius(at zoom: Int) -> CGFloat { isGroup ? 14 : OfflineMapPOILayout.radius(at: zoom) }
+    func radius(at zoom: Int) -> CGFloat { isGroup ? 11 : OfflineMapPOILayout.radius(at: zoom) }
   }
 
   struct Label {
@@ -95,8 +95,8 @@ enum OfflineMapPOILayout {
       if $0.point.x != $1.point.x { return $0.point.x < $1.point.x }
       return $0.point.y < $1.point.y
     }
-    // Group badges need 28 points even at overview zoom. Reserve enough room
-    // for them before grouping, so adding members never overlaps a neighbor.
+    // Keep generous spacing around the compact group badges, so adding members
+    // never overlaps a neighbor or increases density at overview zoom.
     let spacing: CGFloat = 34
     var cells: [Cell: [Int]] = [:]
     var result: [Marker] = []

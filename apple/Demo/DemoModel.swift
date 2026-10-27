@@ -26,15 +26,34 @@ struct DemoPlace: Codable, Equatable, Sendable {
 
   init(_ result: SearchResult) {
     self.init(
-      coordinate: result.coordinate, name: result.label, category: result.category,
+      coordinate: result.coordinate,
+      name: Self.sourceName(result.label, category: result.category, kind: result.kind),
+      category: result.category,
       kind: result.kind, sourceIdentity: result.identity, details: result.details)
   }
 
   init(_ selection: MapSelection) {
     self.init(
-      coordinate: selection.coordinate, name: selection.feature?.name ?? "Ausgewählter Kartenpunkt",
+      coordinate: selection.coordinate,
+      name: selection.feature.map {
+        Self.sourceName($0.name, category: $0.category, kind: $0.kind)
+      } ?? "Ausgewählter Kartenpunkt",
       category: selection.feature?.category, kind: selection.feature?.kind,
       sourceIdentity: selection.feature?.sourceIdentity, details: selection.feature?.details)
+  }
+
+  private static func sourceName(_ name: String, category: String?, kind: String) -> String {
+    // Existing catalogs use the category key when both name and address are
+    // absent, without retaining that provenance. Only translate these exact
+    // technical fallbacks; personal names use the explicit initializer above.
+    guard kind == "node" || kind == "way", name == category else { return name }
+    switch category {
+    case "bicycle_parking": return "Fahrradstellplatz"
+    case "artwork": return "Kunstwerk"
+    case "recycling": return "Recyclingstelle"
+    case "telephone": return "Öffentliches Telefon"
+    default: return name
+    }
   }
 }
 

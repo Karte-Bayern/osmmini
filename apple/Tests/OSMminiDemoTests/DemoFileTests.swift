@@ -55,6 +55,14 @@ import UniformTypeIdentifiers
     }
   }
 
+  @Test func fileDialogAcceptsEachSelectedExportFormatWithoutFallback() {
+    for format in [RouteExportFormat.geoJSON, .gpx] {
+      // fileExporter tests exact membership, not conformance to .json/.xml.
+      // Missing types silently select the first writable type instead.
+      #expect(RouteDocument.writableContentTypes.contains(format.contentType))
+    }
+  }
+
   @Test func workerExportsPreserveTheEncodedRoute() async throws {
     let route = try route()
     #expect(try await RouteExportFormat.geoJSON.preparedData(for: route) == route.geoJSON())

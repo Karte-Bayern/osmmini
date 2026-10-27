@@ -7,6 +7,7 @@ struct DemoPlaceSearch: View {
   let showRegions: () -> Void
   let selected: (DemoPlace) -> Void
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   @FocusState private var focused: Bool
   @State private var presentationID = UUID()
   @State private var renaming: DemoPlaceLibrary.Entry?
@@ -43,6 +44,7 @@ struct DemoPlaceSearch: View {
           HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
             TextField("Ort, Straße, Adresse oder POI", text: $model.query)
+              .textFieldStyle(.plain)
               .autocorrectionDisabled().submitLabel(.search)
               .focused($focused).onSubmit { focused = false }
               .accessibilityLabel("Orte und eigene gespeicherte Orte suchen")
@@ -56,7 +58,7 @@ struct DemoPlaceSearch: View {
               }.buttonStyle(.plain).accessibilityLabel("Suchtext löschen")
             }
           }
-          .padding(.leading, 12).frame(minHeight: 48)
+          .padding(.horizontal, 12).frame(minHeight: 48)
           .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
           Label(
             model.engine?.manifest.name ?? "Keine Offline-Karte geöffnet",
@@ -152,7 +154,11 @@ struct DemoPlaceSearch: View {
         Section { searchStatus }
       } else if trimmedQuery.isEmpty {
         Section {
-          LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), alignment: .leading)], spacing: 8) {
+          LazyVGrid(
+            columns: Array(
+              repeating: GridItem(.flexible(), alignment: .leading),
+              count: dynamicTypeSize.isAccessibilitySize ? 1 : 2), spacing: 8
+          ) {
             suggestedSearch("Café", image: "cup.and.saucer")
             suggestedSearch("Supermarkt", image: "cart")
             suggestedSearch("Apotheke", image: "cross.case")
@@ -164,6 +170,8 @@ struct DemoPlaceSearch: View {
           Text(
             "Gespeicherte Orte und die letzten 20 Auswahlen bleiben lokal erhalten. Einen Ort auf der Karte öffnen und mit dem Stern speichern."
           )
+          .font(.caption).fontWeight(.regular).foregroundStyle(.secondary)
+          .lineLimit(nil).fixedSize(horizontal: false, vertical: true)
         }
       } else if !model.searching, model.searchError == nil, !model.results.isEmpty {
         searchResults
@@ -196,6 +204,8 @@ struct DemoPlaceSearch: View {
         Text(
           "Einige deiner Orte liegen außerhalb der geöffneten Region. Öffne dafür eine passende Offline-Karte."
         )
+        .font(.caption).fontWeight(.regular).foregroundStyle(.secondary)
+        .lineLimit(nil).fixedSize(horizontal: false, vertical: true)
       }
     }
   }
@@ -316,8 +326,9 @@ struct DemoPlaceSearch: View {
                 .font(.caption).foregroundStyle(.secondary)
             }.frame(maxWidth: .infinity, alignment: .leading)
             Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
-          }.padding(.vertical, 4).frame(minHeight: 44)
+          }.padding(.vertical, 4).frame(minHeight: 44).contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
         .disabled(model.busy)
         .accessibilityHint(selectionHint)
       }
@@ -330,6 +341,8 @@ struct DemoPlaceSearch: View {
         Text(
           "Die Suche zeigt bis zu 20 Treffer. Ergänze zum Beispiel einen Orts- oder Straßennamen, um die Auswahl einzugrenzen."
         )
+        .font(.caption).fontWeight(.regular).foregroundStyle(.secondary)
+        .lineLimit(nil).fixedSize(horizontal: false, vertical: true)
       }
     }
   }

@@ -95,7 +95,7 @@ struct DemoView: View {
 
   var body: some View {
     NavigationSplitView(columnVisibility: $columns, preferredCompactColumn: $preferredColumn) {
-      DemoSidebar(model: model, importing: $importing) { preferredColumn = .detail }
+      DemoSidebar(model: model, importing: $importing, showMap: showMap)
         .navigationTitle("OSMmini")
         .navigationSplitViewColumnWidth(min: 280, ideal: 330, max: 440)
     } detail: {
@@ -136,8 +136,9 @@ struct DemoView: View {
       if directory == nil {
         location.stop()
         preferredColumn = .sidebar
+        columns = .all
       } else {
-        preferredColumn = .detail
+        showMap()
       }
     }
     .onChange(of: scenePhase) { _, phase in
@@ -145,6 +146,11 @@ struct DemoView: View {
     }
     .onDisappear { location.stop() }
     .task { await model.start() }
+  }
+
+  private func showMap() {
+    preferredColumn = .detail
+    columns = .detailOnly
   }
 }
 
@@ -513,6 +519,7 @@ private struct CatalogPicker: View {
       if !model.catalogLoaded, !model.catalogLoading, model.catalogError == nil {
         Text("Lade den Katalog, um verfügbare Regionen zu durchsuchen.")
           .font(.callout).foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
       }
       if model.catalogLoaded, model.catalogMatchCount == 0 {
         let query = model.catalogQuery.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -543,6 +550,7 @@ private struct CatalogPicker: View {
           }
           .padding(.vertical, 4).contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
         .accessibilityHint("Download und Offline-Aufbereitung dieser Region vorbereiten.")
         .disabled(model.busy || model.pending != nil)
@@ -603,6 +611,8 @@ private struct CatalogDownloadSheet: View {
           Text(
             "Die Aufbereitung kann mehrere Minuten dauern und benötigt zusätzlichen freien Speicher. Für große Regionen empfiehlt sich die Aufbereitung auf einem Mac."
           )
+          .font(.caption).fontWeight(.regular).foregroundStyle(.secondary)
+          .lineLimit(nil).fixedSize(horizontal: false, vertical: true)
         }
       }
       .safeAreaInset(edge: .bottom, spacing: 0) {

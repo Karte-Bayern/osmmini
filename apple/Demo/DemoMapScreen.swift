@@ -178,7 +178,7 @@ struct DemoMapScreen: View {
   }
 
   private var showsExpandedInspector: Bool {
-    mapTarget != nil || model.inspectedPlace != nil || planning || model.busy
+    mapTarget != nil || model.inspectedPlace != nil || (planning && routeDetailsExpanded) || model.busy
       || location.state != .idle
   }
 
@@ -652,10 +652,12 @@ struct DemoMapScreen: View {
                   .foregroundStyle(POICategory(place.category).tint).frame(width: 24)
                   .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 4) {
-                  Text(place.name).font(.headline).foregroundStyle(.primary)
+                  Text(place.name).foregroundStyle(.primary)
                     .fixedSize(horizontal: false, vertical: true)
-                  Text(DemoPlaceText.category(place.category, kind: place.kind))
-                    .font(.subheadline).foregroundStyle(.secondary)
+                  let category = DemoPlaceText.category(place.category, kind: place.kind)
+                  if category != place.name {
+                    Text(category).font(.subheadline).foregroundStyle(.secondary)
+                  }
                   if let address = DemoPlaceText.detail(place.details?.address) {
                     Text(address).font(.caption).foregroundStyle(.secondary)
                       .fixedSize(horizontal: false, vertical: true)
@@ -664,11 +666,15 @@ struct DemoMapScreen: View {
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
                   .accessibilityHidden(true)
-              }.frame(minHeight: 44)
-            }.accessibilityHint("Diesen Ort auswählen")
+              }.frame(minHeight: 44).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Diesen Ort auswählen")
           }
         } footer: {
           Text("Diese Orte liegen auf der Karte eng beieinander. Wähle den gewünschten Ort aus.")
+            .font(.caption).fontWeight(.regular).foregroundStyle(.secondary)
+            .lineLimit(nil).fixedSize(horizontal: false, vertical: true)
         }
       }
       .overlay {
@@ -737,7 +743,10 @@ struct DemoMapScreen: View {
   }
 
   private var routeCard: some View {
-    VStack(alignment: .leading, spacing: 10) {
+    let layout = routeDetailsExpanded
+      ? AnyLayout(VStackLayout(alignment: .leading, spacing: 10))
+      : AnyLayout(AdaptiveActionLayout())
+    return layout {
       HStack(alignment: .top) {
         Button {
           routeDetailsExpanded.toggle()
@@ -877,14 +886,22 @@ struct DemoMapScreen: View {
     } label: {
       HStack(alignment: .center, spacing: 10) {
         Image(systemName: image).foregroundStyle(point == .start ? Color.green : .red)
+          .accessibilityHidden(true)
         VStack(alignment: .leading, spacing: 2) {
           Text(point == .start ? "Start" : "Ziel").font(.caption).foregroundStyle(.secondary)
           Text(name ?? title).font(.subheadline).foregroundStyle(.primary).lineLimit(3)
         }.frame(maxWidth: .infinity, alignment: .leading)
         Image(systemName: "chevron.down").font(.caption).foregroundStyle(.secondary)
-      }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+          .accessibilityHidden(true)
+      }
+      .padding(.horizontal, 12).padding(.vertical, 8)
+      .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+      .background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
+      .contentShape(RoundedRectangle(cornerRadius: 10))
     }
-    .buttonStyle(.bordered).disabled(model.busy)
+    .menuStyle(.button).menuIndicator(.hidden)
+    .buttonStyle(.plain).frame(maxWidth: .infinity).disabled(model.busy)
+    .accessibilityElement(children: .combine)
     .accessibilityLabel("\(point == .start ? "Start" : "Ziel"): \(name ?? "Noch nicht gewählt")")
     .accessibilityHint("Suche, Kartenpunkt oder eigenen Standort auswählen")
   }
@@ -909,14 +926,17 @@ struct DemoMapScreen: View {
                 HStack(alignment: .top) {
                   Text("\(index + 1)").monospacedDigit().foregroundStyle(.secondary)
                   Text(step.instruction).frame(maxWidth: .infinity, alignment: .leading)
-                }.frame(minHeight: 44)
+                }.frame(minHeight: 44).contentShape(Rectangle())
               }
+              .buttonStyle(.plain)
               .accessibilityHint("Diesen Schritt auf der Karte anzeigen")
             }
           } header: {
             Text("\(route.steps.count) Schritte")
           } footer: {
             Text("Einen Schritt antippen, um ihn auf der Karte zu sehen.")
+              .font(.caption).fontWeight(.regular).foregroundStyle(.secondary)
+              .lineLimit(nil).fixedSize(horizontal: false, vertical: true)
           }
         }
       }
@@ -1163,6 +1183,9 @@ enum DemoPlaceText {
     case "place_of_worship": return "Gotteshaus"
     case "bus_stop": return "Bushaltestelle"
     case "bicycle_parking": return "Fahrradstellplatz"
+    case "artwork": return "Kunstwerk"
+    case "recycling": return "Recyclingstelle"
+    case "telephone": return "Öffentliches Telefon"
     case "picnic_site": return "Picknickplatz"
     case "restaurant": return "Restaurant"
     case "pharmacy": return "Apotheke"
