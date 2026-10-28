@@ -124,6 +124,8 @@ func BuildPBFSpatialIndex(ctx context.Context, pbfPath, indexPath string, progre
 	}
 
 	var bytesRead, blocksRead int64
+	var decoder pbfBlobDecoder
+	defer decoder.close()
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -161,7 +163,7 @@ func BuildPBFSpatialIndex(ctx context.Context, pbfPath, indexPath string, progre
 		bytesRead += int64(len(blob))
 		blocksRead++
 		if typ == "OSMData" {
-			raw, err := parseAndDecompressBlob(blob)
+			raw, err := decoder.decode(blob)
 			if err != nil {
 				return nil, fmt.Errorf("decode PBF blob at byte %d: %w", offset, err)
 			}

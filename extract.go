@@ -44,6 +44,8 @@ func Extract(r io.Reader, opts Options, cb Callbacks) error {
 	wantTaggedRel := cb.TaggedRelation != nil
 
 	br := bufio.NewReaderSize(r, 1<<20)
+	var decoder pbfBlobDecoder
+	defer decoder.close()
 
 	for {
 		if opts.Context != nil {
@@ -51,7 +53,7 @@ func Extract(r io.Reader, opts Options, cb Callbacks) error {
 				return err
 			}
 		}
-		typ, raw, err := readNextBlock(br)
+		typ, raw, err := readNextBlock(br, &decoder)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
@@ -76,7 +78,7 @@ func Extract(r io.Reader, opts Options, cb Callbacks) error {
 
 // ---- Top-Level PBF Block I/O ----
 
-func readNextBlock(r *bufio.Reader) (typ string, raw []byte, err error) {
+func readNextBlock(r *bufio.Reader, decoder *pbfBlobDecoder) (typ string, raw []byte, err error) {
 	var lenBuf [4]byte
 	_, err = io.ReadFull(r, lenBuf[:])
 	if err != nil {
@@ -93,6 +95,9 @@ func readNextBlock(r *bufio.Reader) (typ string, raw []byte, err error) {
 
 	hdrBytes := make([]byte, hdrLen)
 	if _, err := io.ReadFull(r, hdrBytes); err != nil {
+		if err == io.EOF {
+			err = io.ErrUnexpectedEOF
+		}
 		return "", nil, err
 	}
 
@@ -109,10 +114,13 @@ func readNextBlock(r *bufio.Reader) (typ string, raw []byte, err error) {
 
 	blobBytes := make([]byte, dataSize)
 	if _, err := io.ReadFull(r, blobBytes); err != nil {
+		if err == io.EOF {
+			err = io.ErrUnexpectedEOF
+		}
 		return "", nil, err
 	}
 
-	raw, err = parseAndDecompressBlob(blobBytes)
+	raw, err = decoder.decode(blobBytes)
 	if err != nil {
 		return "", nil, err
 	}
@@ -179,7 +187,25 @@ func parseBlobHeader(b []byte) (typ string, datasize int, err error) {
 	return typ, datasize, nil
 }
 
+// Each sequential scan owns its decoder. Reusing zlib's sliding window avoids
+// allocating a new decompressor for every block without retaining it globally.
+type pbfBlobDecoder struct {
+	reader io.ReadCloser
+}
+
+func (d *pbfBlobDecoder) close() {
+	if d.reader != nil {
+		_ = d.reader.Close()
+	}
+}
+
 func parseAndDecompressBlob(b []byte) ([]byte, error) {
+	var decoder pbfBlobDecoder
+	defer decoder.close()
+	return decoder.decode(b)
+}
+
+func (d *pbfBlobDecoder) decode(b []byte) ([]byte, error) {
 	// message Blob {
 	//   optional bytes raw = 1;
 	//   optional int32 raw_size = 2;
@@ -265,13 +291,20 @@ func parseAndDecompressBlob(b []byte) ([]byte, error) {
 	}
 
 	if zlibData != nil {
-		zr, err := zlib.NewReader(bytes.NewReader(zlibData))
-		if err != nil {
+		compressed := bytes.NewReader(zlibData)
+		if d.reader == nil {
+			var err error
+			d.reader, err = zlib.NewReader(compressed)
+			if err != nil {
+				return nil, err
+			}
+		} else if err := d.reader.(zlib.Resetter).Reset(compressed, nil); err != nil {
 			return nil, err
 		}
-		defer zr.Close()
+		zr := d.reader
 
 		var out []byte
+		var err error
 		if rawSize > 0 && rawSize <= 32<<20 {
 			// PBF supplies the decoded size. Leave ReadFrom one read's spare
 			// capacity so checking EOF does not grow an exactly full buffer.

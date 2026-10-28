@@ -1,9 +1,37 @@
 package osmmini
 
 import (
+	"os"
 	"strconv"
 	"testing"
 )
+
+// Set OSMMINI_BENCH_PBF to compare full-file decoding on a real extract.
+func BenchmarkRealPBFCoordinates(b *testing.B) {
+	path := os.Getenv("OSMMINI_BENCH_PBF")
+	if path == "" {
+		b.Skip("set OSMMINI_BENCH_PBF to an OSM PBF extract")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		b.Fatal(err)
+	}
+	var count int
+	cb := Callbacks{Node: func(int64, float64, float64) error { count++; return nil }}
+	b.SetBytes(info.Size())
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		count = 0
+		if err := ExtractFile(path, Options{}, cb); err != nil {
+			b.Fatal(err)
+		}
+		if count == 0 {
+			b.Fatal("no nodes decoded")
+		}
+	}
+	b.ReportMetric(float64(count), "nodes/op")
+}
 
 func BenchmarkDenseNodes(b *testing.B) {
 	const count = 8000
