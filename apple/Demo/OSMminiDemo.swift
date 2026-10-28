@@ -271,6 +271,22 @@ private struct DemoSidebar: View {
           .contentShape(Rectangle()).disabled(model.busy)
         }
       }
+      Section {
+        Text("OSMmini ist ein Projekt von Karte.Bayern.")
+          .font(.callout).foregroundStyle(.secondary)
+        Link(destination: URL(string: "https://karte.bayern/")!) {
+          Label("Karte.Bayern öffnen", systemImage: "safari")
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        Link(destination: URL(string: "https://github.com/Karte-Bayern/osmmini")!) {
+          Label("Quellcode auf GitHub", systemImage: "chevron.left.forwardslash.chevron.right")
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+      } header: {
+        Text("Karte.Bayern")
+      }
       DemoMapLayersSection(model: model, showMap: showMap)
       if !model.installed.isEmpty || model.downloadBytes > 0 || model.storageError != nil {
         sourceStorage

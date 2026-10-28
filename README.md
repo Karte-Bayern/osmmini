@@ -6,6 +6,10 @@ OSMmini provides offline routing, search and maps from an OpenStreetMap PBF
 extract. It includes a Go server with a browser UI and an embeddable
 [Swift SDK for iPhone, iPad and macOS](apple/README.md).
 
+OSMmini is an open-source project by [Karte.Bayern](https://karte.bayern/).
+Use OSMmini with your own map data, or visit Karte.Bayern for a ready-to-use
+map and route planner in the browser.
+
 OSMmini's own source code is licensed under [AGPL-3.0-only](LICENSE). Bundled
 third-party components and map data retain their own licences; see
 [apple/NOTICE](apple/NOTICE) and the notices supplied with those components.

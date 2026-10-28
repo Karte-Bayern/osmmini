@@ -4,6 +4,8 @@ A Swift 6 offline engine and SwiftUI map for iPhone, iPad and native macOS.
 It shares the Go routing core with the server and needs no local HTTP server,
 web view or SQLite dependency.
 
+OSMmini is a project by [Karte.Bayern](https://karte.bayern/).
+
 ## Build and run
 
 Requires macOS, full Xcode and Go 1.26.5+. Deployment targets are iOS/iPadOS 17

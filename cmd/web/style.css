@@ -2164,6 +2164,8 @@ body.map-welcome-open { overflow: hidden; }
 .maps-local-note > span { font-size: 26px; color: var(--primary); }
 .maps-local-note strong { font-size: 12px; font-weight: 600; }
 .maps-local-note p { margin: 5px 0 0; font-size: 11px; color: var(--text-2); line-height: 1.6; }
+.maps-project-note { margin: 12px 2px 0; color: var(--text-2); font-size: 12px; line-height: 1.5; }
+.maps-project-note a { display: inline-block; padding: 10px 0; color: var(--primary); }
 .maps-results-heading { display: flex; justify-content: space-between; align-items: center; padding: 0 14px; }
 .maps-results-heading h3 { font-size: 14px; font-weight: 600; }
 .maps-results-heading button { border: 0; background: transparent; color: var(--primary); cursor: pointer; font-size: 11px; }
