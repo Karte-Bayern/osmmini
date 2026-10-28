@@ -1,13 +1,12 @@
-The new OSMmini mobile, C bridge and Apple SDK/demo components are distributed
-under AGPL-3.0-only, matching their tinySQL/tinyTiles dependencies. The full
-license is in apple/LICENSE. This notice does not relicense pre-existing files
-elsewhere in the repository.
+OSMmini's own source code, including the mobile, C bridge and Apple SDK/demo
+components, is distributed under AGPL-3.0-only. The full license is in the
+repository's LICENSE and in apple/LICENSE. Third-party components and map data
+remain subject to their own licences and notices.
 
-Dependencies are resolved from the repository's pinned go.mod/go.sum. The Apple
-build omits the sqliteimport tag and does not link modernc.org/sqlite. Pure Go
-does not mean dependency-free: tinySQL/tinyTiles and their selected Go packages
-still have licenses and notices. Preserve applicable upstream notices when
-redistributing native archives. The Go runtime is included in the archive.
+Native archives include the Go runtime and dependencies resolved from the
+repository's pinned go.mod/go.sum, including tinySQL and tinyTiles. Preserve
+their applicable licenses and notices when redistributing these archives. The
+Apple build omits the sqliteimport tag and does not link modernc.org/sqlite.
 
 Map data © OpenStreetMap contributors, available under ODbL 1.0:
 https://www.openstreetmap.org/copyright
