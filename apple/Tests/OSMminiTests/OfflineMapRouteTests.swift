@@ -241,4 +241,70 @@ private actor PendingPreparedRoute {
   await cancelled.value
   #expect(await cancelledGate.observedCancellation)
   #expect(loader.route(owner: identity, coordinates: oldPath) == nil)
+  await loader.load(owner: identity, coordinates: oldPath)
+  #expect(loader.route(owner: identity, coordinates: oldPath)?.chunks.count == 1)
+}
+
+@Test @MainActor func cancelledStaleRouteRequestCannotClearThePublishedRoute() async {
+  let currentOwner = NSObject(), obsoleteOwner = NSObject()
+  let identity = ObjectIdentifier(currentOwner)
+  let coordinates = [Coordinate(lat: 48, lon: 12), Coordinate(lat: 49, lon: 13)]
+  let loader = OfflineMapRouteLoader()
+  await loader.load(owner: identity, coordinates: coordinates)
+  let stale = Task {
+    withUnsafeCurrentTask { $0?.cancel() }
+    await loader.load(owner: ObjectIdentifier(obsoleteOwner), coordinates: nil)
+  }
+  await stale.value
+  #expect(loader.route(owner: identity, coordinates: coordinates)?.chunks.count == 1)
+}
+
+@Test @MainActor func cancelledStaleRouteRequestCannotInvalidateTheCurrentWorker() async {
+  let owner = NSObject()
+  let identity = ObjectIdentifier(owner)
+  let coordinates = [Coordinate(lat: 48, lon: 12), Coordinate(lat: 49, lon: 13)]
+  let loader = OfflineMapRouteLoader()
+  let gate = PendingPreparedRoute()
+  let current = Task {
+    await loader.load(owner: identity, coordinates: coordinates) { try await gate.prepare($0) }
+  }
+  await gate.waitUntilStarted()
+  let stale = Task {
+    withUnsafeCurrentTask { $0?.cancel() }
+    await loader.load(owner: identity, coordinates: nil)
+  }
+  await stale.value
+  await gate.finish()
+  await current.value
+  #expect(loader.route(owner: identity, coordinates: coordinates)?.chunks.count == 1)
+}
+
+private actor RoutePreparationCounter {
+  private(set) var count = 0
+  func prepare(_ coordinates: [Coordinate]) throws -> PreparedMapRoute {
+    count += 1
+    return try PreparedMapRoute(coordinates)
+  }
+}
+
+@Test @MainActor func mapReappearanceReusesOnlyTheSamePreparedRouteAndRegion() async {
+  let first = NSObject(), second = NSObject()
+  let firstID = ObjectIdentifier(first), secondID = ObjectIdentifier(second)
+  let coordinates = [Coordinate(lat: 48, lon: 12), Coordinate(lat: 49, lon: 13)]
+  let changed = [Coordinate(lat: 48, lon: 12), Coordinate(lat: 49, lon: 14)]
+  let loader = OfflineMapRouteLoader()
+  let preparations = RoutePreparationCounter()
+  for _ in 0..<3 {
+    await loader.load(owner: firstID, coordinates: coordinates) { try await preparations.prepare($0) }
+    #expect(loader.route(owner: firstID, coordinates: coordinates)?.chunks.count == 1)
+  }
+  #expect(await preparations.count == 1)
+  await loader.load(owner: firstID, coordinates: changed) { try await preparations.prepare($0) }
+  #expect(await preparations.count == 2)
+  #expect(loader.route(owner: firstID, coordinates: changed)?.chunks.count == 1)
+  #expect(loader.route(owner: firstID, coordinates: coordinates) == nil)
+  await loader.load(owner: secondID, coordinates: changed) { try await preparations.prepare($0) }
+  #expect(await preparations.count == 3)
+  #expect(loader.route(owner: secondID, coordinates: changed)?.chunks.count == 1)
+  #expect(loader.route(owner: firstID, coordinates: changed) == nil)
 }

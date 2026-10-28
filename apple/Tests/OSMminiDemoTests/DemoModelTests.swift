@@ -590,6 +590,24 @@ private final class DemoCatalogURLProtocol: URLProtocol, @unchecked Sendable {
     await model.engine?.close()
   }
 
+  @Test func whitespaceAroundSearchDoesNotRestartOrClearResults() async throws {
+    defer { cleanup() }
+    let model = try await readyModel()
+    model.query = "cafe"
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(5))
+    while model.searching, clock.now < deadline { try await Task.sleep(for: .milliseconds(10)) }
+    let identities = model.results.map(\.identity)
+    #expect(!identities.isEmpty)
+    model.query = "  cafe \n"
+    #expect(!model.searching)
+    #expect(model.results.map(\.identity) == identities)
+    model.query = "school"
+    #expect(model.searching)
+    #expect(model.results.isEmpty)
+    await model.engine?.close()
+  }
+
   @Test func dismissingAnUnfinishedSearchStopsWorkAndReopeningResumesTheSameQuery() async throws {
     defer { cleanup() }
     let model = try await readyModel()

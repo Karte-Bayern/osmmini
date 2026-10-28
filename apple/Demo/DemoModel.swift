@@ -204,7 +204,14 @@ struct DemoCatalogSearch: Sendable {
   private(set) var selectedPOIPreset = POIImportPreset.everyday
   private(set) var pendingSlice: DemoSliceRequest?
   var catalogQuery = "Niederbayern" { didSet { filterCatalog() } }
-  var query = "" { didSet { search() } }
+  var query = "" {
+    didSet {
+      if query.trimmingCharacters(in: .whitespacesAndNewlines)
+        != oldValue.trimmingCharacters(in: .whitespacesAndNewlines) {
+        search()
+      }
+    }
+  }
   private(set) var results: [SearchResult] = []
   private(set) var searching = false
   private(set) var searchError: String?

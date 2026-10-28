@@ -8,6 +8,11 @@ import Observation
     let place: DemoPlace
   }
 
+  struct Matches: Equatable, Sendable {
+    let saved: [Entry]
+    let recent: [Entry]
+  }
+
   static let storageKey = "personalPlaces"
   static let savedLimit = 500
   static let recentLimit = 20
@@ -19,10 +24,83 @@ import Observation
     let recent: [Entry]
   }
 
-  private(set) var saved: [Entry] = []
-  private(set) var recent: [Entry] = []
+  private struct CoordinateKey: Hashable {
+    let latitude: Int64
+    let longitude: Int64
+
+    init(_ coordinate: Coordinate) {
+      latitude = Int64((coordinate.lat * 1_000_000).rounded())
+      let rounded = Int64((coordinate.lon * 1_000_000).rounded())
+      longitude = rounded == 180_000_000 ? -180_000_000 : rounded
+    }
+  }
+
+  // Matching is deliberately not transitive: two source objects at one point
+  // differ, while an anonymous map point can match either. Keep first positions
+  // for each case instead of treating a coordinate as a universal identity.
+  private struct SavedIndex {
+    private var identities: [String: Int] = [:]
+    private var coordinates: [CoordinateKey: Int] = [:]
+    private var anonymousCoordinates: [CoordinateKey: Int] = [:]
+
+    init(_ entries: [Entry] = []) {
+      for (position, entry) in entries.enumerated() { add(entry.place, at: position) }
+    }
+
+    mutating func add(_ place: DemoPlace, at position: Int) {
+      let coordinate = CoordinateKey(place.coordinate)
+      if coordinates[coordinate] == nil { coordinates[coordinate] = position }
+      if let identity = place.sourceIdentity {
+        if identities[identity] == nil { identities[identity] = position }
+      } else if anonymousCoordinates[coordinate] == nil {
+        anonymousCoordinates[coordinate] = position
+      }
+    }
+
+    func first(for place: DemoPlace) -> Int? {
+      let coordinate = CoordinateKey(place.coordinate)
+      guard let identity = place.sourceIdentity else { return coordinates[coordinate] }
+      let exact = identities[identity]
+      let anonymous = anonymousCoordinates[coordinate]
+      if let exact, let anonymous { return min(exact, anonymous) }
+      return exact ?? anonymous
+    }
+  }
+
+  private struct SearchRecord {
+    let entry: Entry
+    let text: String
+
+    init(_ entry: Entry) {
+      self.entry = entry
+      let place = entry.place
+      text = "\(place.name) \(DemoPlaceText.category(place.category, kind: place.kind)) \(place.details?.address ?? "")"
+    }
+  }
+
+  private struct PreparedSearch {
+    let saved: [SearchRecord]
+    let recent: [SearchRecord]
+  }
+
+  private struct SearchCache {
+    let query: String
+    let locale: Locale
+    let matches: Matches
+  }
+
+  private(set) var saved: [Entry] = [] {
+    didSet {
+      savedIndex = SavedIndex(saved)
+      invalidateSearch()
+    }
+  }
+  private(set) var recent: [Entry] = [] { didSet { invalidateSearch() } }
   private(set) var error: String?
   private(set) var needsReset = false
+  @ObservationIgnored private var savedIndex = SavedIndex()
+  @ObservationIgnored private var preparedSearch: PreparedSearch?
+  @ObservationIgnored private var searchCache: SearchCache?
   private let defaults: UserDefaults
 
   init(defaults: UserDefaults) {
@@ -48,11 +126,48 @@ import Observation
     }
     self.saved = saved
     self.recent = recent
+    savedIndex = SavedIndex(saved)
   }
 
   func savedEntry(for place: DemoPlace) -> Entry? {
+    let entries = saved
     guard let place = Self.validated(place) else { return nil }
-    return saved.first { Self.matches($0.place, place) }
+    guard let position = savedIndex.first(for: place) else { return nil }
+    return entries[position]
+  }
+
+  func personalMatches(query: String) -> Matches {
+    // Read the published arrays even on a cache hit so SwiftUI observes changes.
+    let saved = self.saved
+    let recent = self.recent
+    let locale = Locale.current
+    if let searchCache, searchCache.query == query, searchCache.locale == locale {
+      return searchCache.matches
+    }
+    let prepared: PreparedSearch
+    if let preparedSearch {
+      prepared = preparedSearch
+    } else {
+      prepared = PreparedSearch(
+        saved: saved.map(SearchRecord.init),
+        recent: recent.filter { savedIndex.first(for: $0.place) == nil }.map(SearchRecord.init))
+      preparedSearch = prepared
+    }
+    let words = query.trimmingCharacters(in: .whitespacesAndNewlines)
+      .split(whereSeparator: \.isWhitespace).map(String.init)
+    func filter(_ records: [SearchRecord]) -> [Entry] {
+      records.compactMap { record in
+        words.allSatisfy { record.text.localizedStandardContains($0) } ? record.entry : nil
+      }
+    }
+    let matches = Matches(saved: filter(prepared.saved), recent: filter(prepared.recent))
+    searchCache = SearchCache(query: query, locale: locale, matches: matches)
+    return matches
+  }
+
+  private func invalidateSearch() {
+    preparedSearch = nil
+    searchCache = nil
   }
 
   @discardableResult func save(_ place: DemoPlace) -> Bool {
@@ -61,7 +176,7 @@ import Observation
       error = "Dieser Ort enthält ungültige oder zu lange Ortsdaten."
       return false
     }
-    if savedEntry(for: place) != nil {
+    if savedIndex.first(for: place) != nil {
       error = nil
       return true
     }
@@ -102,7 +217,8 @@ import Observation
       error = "Dieser Ort enthält ungültige oder zu lange Ortsdaten."
       return
     }
-    if let favorite = savedEntry(for: place) {
+    if let position = savedIndex.first(for: place) {
+      let favorite = saved[position]
       place = Self.named(place, favorite.place.name, fallback: favorite.place)
     }
     let previous = recent.first { Self.matches($0.place, place) }
@@ -168,10 +284,12 @@ import Observation
   private static func validated(_ entries: [Entry], limit: Int) -> [Entry]? {
     guard entries.count <= limit, Set(entries.map(\.id)).count == entries.count else { return nil }
     var result: [Entry] = []
+    var index = SavedIndex()
     for entry in entries {
       guard let place = validated(entry.place),
-        !result.contains(where: { matches($0.place, place) })
+        index.first(for: place) == nil
       else { return nil }
+      index.add(place, at: result.count)
       result.append(Entry(id: entry.id, place: place))
     }
     return result
@@ -226,14 +344,6 @@ import Observation
 
   private static func matches(_ lhs: DemoPlace, _ rhs: DemoPlace) -> Bool {
     if let left = lhs.sourceIdentity, let right = rhs.sourceIdentity { return left == right }
-    // About eleven centimetres at the equator: merge coordinate round trips,
-    // while distinct OSM objects at the same position retain their identity.
-    func rounded(_ value: Double) -> Int64 { Int64((value * 1_000_000).rounded()) }
-    func longitude(_ value: Double) -> Int64 {
-      let value = rounded(value)
-      return value == 180_000_000 ? -180_000_000 : value
-    }
-    return rounded(lhs.coordinate.lat) == rounded(rhs.coordinate.lat)
-      && longitude(lhs.coordinate.lon) == longitude(rhs.coordinate.lon)
+    return CoordinateKey(lhs.coordinate) == CoordinateKey(rhs.coordinate)
   }
 }

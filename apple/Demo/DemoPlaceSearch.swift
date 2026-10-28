@@ -19,25 +19,8 @@ struct DemoPlaceSearch: View {
     model.query.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
-  private var savedMatches: [DemoPlaceLibrary.Entry] {
-    model.places.saved.filter { matches($0.place) }
-  }
-
-  private var recentMatches: [DemoPlaceLibrary.Entry] {
-    model.places.recent.filter {
-      model.places.savedEntry(for: $0.place) == nil && matches($0.place)
-    }
-  }
-
-  private func matches(_ place: DemoPlace) -> Bool {
-    let text =
-      "\(place.name) \(DemoPlaceText.category(place.category, kind: place.kind)) \(place.details?.address ?? "")"
-    return trimmedQuery.split(whereSeparator: \.isWhitespace).allSatisfy {
-      text.localizedStandardContains(String($0))
-    }
-  }
-
   var body: some View {
+    let personal = model.places.personalMatches(query: model.query)
     NavigationStack {
       VStack(spacing: 0) {
         VStack(alignment: .leading, spacing: 10) {
@@ -65,7 +48,7 @@ struct DemoPlaceSearch: View {
             systemImage: model.engine == nil ? "map" : "checkmark.circle"
           ).font(.caption).foregroundStyle(.secondary)
         }.padding()
-        searchContent
+        searchContent(personal)
       }
       .navigationTitle(
         target == .start ? "Start suchen" : target == .destination ? "Ziel suchen" : "Orte suchen"
@@ -140,7 +123,7 @@ struct DemoPlaceSearch: View {
     }
   }
 
-  private var searchContent: some View {
+  private func searchContent(_ personal: DemoPlaceLibrary.Matches) -> some View {
     List {
       if let error = model.places.error {
         Section {
@@ -153,9 +136,9 @@ struct DemoPlaceSearch: View {
           }
         }
       }
-      personalPlaces
+      personalPlaces(personal)
       if model.engine == nil {
-        Section { searchStatus }
+        Section { searchStatus(personal) }
       } else if trimmedQuery.isEmpty {
         Section {
           LazyVGrid(
@@ -179,24 +162,25 @@ struct DemoPlaceSearch: View {
       } else if !model.searching, model.searchError == nil, !model.results.isEmpty {
         searchResults
       } else {
-        Section { searchStatus }
+        Section { searchStatus(personal) }
       }
     }.listStyle(.plain).scrollDismissesKeyboard(.interactively)
   }
 
-  @ViewBuilder private var personalPlaces: some View {
-    if !savedMatches.isEmpty {
+  @ViewBuilder private func personalPlaces(_ personal: DemoPlaceLibrary.Matches) -> some View {
+    if !personal.saved.isEmpty {
       Section("Gespeichert") {
-        ForEach(savedMatches) { entry in personalRow(entry, saved: true) }
+        ForEach(personal.saved) { entry in personalRow(entry, saved: true) }
       }
     }
-    if !recentMatches.isEmpty {
+    if !personal.recent.isEmpty {
       Section("Zuletzt gewählt") {
-        ForEach(recentMatches) { entry in personalRow(entry, saved: false) }
+        ForEach(personal.recent) { entry in personalRow(entry, saved: false) }
       }
     }
     if model.engine != nil,
-      (savedMatches + recentMatches).contains(where: { !model.canSelectPlace($0.place, target: target) })
+      (personal.saved.contains(where: { !model.canSelectPlace($0.place, target: target) })
+        || personal.recent.contains(where: { !model.canSelectPlace($0.place, target: target) }))
     {
       Section {
         Button("Andere Offline-Karte öffnen", systemImage: "map") {
@@ -272,7 +256,7 @@ struct DemoPlaceSearch: View {
       : target == .destination ? "Als Ziel übernehmen" : "Auf der Karte anzeigen"
   }
 
-  @ViewBuilder private var searchStatus: some View {
+  @ViewBuilder private func searchStatus(_ personal: DemoPlaceLibrary.Matches) -> some View {
     if model.engine == nil {
       VStack(alignment: .leading, spacing: 8) {
         Text("Öffne eine Offline-Karte, um auch nach neuen Orten zu suchen.")
@@ -298,7 +282,7 @@ struct DemoPlaceSearch: View {
           .buttonStyle(.bordered)
       }
     } else if model.results.isEmpty {
-      if !savedMatches.isEmpty || !recentMatches.isEmpty {
+      if !personal.saved.isEmpty || !personal.recent.isEmpty {
         Text("Keine weiteren Kartentreffer in dieser Region.")
           .font(.caption).foregroundStyle(.secondary)
       } else {

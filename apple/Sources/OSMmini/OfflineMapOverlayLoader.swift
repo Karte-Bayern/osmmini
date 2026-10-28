@@ -19,6 +19,7 @@ struct OfflineMapOverlayFocusRequest: Equatable {
   }
 
   func load(_ documents: [KMLDocument]) async {
+    guard !Task.isCancelled else { return }
     revision &+= 1
     let current = revision
     entries.removeAll { entry in !documents.contains(entry.document) }

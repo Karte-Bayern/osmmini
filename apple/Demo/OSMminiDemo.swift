@@ -162,6 +162,9 @@ struct DemoView: View {
     .onChange(of: scenePhase) { _, phase in
       if phase == .background { location.stop() }
     }
+    .onChange(of: model.mapSuspendedForImport) { _, suspended in
+      if suspended { location.stop() }
+    }
     .onDisappear { location.stop() }
     .task { await model.start() }
   }

@@ -175,3 +175,22 @@ private func overlayScreen(_ coordinate: Coordinate, center: Coordinate, zoom: D
   task.cancel()
   await #expect(throws: CancellationError.self) { try await task.value }
 }
+
+@Test @MainActor func cancelledStaleOverlayRequestCannotRemoveTheCurrentLayers() async throws {
+  let document = try overlayDocument(
+    "<Placemark><name>Current</name><Point><coordinates>12.5,48.5</coordinates></Point></Placemark>")
+  let loader = OfflineMapOverlayLoader()
+  await loader.load([document])
+  let stale = Task {
+    withUnsafeCurrentTask { $0?.cancel() }
+    await loader.load([])
+  }
+  await stale.value
+  let prepared = try #require(loader.prepared(for: [document]).first)
+  #expect(
+    prepared.select(
+      at: CGPoint(x: 400, y: 300), center: Coordinate(lat: 48.5, lon: 12.5), displayZoom: 14,
+      size: CGSize(width: 800, height: 600))?.feature?.name == "Current")
+  await loader.load([])
+  #expect(loader.prepared(for: [document]).isEmpty)
+}

@@ -608,12 +608,15 @@ struct OfflineMapScale {
       try PreparedMapRoute($0)
     }
   ) async {
+    guard !Task.isCancelled else { return }
+    // SwiftUI restarts .task on reappearance even when its identity is unchanged.
+    if self.owner == owner, self.coordinates == coordinates, prepared != nil { return }
     revision &+= 1
     let currentRevision = revision
     self.owner = owner
     self.coordinates = coordinates
     prepared = nil
-    guard let coordinates, !coordinates.isEmpty, !Task.isCancelled else { return }
+    guard let coordinates, !coordinates.isEmpty else { return }
     let worker = Task.detached(priority: .userInitiated) { try await prepare(coordinates) }
     do {
       let result = try await withTaskCancellationHandler {
