@@ -303,28 +303,47 @@ private struct PreparedMapLabelRanges: Sendable {
   }
 }
 
-/// Only the current viewport is retained. An engine identity prevents a region
-/// switch from showing another region's geometry at the same z/x/y coordinates.
+/// The current viewport is retained within one fixed cache budget. Interactive
+/// zooming may keep already loaded neighboring levels until replacements arrive.
+/// An engine identity prevents reusing another region's z/x/y geometry.
 struct PreparedMapTileCache {
   static let capacity = 128
   private var owner: ObjectIdentifier?
   private var needed: Set<MapTileKey> = []
+  private var requested: [MapTileKey] = []
+  private var retained: [MapTileKey] = []
   private(set) var tiles: [MapTileKey: PreparedMapTile] = [:]
 
-  mutating func updateViewport(owner: ObjectIdentifier, keys: [MapTileKey]) {
-    let nextNeeded = Set(keys.prefix(Self.capacity))
+  mutating func updateViewport(
+    owner: ObjectIdentifier, keys: [MapTileKey], retainingPreviousTiles: Bool = false
+  ) {
+    let nextKeys = Array(keys.prefix(Self.capacity))
+    let nextNeeded = Set(nextKeys)
     if self.owner != owner {
       tiles.removeAll(keepingCapacity: true)
       self.owner = owner
+      retained.removeAll(keepingCapacity: true)
     } else {
-      guard nextNeeded != needed else { return }
-      // Iterate the previous request, not the dictionary's keys: retaining a
-      // dictionary view while removing entries would force a copy on mutation.
-      for key in needed where !nextNeeded.contains(key) {
-        tiles.removeValue(forKey: key)
+      guard nextNeeded != needed || (!retainingPreviousTiles && !retained.isEmpty) else { return }
+      var nextRetained: [MapTileKey] = []
+      var keeping = nextNeeded
+      if retainingPreviousTiles {
+        let available = Self.capacity - nextNeeded.count
+        for key in requested + retained {
+          guard nextRetained.count < available else { break }
+          if !keeping.contains(key), tiles[key] != nil {
+            keeping.insert(key)
+            nextRetained.append(key)
+          }
+        }
       }
+      // Keep no dictionary keys view alive while mutating its storage.
+      for key in needed where !keeping.contains(key) { tiles.removeValue(forKey: key) }
+      for key in retained where !keeping.contains(key) { tiles.removeValue(forKey: key) }
+      retained = nextRetained
     }
     needed = nextNeeded
+    requested = nextKeys
   }
 
   func tile(for key: MapTileKey, owner: ObjectIdentifier) -> PreparedMapTile? {
@@ -423,11 +442,18 @@ struct PreparedMapRoute: Sendable {
   func visible(
     center: Coordinate, zoom: Int, size: CGSize, translation: CGSize = .zero
   ) -> [Placement] {
-    guard center.lat.isFinite, center.lon.isFinite, (0...30).contains(zoom),
+    visible(center: center, displayZoom: Double(zoom), size: size, translation: translation)
+  }
+
+  func visible(
+    center: Coordinate, displayZoom: Double, size: CGSize, translation: CGSize = .zero
+  ) -> [Placement] {
+    guard center.lat.isFinite, center.lon.isFinite, displayZoom.isFinite,
+      (0...30).contains(displayZoom),
       size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0,
       translation.width.isFinite, translation.height.isFinite
     else { return [] }
-    let scale = exp2(Double(zoom))
+    let scale = exp2(displayZoom)
     let center = WebMercator.world(
       Coordinate(lat: center.lat, lon: center.lon.truncatingRemainder(dividingBy: 360)), zoom: 0)
     let origin = CGPoint(

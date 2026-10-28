@@ -24,8 +24,8 @@ import (
 const FormatVersion = 4
 
 // Import semantics may change without changing the readable region format.
-// Never mix checkpoints from different graph-building rules.
-const importRevision = 6
+// Never mix checkpoints or reuse regions prepared with different import rules.
+const importRevision = 8
 
 const landmarkFilename = "routing.alt"
 
@@ -43,25 +43,28 @@ Software licensing is separate from this map-data notice.
 `
 
 type Manifest struct {
-	Format       int               `json:"format"`
-	Name         string            `json:"name"`
-	CreatedAt    time.Time         `json:"created_at"`
-	SourceSHA256 string            `json:"source_sha256"`
-	Nodes        int               `json:"nodes"`
-	Edges        int               `json:"edges"`
-	Bounds       osm.CoordWindow   `json:"bounds"`
-	MinZoom      int               `json:"min_zoom"`
-	MaxZoom      int               `json:"max_zoom"`
-	Checksums    map[string]string `json:"checksums"`
+	Format         int               `json:"format"`
+	Name           string            `json:"name"`
+	CreatedAt      time.Time         `json:"created_at"`
+	SourceSHA256   string            `json:"source_sha256"`
+	Nodes          int               `json:"nodes"`
+	Edges          int               `json:"edges"`
+	Bounds         osm.CoordWindow   `json:"bounds"`
+	MinZoom        int               `json:"min_zoom"`
+	MaxZoom        int               `json:"max_zoom"`
+	Checksums      map[string]string `json:"checksums"`
+	POIPreset      POIPreset         `json:"poi_preset,omitempty"`
+	ImportRevision int               `json:"import_revision,omitempty"`
 }
 type ImportOptions struct {
-	PBF             string `json:"pbf"`
-	Destination     string `json:"destination"`
-	Name            string `json:"name"`
-	MinZoom         int    `json:"min_zoom,omitempty"`
-	MaxZoom         int    `json:"max_zoom,omitempty"`
-	MaxImportNodes  int    `json:"max_import_nodes,omitempty"`
-	TileMemoryBytes int64  `json:"tile_memory_bytes,omitempty"`
+	PBF             string    `json:"pbf"`
+	Destination     string    `json:"destination"`
+	Name            string    `json:"name"`
+	MinZoom         int       `json:"min_zoom,omitempty"`
+	MaxZoom         int       `json:"max_zoom,omitempty"`
+	MaxImportNodes  int       `json:"max_import_nodes,omitempty"`
+	TileMemoryBytes int64     `json:"tile_memory_bytes,omitempty"`
+	POIPreset       POIPreset `json:"poi_preset,omitempty"`
 }
 type Progress struct {
 	Phase    string  `json:"phase"`
@@ -75,6 +78,11 @@ var importLocks sync.Map
 // are never replaced: updates use a new destination and switch after opening.
 func Import(ctx context.Context, o ImportOptions, progress func(Progress)) (Manifest, error) {
 	var manifest Manifest
+	preset, err := o.POIPreset.normalized()
+	if err != nil {
+		return manifest, err
+	}
+	o.POIPreset = preset
 	if o.PBF == "" || o.Destination == "" {
 		return manifest, errors.New("pbf and destination are required")
 	}
@@ -99,7 +107,6 @@ func Import(ctx context.Context, o ImportOptions, progress func(Progress)) (Mani
 	if o.TileMemoryBytes < 16<<20 {
 		return manifest, errors.New("tile_memory_bytes must be at least 16 MiB")
 	}
-	var err error
 	o.Destination, err = filepath.Abs(o.Destination)
 	if err != nil {
 		return manifest, err
@@ -140,7 +147,7 @@ func Import(ctx context.Context, o ImportOptions, progress func(Progress)) (Mani
 			return manifest, fmt.Errorf("destination already exists: %w", e)
 		}
 		defer existing.Close()
-		if existing.Manifest.SourceSHA256 == sourceHash && existing.Manifest.MinZoom == o.MinZoom && existing.Manifest.MaxZoom == o.MaxZoom {
+		if existing.Manifest.SourceSHA256 == sourceHash && existing.Manifest.MinZoom == o.MinZoom && existing.Manifest.MaxZoom == o.MaxZoom && existing.Manifest.POIPreset == o.POIPreset && existing.Manifest.ImportRevision == importRevision {
 			report("ready", 1)
 			return existing.Manifest, nil
 		}
@@ -149,7 +156,7 @@ func Import(ctx context.Context, o ImportOptions, progress func(Progress)) (Mani
 	if err = os.MkdirAll(stage, 0o700); err != nil {
 		return manifest, err
 	}
-	signature := fmt.Sprintf("%s:%d:%d:%d:%d", sourceHash, o.MinZoom, o.MaxZoom, FormatVersion, importRevision)
+	signature := fmt.Sprintf("%s:%d:%d:%d:%d:%s", sourceHash, o.MinZoom, o.MaxZoom, FormatVersion, importRevision, o.POIPreset)
 	signaturePath := filepath.Join(stage, "source")
 	if b, e := os.ReadFile(signaturePath); e == nil && string(b) != signature {
 		return manifest, errors.New("pending import belongs to another source/options/import version; select a new destination")
@@ -190,7 +197,7 @@ func Import(ctx context.Context, o ImportOptions, progress func(Progress)) (Mani
 	if err != nil {
 		return manifest, err
 	}
-	manifest = Manifest{Format: FormatVersion, Name: o.Name, CreatedAt: time.Now().UTC(), SourceSHA256: sourceHash, Nodes: graph.nodes, Edges: graph.edges, Bounds: graph.bounds, MinZoom: o.MinZoom, MaxZoom: o.MaxZoom, Checksums: map[string]string{}}
+	manifest = Manifest{Format: FormatVersion, Name: o.Name, CreatedAt: time.Now().UTC(), SourceSHA256: sourceHash, Nodes: graph.nodes, Edges: graph.edges, Bounds: graph.bounds, MinZoom: o.MinZoom, MaxZoom: o.MaxZoom, POIPreset: o.POIPreset, ImportRevision: importRevision, Checksums: map[string]string{}}
 	if manifest.Name == "" {
 		manifest.Name = filepath.Base(o.PBF)
 	}
@@ -281,7 +288,7 @@ func prepareGraphAndSearch(ctx context.Context, o ImportOptions, stage string, r
 	}
 	report("indexing_search", 0.35)
 	if _, err = os.Stat(filepath.Join(stage, "search.ready")); err != nil {
-		if err = buildSearch(ctx, filepath.Join(stage, "search.jsonl"), router, o.PBF); err != nil {
+		if err = buildSearchWithPreset(ctx, filepath.Join(stage, "search.jsonl"), router, o.PBF, o.POIPreset); err != nil {
 			return importGraphInfo{}, err
 		}
 		if err = os.WriteFile(filepath.Join(stage, "search.ready"), []byte("1"), 0o600); err != nil {

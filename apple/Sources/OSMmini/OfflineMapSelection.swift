@@ -52,24 +52,37 @@ enum OfflineMapSelection {
     placements: [OfflineMapTilePlacement], baseZoom: Int? = nil, poiZoom: Int? = nil,
     labelObstacles: [CGRect] = [], tile: (MapTileKey) -> PreparedMapTile?
   ) -> MapSelection? {
+    select(
+      at: tap, center: center, displayZoom: Double(zoom), size: size,
+      placements: placements, baseZoom: baseZoom, poiZoom: poiZoom,
+      labelObstacles: labelObstacles, tile: tile)
+  }
+
+  static func select(
+    at tap: CGPoint, center: Coordinate, displayZoom: Double, size: CGSize,
+    placements: [OfflineMapTilePlacement], baseZoom: Int? = nil, poiZoom: Int? = nil,
+    labelObstacles: [CGRect] = [], tile: (MapTileKey) -> PreparedMapTile?
+  ) -> MapSelection? {
     guard tap.x.isFinite, tap.y.isFinite, center.lat.isFinite, abs(center.lat) <= 90,
       center.lon.isFinite,
       size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0,
-      (0...30).contains(zoom), CGRect(origin: .zero, size: size).contains(tap)
+      displayZoom.isFinite, (0...30).contains(displayZoom),
+      CGRect(origin: .zero, size: size).contains(tap)
     else { return nil }
-    let centerPoint = WebMercator.world(center, zoom: zoom)
+    let zoom = Int(floor(displayZoom))
+    let centerPoint = WebMercator.world(center, displayZoom: displayZoom)
     let tappedCoordinate = WebMercator.coordinate(
       CGPoint(
         x: centerPoint.x + tap.x - size.width / 2,
-        y: centerPoint.y + tap.y - size.height / 2), zoom: zoom)
+        y: centerPoint.y + tap.y - size.height / 2), displayZoom: displayZoom)
     var best: Hit?
     let poiTiles = placements.compactMap { placement -> OfflineMapLabelTile? in
       guard (0...zoom).contains(placement.key.z),
         poiZoom == nil || placement.key.z == poiZoom, let prepared = tile(placement.key)
       else { return nil }
       return OfflineMapLabelTile(
-        tile: prepared, offset: placement.origin(center: center, zoom: zoom, size: size),
-        scale: placement.scale(at: zoom))
+        tile: prepared, offset: placement.origin(center: center, displayZoom: displayZoom, size: size),
+        scale: placement.scale(atDisplayZoom: displayZoom))
     }
     let poiMarkers = OfflineMapPOILayout.markers(in: poiTiles, zoom: zoom, size: size)
     let tappedLabel = OfflineMapPOILayout.labels(
@@ -88,7 +101,7 @@ enum OfflineMapSelection {
           coordinate: WebMercator.coordinate(
             CGPoint(
               x: centerPoint.x + member.point.x - size.width / 2,
-              y: centerPoint.y + member.point.y - size.height / 2), zoom: zoom),
+              y: centerPoint.y + member.point.y - size.height / 2), displayZoom: displayZoom),
           feature: member.feature)
       }
       let representative = selection(marker.members[0])
@@ -123,8 +136,8 @@ enum OfflineMapSelection {
 
     for placement in placements {
       guard (0...zoom).contains(placement.key.z) else { continue }
-      let scale = placement.scale(at: zoom)
-      let origin = placement.origin(center: center, zoom: zoom, size: size)
+      let scale = placement.scale(atDisplayZoom: displayZoom)
+      let origin = placement.origin(center: center, displayZoom: displayZoom, size: size)
       let frame = CGRect(origin: origin, size: CGSize(width: 256 * scale, height: 256 * scale))
       guard frame.insetBy(dx: -tolerance, dy: -tolerance).contains(tap),
         let tile = tile(placement.key)

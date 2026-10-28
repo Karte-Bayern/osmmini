@@ -11,8 +11,16 @@ redistributing native archives. The Go runtime is included in the archive.
 
 Map data © OpenStreetMap contributors, available under ODbL 1.0:
 https://www.openstreetmap.org/copyright
-Downloads are obtained from Geofabrik's public OSM extract service:
+Downloads are obtained from the selected public OSM extract service:
+Geofabrik:
 https://download.geofabrik.de/
+OpenStreetMap France:
+https://download.openstreetmap.fr/extracts/
+SliceOSM (on-demand extracts, OpenStreetMap US):
+https://slice.openstreetmap.us/
+The OpenStreetMap France catalog is derived from its published polygon list:
+https://github.com/osm-fr/osm-extract-replication
 
-This project is not affiliated with or endorsed by Apple, OpenStreetMap or
-Geofabrik. The demo displays OSM attribution with its local map.
+This project is not affiliated with or endorsed by Apple, OpenStreetMap,
+Geofabrik, OpenStreetMap France or OpenStreetMap US. The demo displays OSM
+attribution with its local map.

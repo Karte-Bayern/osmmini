@@ -15,6 +15,7 @@ struct DemoMapScreen: View {
   @State private var planning = false
   @State private var directions = false
   @State private var locationRequest: LocationRequest?
+  @State private var locationNotice: LocationNotice?
   @State private var mapTarget: DemoModel.RoutePoint?
   @State private var routeDetailsExpanded = true
   @State private var inspectorHeight: CGFloat = 0
@@ -46,6 +47,11 @@ struct DemoMapScreen: View {
     let target: DemoModel.RoutePoint?
   }
 
+  private enum LocationNotice {
+    case failure(String)
+    case outsideRegion
+  }
+
   private var locationTarget: DemoModel.RoutePoint? { locationRequest?.target }
 
   var body: some View {
@@ -61,7 +67,7 @@ struct DemoMapScreen: View {
       layout {
         DemoMapCanvas(
           model: model, location: location, showRegions: showRegions, onSelect: selectMapPoint,
-          onLocate: showLocation
+          onLocate: showLocation, onStopLocation: stopLocation
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         ScrollViewReader { proxy in
@@ -84,7 +90,8 @@ struct DemoMapScreen: View {
         .frame(
           width: metrics.sideWidth,
           height: metrics.sideWidth == nil
-            ? min(max(1, inspectorHeight), metrics.maximumBottomHeight) : geometry.size.height
+            ? (hasInspectorContent ? min(max(1, inspectorHeight), metrics.maximumBottomHeight) : 0)
+            : geometry.size.height
         )
         .background(.regularMaterial)
         .overlay(alignment: .leading) {
@@ -93,7 +100,7 @@ struct DemoMapScreen: View {
         }
       }
     }
-    .navigationTitle(model.engine?.manifest.name ?? "Offline-Karte")
+    .navigationTitle(model.engine?.manifest.name ?? model.layers.visibleDocuments.first?.name ?? "Offline-Karte")
     #if os(iOS)
       .navigationBarTitleDisplayMode(.inline)
     #endif
@@ -106,20 +113,15 @@ struct DemoMapScreen: View {
           planning ? "Routendetails ausblenden" : "Route planen",
           systemImage: "point.topleft.down.to.point.bottomright.curvepath"
         ) { togglePlanning() }.disabled(model.engine == nil)
-        Button {
-          showLocation()
-        } label: {
-          if location.isLocating {
-            ProgressView()
-          } else {
-            Image(systemName: location.isUpdating ? "location.fill" : "location")
+        if !model.layers.entries.isEmpty {
+          Button("Kartenebenen", systemImage: "square.3.layers.3d", action: showRegions)
+        }
+        if !model.places.saved.isEmpty {
+          Button("Meine Orte", systemImage: "star") {
+            model.query = ""
+            openSearch(for: nil)
           }
         }
-        .accessibilityLabel(
-          location.isLocating ? "Standort wird ermittelt" : "Auf meinen Standort zoomen"
-        )
-        .help("Aktuellen GPS-Standort heranzoomen")
-        .disabled(model.engine == nil)
       }
     }
     .focusedSceneValue(
@@ -130,7 +132,7 @@ struct DemoMapScreen: View {
     )
     .sheet(item: $searchRequest) { request in
       DemoPlaceSearch(model: model, target: request.target, showRegions: showRegions) { place in
-        guard !model.busy, model.contains(place.coordinate) else { return }
+        guard !model.busy, model.canSelectPlace(place, target: request.target) else { return }
         cancelLocationSelection()
         if let target = request.target {
           model.usePlace(place, as: target, minimumZoom: 14)
@@ -144,6 +146,28 @@ struct DemoMapScreen: View {
     .sheet(isPresented: $directions) { directionsSheet }
     .sheet(item: $nearbySelection) { nearbyPlacesSheet($0) }
     .sheet(isPresented: $fullPlaceDetails) { fullPlaceDetailsSheet }
+    .alert(
+      "Standort",
+      isPresented: Binding(
+        get: { locationNotice != nil },
+        set: { if !$0 { locationNotice = nil } }),
+      presenting: locationNotice
+    ) { notice in
+      if case .outsideRegion = notice {
+        Button("Andere Region auswählen", action: showRegions)
+      }
+      #if os(iOS)
+        if location.state == .denied, let url = URL(string: UIApplication.openSettingsURLString) {
+          Button("App-Einstellungen öffnen") { openURL(url) }
+        }
+      #endif
+      Button("OK", role: .cancel) {}
+    } message: {
+      switch $0 {
+      case .failure(let message): Text(message)
+      case .outsideRegion: Text("Dein Standort liegt außerhalb der geöffneten Offline-Region.")
+      }
+    }
     .onChange(of: location.coordinate) { _, _ in updateLocationSelection() }
     .onChange(of: location.state) { _, _ in updateLocationSelection() }
     .onChange(of: locationRequest?.id) { _, _ in updateLocationSelection() }
@@ -177,7 +201,16 @@ struct DemoMapScreen: View {
     .onChange(of: model.start != nil || model.destination != nil, initial: true) { _, hasPoints in
       planning = hasPoints
     }
+    .onChange(of: model.route != nil) { _, hasRoute in
+      if hasRoute, let route = model.route {
+        routeDetailsExpanded = max(route.fromSnapM, route.toSnapM) > 100
+      }
+    }
     .onDisappear { cancelLocationSelection() }
+  }
+
+  private var hasInspectorContent: Bool {
+    showsExpandedInspector || planning || model.start != nil || model.destination != nil
   }
 
   private var showsExpandedInspector: Bool {
@@ -217,27 +250,6 @@ struct DemoMapScreen: View {
           )
           .font(.callout).frame(maxWidth: .infinity, minHeight: 44)
         }.buttonStyle(.plain).padding(.horizontal)
-      } else if model.engine != nil {
-        ViewThatFits(in: .horizontal) {
-          HStack(spacing: 12) {
-            Label("Karte antippen oder Ort suchen", systemImage: "hand.tap")
-            Spacer(minLength: 8)
-            Label("Offline", systemImage: "checkmark.circle")
-          }.fixedSize(horizontal: true, vertical: false)
-          VStack(alignment: .leading, spacing: 6) {
-            Label("Karte antippen oder Ort suchen", systemImage: "hand.tap")
-            Label("Offline verfügbar", systemImage: "checkmark.circle")
-          }
-        }
-        .font(.caption).foregroundStyle(.secondary).padding(12)
-        .frame(maxWidth: .infinity)
-      }
-      if location.state != .idle, mapTarget == nil { locationStatus }
-      if model.engine != nil, !model.places.saved.isEmpty, !showsExpandedInspector {
-        Button("Meine Orte", systemImage: "star") {
-          model.query = ""
-          openSearch(for: nil)
-        }.frame(maxWidth: .infinity, minHeight: 44)
       }
     }
   }
@@ -298,6 +310,11 @@ struct DemoMapScreen: View {
     requestLocation(for: nil)
   }
 
+  private func stopLocation() {
+    cancelLocationSelection()
+    location.stop()
+  }
+
   private func requestLocation(for point: DemoModel.RoutePoint?) {
     guard let engine = model.engine, point == nil || !model.busy else { return }
     mapTarget = nil
@@ -319,8 +336,11 @@ struct DemoMapScreen: View {
     cancelLocationSelection()
     guard let engine = model.engine, ObjectIdentifier(engine) == request.owner
     else { return }
+    guard model.contains(coordinate) else {
+      locationNotice = .outsideRegion
+      return
+    }
     if let target = request.target {
-      guard model.contains(coordinate) else { return }
       model.usePlace(
         DemoPlace(coordinate: coordinate, name: "Mein Standort", category: nil), as: target,
         minimumZoom: 14, remember: false)
@@ -334,75 +354,13 @@ struct DemoMapScreen: View {
     if let coordinate = location.coordinate {
       completeLocationSelection(coordinate)
     } else if !location.isLocating {
+      if let error = location.error { locationNotice = .failure(error) }
       cancelLocationSelection()
     }
   }
 
   private func cancelLocationSelection() {
     locationRequest = nil
-  }
-
-  @ViewBuilder private var locationStatus: some View {
-    if location.state == .ready, let coordinate = location.coordinate, model.contains(coordinate) {
-      HStack(spacing: 8) {
-        Label(location.status, systemImage: "location.fill")
-          .font(.caption).foregroundStyle(.secondary).lineLimit(2)
-        Spacer(minLength: 0)
-        Menu {
-          Button("Auf meinen Standort zoomen", systemImage: "location", action: showLocation)
-          Button("Standort als Start verwenden", systemImage: "a.circle.fill") {
-            useLocationAsStart(coordinate)
-          }.disabled(model.busy)
-          #if os(iOS)
-            if !location.hasPreciseLocation,
-              let url = URL(string: UIApplication.openSettingsURLString)
-            {
-              Button("Genauen Standort erlauben", systemImage: "gear") { openURL(url) }
-            }
-          #endif
-          Button("Standort ausschalten", systemImage: "location.slash") { location.stop() }
-        } label: {
-          Image(systemName: "ellipsis.circle").frame(width: 44, height: 44)
-        }.accessibilityLabel("Standortaktionen")
-      }.padding(.horizontal, 12)
-    } else {
-      VStack(alignment: .leading, spacing: 6) {
-        HStack(alignment: .top) {
-          Label(location.status, systemImage: "location")
-            .font(.caption).foregroundStyle(location.error == nil ? Color.secondary : .red)
-          Spacer()
-          if location.isUpdating {
-            Button("Stoppen") { location.stop() }.font(.caption).frame(minHeight: 44)
-          } else if location.coordinate == nil {
-            Button("Erneut versuchen") { showLocation() }.font(.caption).frame(minHeight: 44)
-          }
-        }
-        #if os(iOS)
-          if location.state == .denied, let url = URL(string: UIApplication.openSettingsURLString) {
-            Button("App-Einstellungen öffnen") { openURL(url) }.font(.caption)
-          }
-        #endif
-        if let coordinate = location.coordinate {
-          if !model.contains(coordinate) {
-            Text("Dein Standort liegt außerhalb der geöffneten Offline-Region.")
-              .font(.caption).foregroundStyle(.secondary)
-            Button("Andere Region auswählen", action: showRegions).font(.caption)
-          } else {
-            Button("Standort als Start verwenden") { useLocationAsStart(coordinate) }
-              .font(.caption).disabled(model.busy)
-          }
-        }
-      }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
-    }
-  }
-
-  private func useLocationAsStart(_ coordinate: Coordinate) {
-    cancelLocationSelection()
-    model.usePlace(
-      DemoPlace(coordinate: coordinate, name: "Mein Standort", category: nil), as: .start,
-      minimumZoom: 14, remember: false)
-    planning = true
-    routeDetailsExpanded = true
   }
 
   private func placeCard(_ place: DemoPlace, compact: Bool) -> some View {
@@ -449,7 +407,10 @@ struct DemoMapScreen: View {
         placeActions(place).disabled(model.busy)
       }
       if !model.contains(place.coordinate) {
-        Text("Dieser Ort liegt außerhalb der geöffneten Offline-Region.")
+        Text(
+          model.engine == nil
+            ? "Öffne eine Offline-Karte, um hier Routen zu berechnen."
+            : "Dieser Ort liegt außerhalb der geöffneten Offline-Region.")
           .font(.caption).foregroundStyle(.secondary)
         Button("Passende Offline-Karte öffnen", systemImage: "map", action: showRegions)
           .font(.callout).frame(minHeight: 44)
@@ -457,7 +418,7 @@ struct DemoMapScreen: View {
       if compact {
         Button("Alle Ortsdetails", systemImage: "info.circle") { fullPlaceDetails = true }
           .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-          .accessibilityHint("Zeigt den vollständigen Namen, Öffnungszeiten und Kontaktdaten.")
+          .accessibilityHint("Zeigt den vollständigen Namen und alle verfügbaren OSM-Angaben.")
       } else {
         Divider()
         placeDetails(place)
@@ -469,6 +430,19 @@ struct DemoMapScreen: View {
   }
 
   @ViewBuilder private func placeDetails(_ place: DemoPlace) -> some View {
+    let emergency = DemoPlaceText.emergencyDetails(place.details?.emergency)
+    if !emergency.isEmpty {
+      VStack(alignment: .leading, spacing: 8) {
+        Text("Technische OSM-Angaben").font(.subheadline.weight(.semibold))
+        ForEach(emergency) { detail in
+          LabeledContent(detail.title) {
+            Text(detail.value).foregroundStyle(.primary).textSelection(.enabled)
+              .multilineTextAlignment(.trailing)
+              .lineLimit(nil).fixedSize(horizontal: false, vertical: true)
+          }.font(.callout)
+        }
+      }.frame(maxWidth: .infinity, alignment: .leading)
+    }
     if let hours = DemoPlaceText.detail(place.details?.openingHours) {
       DisclosureGroup(isExpanded: $placeHoursExpanded) {
         VStack(alignment: .leading, spacing: 6) {
@@ -507,7 +481,8 @@ struct DemoMapScreen: View {
         Label(website, systemImage: "globe").font(.callout).textSelection(.enabled)
       }
     }
-    if place.kind == "node" || place.kind == "way", !DemoPlaceText.hasContactDetails(place.details)
+    if place.kind == "node" || place.kind == "way",
+      !DemoPlaceText.hasContactDetails(place.details), emergency.isEmpty
     {
       Text("Keine Öffnungszeiten oder Kontaktdaten in dieser Offline-Karte hinterlegt.")
         .font(.caption).foregroundStyle(.secondary)
@@ -520,7 +495,10 @@ struct DemoMapScreen: View {
       VStack(alignment: .leading, spacing: 6) {
         Text(DemoPlaceText.coordinates(place.coordinate))
           .font(.caption.monospacedDigit()).textSelection(.enabled)
-        Text("Kartenquelle: OpenStreetMap · Stand der importierten Karte")
+        Text(
+          place.kind == "kml"
+            ? "Kartenquelle: lokal importierte KML-Datei"
+            : "Kartenquelle: OpenStreetMap · Stand der importierten Karte")
           .font(.caption).foregroundStyle(.secondary)
         if let url = DemoPlaceText.sourceURL(place.sourceIdentity) {
           Link("Auf OpenStreetMap ansehen", destination: url)
@@ -1019,17 +997,21 @@ private struct DemoMapCanvas: View {
   let showRegions: () -> Void
   let onSelect: (MapSelection) -> Void
   let onLocate: () -> Void
+  let onStopLocation: () -> Void
   var body: some View {
-    if let engine = model.engine {
+    if model.engine != nil || !model.layers.entries.isEmpty {
       OfflineMap(
-        engine: engine, route: model.route,
+        engine: model.engine, route: model.route,
+        overlays: model.layers.visibleDocuments,
+        overlayFocus: model.layerFocus, overlayFocusRequest: model.layerFocusRequest,
         focus: model.focus, focusRequest: model.focusRequest,
         focusMinimumZoom: model.focusMinimumZoom,
         routeStart: model.start, routeDestination: model.destination,
         selection: model.inspectedPlace?.coordinate, userLocation: location.coordinate,
         userLocationAccuracy: location.horizontalAccuracy,
-        onLocate: onLocate, isLocating: location.isLocating, onFeatureSelect: onSelect
-      ).id(ObjectIdentifier(engine))
+        onLocate: model.engine == nil ? nil : onLocate,
+        isLocating: location.isLocating, onStopLocation: onStopLocation, onFeatureSelect: onSelect
+      )
     } else if model.busy {
       ContentUnavailableView {
         Label("Vorgang läuft", systemImage: "map")
@@ -1080,6 +1062,53 @@ enum DemoRouteText {
 }
 
 enum DemoPlaceText {
+  struct EmergencyDetail: Identifiable, Equatable {
+    let title: String
+    let value: String
+    var id: String { title }
+  }
+
+  /// Source values keep their original units. A bare number is not assigned
+  /// a pressure, diameter or volume unit by the UI.
+  static func emergencyDetails(_ details: EmergencyDetails?) -> [EmergencyDetail] {
+    guard let details else { return [] }
+    let fields: [(String, String?)] = [
+      ("Kennung", detail(details.reference)),
+      ("Bauart", detail(details.hydrantType).map(hydrantType)),
+      ("Durchmesser (OSM)", detail(details.diameter)),
+      ("Druck (OSM)", detail(details.pressure)),
+      ("Wasserquelle", detail(details.waterSource).map(waterSource)),
+      ("Wasservolumen (OSM)", detail(details.waterVolume)),
+    ]
+    return fields.compactMap { title, value in
+      value.map { EmergencyDetail(title: title, value: $0) }
+    }
+  }
+
+  private static func hydrantType(_ value: String) -> String {
+    switch value {
+    case "underground": "Unterflurhydrant"
+    case "pillar": "Überflurhydrant"
+    case "wall": "Wandhydrant"
+    case "pipe": "Rohranschluss"
+    case "pond": "Teichanschluss"
+    default: value
+    }
+  }
+
+  private static func waterSource(_ value: String) -> String {
+    switch value {
+    case "main": "Wassernetz"
+    case "pond": "Teich"
+    case "lake": "See"
+    case "river": "Fluss"
+    case "groundwater": "Grundwasser"
+    case "water_tank": "Wassertank"
+    case "swimming_pool": "Schwimmbecken"
+    default: value
+    }
+  }
+
   static func hoursSummary(_ hours: String) -> String {
     switch hours.trimmingCharacters(in: .whitespacesAndNewlines) {
     case "24/7": "Rund um die Uhr · laut Offline-Karte"
@@ -1146,6 +1175,7 @@ enum DemoPlaceText {
   }
 
   static func category(_ category: String?, kind: String? = nil) -> String {
+    if kind == "kml" { return "KML-Objekt" }
     if kind == "street" {
       return switch category {
       case "motorway": "Autobahn"
@@ -1179,16 +1209,38 @@ enum DemoPlaceText {
     case "guest_house": return "Gästehaus"
     case "motel": return "Motel"
     case "camp_site": return "Campingplatz"
+    case "caravan_site": return "Wohnmobilstellplatz"
+    case "alpine_hut": return "Berghütte"
+    case "wilderness_hut": return "Wildnishütte"
     case "cinema": return "Kino"
     case "theatre": return "Theater"
     case "library": return "Bibliothek"
     case "place_of_worship": return "Gotteshaus"
     case "bus_stop": return "Bushaltestelle"
+    case "tram_stop": return "Straßenbahnhaltestelle"
+    case "public_transport_stop": return "Haltestelle"
     case "bicycle_parking": return "Fahrradstellplatz"
+    case "bicycle_repair_station": return "Fahrrad-Reparaturstation"
+    case "bicycle_rental": return "Fahrradverleih"
+    case "bicycle_shop", "bicycle": return "Fahrradgeschäft"
+    case "ferry_terminal": return "Fähranleger"
+    case "aerodrome": return "Flugplatz"
+    case "airport_terminal": return "Flughafenterminal"
     case "artwork": return "Kunstwerk"
     case "recycling": return "Recyclingstelle"
     case "telephone": return "Öffentliches Telefon"
     case "picnic_site": return "Picknickplatz"
+    case "picnic_table": return "Picknicktisch"
+    case "bbq": return "Grillplatz"
+    case "shelter": return "Unterstand"
+    case "bench": return "Sitzbank"
+    case "peak": return "Gipfel"
+    case "saddle": return "Bergsattel"
+    case "spring": return "Quelle"
+    case "cave_entrance": return "Höhleneingang"
+    case "information": return "Information"
+    case "guidepost": return "Wegweiser"
+    case "nature_reserve": return "Naturschutzgebiet"
     case "restaurant": return "Restaurant"
     case "pharmacy": return "Apotheke"
     case "hospital": return "Krankenhaus"
@@ -1198,6 +1250,7 @@ enum DemoPlaceText {
     case "school": return "Schule"
     case "kindergarten": return "Kindergarten"
     case "parking": return "Parkplatz"
+    case "parking_entrance": return "Parkhauseinfahrt"
     case "fuel": return "Tankstelle"
     case "charging_station": return "Ladestation"
     case "hotel": return "Hotel"
@@ -1213,6 +1266,22 @@ enum DemoPlaceText {
     case "atm": return "Geldautomat"
     case "post_office": return "Post"
     case "station": return "Bahnhof"
+    case "fire_hydrant": return "Hydrant"
+    case "suction_point": return "Saugstelle"
+    case "fire_water_pond": return "Löschwasserteich"
+    case "water_tank": return "Löschwassertank"
+    case "fire_station": return "Feuerwehr"
+    case "ambulance_station": return "Rettungswache"
+    case "defibrillator": return "Defibrillator"
+    case "access_point": return "Rettungspunkt"
+    case "assembly_point": return "Sammelstelle"
+    case "police": return "Polizei"
+    case "fire_service_inlet": return "Löschwassereinspeisung"
+    case "fire_hose": return "Feuerlöschschlauch"
+    case "fire_extinguisher": return "Feuerlöscher"
+    case "first_aid": return "Erste Hilfe"
+    case "siren": return "Sirene"
+    case "phone": return "Notruftelefon"
     default: return kind == "node" || kind == "way" ? "Adresse oder Ort" : "Kartenpunkt"
     }
   }

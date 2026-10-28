@@ -43,11 +43,80 @@ before an iOS build. No Go installation is needed on the destination device.
 
 ## Demo application
 
-1. Download a region from Geofabrik or select a local `.osm.pbf` file.
+1. Choose **Geofabrik** or **OpenStreetMap France** in the region source picker,
+   then download a region; alternatively, select a local `.osm.pbf` file.
 2. Wait for graph, search and map preparation.
 3. Search for a place or select a map position, then choose **Als Start** or
    **Route hierher**. The latter requests your location when no start is set.
    Plan a route by distance or duration and export GPX/GeoJSON.
+
+Each source has its own cached catalog, available offline after loading. The
+OpenStreetMap France catalog uses the polygon list from its
+[official extract repository](https://github.com/osm-fr/osm-extract-replication)
+and downloads PBFs from [download.openstreetmap.fr](https://download.openstreetmap.fr/extracts/).
+Region coverage and names differ between providers; changing sources does not
+replace an installed region. Catalog refresh and PBF downloads require network
+access; prepared regions work offline.
+
+Choose **Karte hinzufügen** in the sidebar to download a region, create a custom
+area or import a local PBF. Select an **Importprofil** before starting:
+
+| Profile | Points of interest |
+| --- | --- |
+| **Alltag** (default) | Shops, food, leisure, health and public facilities; technical emergency objects are omitted. |
+| **Feuerwehr** | Hydrants, water supply points, emergency access points, fire/ambulance stations, police, hospitals, fuel and related facilities. |
+| **Outdoor** | Drinking water, toilets, shelters, campsites, viewpoints, guideposts, peaks, passes, springs and selected rescue points. |
+| **Radfahren** | Bicycle shops, repair stations, rentals and parking, plus water, rest stops, food and campsites. |
+| **Reisen** | Accommodation, sights, museums, stations, stops, ferries, airports, parking, fuel and travel supplies. |
+| **Alle POIs** | All supported POI categories, including technical emergency objects. |
+
+The profile filters the local search and POI map data. Roads, addresses,
+settlements, buildings, water and land cover stay available. It does not reduce
+the source PBF download or change vehicle routing rules. A profile change
+requires a new import; installed regions remain available with their original
+content. The selected profile is shown beside each installed region; its menu
+opens **Kartendetails** with the import date and any reimport advice. Downloads,
+local file copies and interrupted imports retain the profile chosen at start.
+
+Native POI extraction reads nodes and ways tagged with `amenity`, `shop`,
+`tourism`, `leisure`, `office`, `emergency` or `place`, plus
+selected `natural`, `railway`, `public_transport`, `aeroway` and `highway`
+objects for the extended profiles. It does not import every OSM object or the
+web application's complete category catalog. Named streets and address records
+are indexed separately. Feuerwehr objects expose available OSM references,
+hydrant types, diameters, pressures, water sources and volumes as source text;
+missing values are left empty and units are not inferred.
+
+The current import rules are recorded as `import_revision: 8`. Earlier regions
+remain readable; newly prepared variants require both the selected profile and
+current rules to match before reusing a region or an unfinished import.
+
+Choose **KML importieren …** under **Kartenebenen** to display a local `.kml`
+file. Points, lines, polygons with holes and MultiGeometry are supported. Layers
+can be fitted, hidden, shown or removed separately and are restored on launch.
+The original file remains untouched. Unreadable layers can be removed from the
+list to free a slot without deleting the retained copy. KML also works without
+an installed basemap; search and road routing still require an offline OSM region.
+
+Imports stay on the device and are limited to eight layers, each up to 10 MiB,
+5,000 features and 100,000 coordinate positions. The map uses a shared purple
+style in two dimensions. KMZ archives, remote NetworkLinks, imagery and custom
+KML styles are not loaded. Imported geometry does not add roads to the routing
+graph. KML files can also be opened directly with the app from Files or Finder.
+
+For a custom area, choose **Karte hinzufügen → Umkreis herunterladen**.
+Tap **Standort ermitteln**, then select a radius of **30, 60, 90, 120 or 150 km**.
+The app captures the location once and stops that location session. Starting
+**Ausschnitt erstellen und laden** sends the circular boundary to SliceOSM;
+the resulting PBF is downloaded and prepared for offline use. The sheet shows
+the location accuracy and the radius separately from the diameter.
+
+SliceOSM runs on demand, so preparation can take time and large or densely
+populated areas may exceed service or device limits. Existing jobs are reused
+for retries within 24 hours. Cancelling stops polling or downloading locally;
+the service has no API for cancelling its server-side job. Use a smaller radius
+if the service or local importer rejects an area. Regions crossing a pole or
+the date line are currently rejected before submission.
 
 Save places with the star and find them again in search, including under your
 own names. Saved places and the last 20 selected places stay local and survive
@@ -87,9 +156,13 @@ an interrupted map build restarts that phase. Background completion while the
 app is suspended is not guaranteed.
 
 The map displays local vector geometry, road/place labels, routes and location
-accuracy. It supports panning, zooming and fitting the region or route. Enlarging
-basemap tiles adds no road or building detail. Location access starts only
-after an explicit action and stops in the background.
+accuracy. It supports panning, continuous zooming and fitting the region or route.
+On macOS, scroll over the map or pinch the trackpad to zoom around the pointer.
+On iOS, pinch to zoom around the gesture's starting point. The zoom buttons and
+double tap use short, interruptible transitions; Reduce Motion disables them.
+Existing tiles cover missing geometry while a new detail level loads, within
+the same cache budget. Enlarging basemap tiles adds no road or building detail.
+Location access starts only after an explicit action and stops in the background.
 
 The location arrow on the map zooms to the current GPS fix at street level.
 When no fresh fix exists, the demo requests location access and focuses the map
@@ -132,8 +205,23 @@ await engine.close()
 ```
 
 Use `OfflineMap(engine: engine, route: route)` in SwiftUI, or read vector tiles
-with `engine.tile(z:x:y:)` for another renderer. `Geofabrik(directory:)` exposes
-catalog and download APIs independently; offline engine queries use no network.
+with `engine.tile(z:x:y:)` for another renderer. Catalog and download APIs are
+independent of the offline engine; engine queries use no network.
+
+```swift
+let extracts = OSMExtracts(directory: downloads, source: .openStreetMapFrance)
+let regions = try await extracts.regions()
+// Download an OSMExtractRegion selected from the catalog.
+let pbf = try await extracts.download(region)
+```
+
+Use `.geofabrik` for the other source. `Geofabrik` and `GeofabrikRegion` remain
+compatibility aliases; the default source is Geofabrik.
+
+For on-demand extracts, use `SliceOSM(directory:)` and
+`download(center:radiusKM:name:progress:)`. `SliceOSMRegion` validates the five
+supported radii and supplies a closed geodesic boundary. Creating a client does
+not start a request; only an explicit download submits or resumes a job.
 
 Use `onFeatureSelect` for road/POI selection, including snapped coordinates and
 optional source metadata:

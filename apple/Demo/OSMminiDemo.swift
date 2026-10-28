@@ -95,7 +95,7 @@ struct DemoView: View {
 
   var body: some View {
     NavigationSplitView(columnVisibility: $columns, preferredCompactColumn: $preferredColumn) {
-      DemoSidebar(model: model, importing: $importing, showMap: showMap)
+      DemoSidebar(model: model, showMap: showMap)
         .navigationTitle("OSMmini")
         .navigationSplitViewColumnWidth(min: 280, ideal: 330, max: 440)
     } detail: {
@@ -132,6 +132,24 @@ struct DemoView: View {
     } message: {
       Text(fileError ?? "")
     }
+    .alert(
+      "KML konnte nicht importiert werden",
+      isPresented: Binding(
+        get: { model.layerImportError != nil },
+        set: { if !$0 { model.dismissLayerImportError() } })
+    ) {
+      Button("OK") { model.dismissLayerImportError() }
+    } message: {
+      Text(model.layerImportError ?? "")
+    }
+    .onOpenURL { url in
+      guard url.isFileURL, url.pathExtension.lowercased() == "kml" else {
+        fileError = "Bitte eine KML-Datei mit der Endung .kml öffnen."
+        return
+      }
+      model.importMapLayer(url)
+    }
+    .onChange(of: model.layerFocusRequest) { _, _ in showMap() }
     .onChange(of: model.activeDirectory, initial: true) { _, directory in
       if directory == nil {
         location.stop()
@@ -156,13 +174,15 @@ struct DemoView: View {
 
 private struct DemoSidebar: View {
   let model: DemoModel
-  @Binding var importing: Bool
   let showMap: () -> Void
   @State private var restartingImport = false
   @State private var removingImport = false
   @State private var deletingRegion: InstalledRegion?
   @State private var clearingDownloads = false
   @State private var showingPlaces = false
+  @State private var showingAddMap = false
+  @State private var regionDetails: InstalledRegion?
+  @State private var storageExpanded = false
 
   var body: some View {
     List {
@@ -174,6 +194,17 @@ private struct DemoSidebar: View {
       }
       if let pending = model.pending, !model.busy {
         pendingImport(pending)
+      }
+      if let request = model.pendingSlice, !model.busy, model.pending == nil {
+        Section {
+          Button("Ausschnitt fortsetzen", systemImage: "arrow.clockwise") {
+            model.resumeSliceDownload()
+          }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+          Text("\(request.radiusKM) km · \(request.resolvedPOIPreset.displayName)")
+            .font(.caption).foregroundStyle(.secondary)
+        } header: {
+          Text("Unterbrochener Ausschnitt")
+        }
       }
       if !model.installed.isEmpty {
         installedRegions
@@ -218,41 +249,42 @@ private struct DemoSidebar: View {
           }
         }
       }
-      if !model.places.saved.isEmpty || !model.places.recent.isEmpty || model.places.needsReset {
-        Section {
+      Section {
+        Button {
+          showingAddMap = true
+        } label: {
+          Label("Karte hinzufügen", systemImage: "plus.circle")
+            .fontWeight(.medium).foregroundStyle(.tint)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .disabled(model.busy || model.pending != nil)
+        if !model.places.saved.isEmpty || !model.places.recent.isEmpty || model.places.needsReset {
           Button("Meine Orte", systemImage: "star") {
             model.query = ""
             showingPlaces = true
-          }.frame(minHeight: 44).disabled(model.busy)
-        } footer: {
-          Text(
-            "Gespeicherte Orte und letzte Auswahlen bleiben auch beim Löschen einer Offline-Karte erhalten."
-          )
+          }
+          .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+          .contentShape(Rectangle()).disabled(model.busy)
         }
       }
-      CatalogPicker(model: model)
-      Section {
-        Button("Lokale PBF importieren", systemImage: "doc.badge.plus") {
-          importing = true
-        }
-        .frame(minHeight: 44, alignment: .leading)
-        .disabled(model.busy || model.pending != nil)
-        .accessibilityHint("Eine bereits gespeicherte .osm.pbf-Datei auf diesem Gerät auswählen.")
-      } header: {
-        Text("Eigene Datei")
-      } footer: {
-        Text(
-          "Du hast bereits eine .osm.pbf-Datei? Wähle die gespeicherte Datei direkt auf diesem Gerät aus."
-        )
-      }
-      if model.downloadBytes > 0 || model.storageError != nil {
+      DemoMapLayersSection(model: model, showMap: showMap)
+      if !model.installed.isEmpty || model.downloadBytes > 0 || model.storageError != nil {
         sourceStorage
       }
     }
+    .listStyle(.sidebar)
+    .buttonStyle(.plain)
     .scrollDismissesKeyboard(.interactively)
+    .sheet(isPresented: $showingAddMap) {
+      DemoAddMapSheet(model: model)
+    }
+    .sheet(item: $regionDetails) { region in
+      DemoRegionDetails(region: region)
+    }
     .sheet(isPresented: $showingPlaces) {
       DemoPlaceSearch(model: model, target: nil, showRegions: { showingPlaces = false }) { place in
-        guard !model.busy, model.contains(place.coordinate) else { return }
+        guard !model.busy, model.canSelectPlace(place, target: nil) else { return }
         model.inspect(place, minimumZoom: 14)
         showingPlaces = false
         showMap()
@@ -320,41 +352,39 @@ private struct DemoSidebar: View {
           } label: {
             HStack(spacing: 12) {
               Image(systemName: active ? "map.fill" : "map")
-                .imageScale(.large).foregroundStyle(.tint).accessibilityHidden(true)
+                .imageScale(.large).foregroundStyle(.tint)
+                .frame(width: 24).accessibilityHidden(true)
               VStack(alignment: .leading, spacing: 4) {
-                Text(region.name).font(.headline).foregroundStyle(.primary)
-                Text(
-                  "\(active ? "Geöffnet" : "Offline verfügbar") · \(region.byteCount.formatted(.byteCount(style: .file)))"
-                )
-                .font(.caption).foregroundStyle(.secondary)
-                if let date = region.importedAt {
-                  Text("Importiert \(date.formatted(date: .abbreviated, time: .omitted))")
-                    .font(.caption2).foregroundStyle(.secondary)
-                }
-                if region.format < RegionManifest.currentFormat {
-                  Text("Erneut importieren, um Speicherplatz zu sparen.")
-                    .font(.caption2).foregroundStyle(.secondary)
-                }
+                Text(region.name).font(.body.weight(active ? .semibold : .regular))
+                  .foregroundStyle(.primary).lineLimit(2)
+                Text(region.byteCount.formatted(.byteCount(style: .file))
+                  + (region.poiPreset.map { " · \($0.displayName)" } ?? ""))
+                  .font(.caption).foregroundStyle(.secondary).lineLimit(2)
               }
               Spacer(minLength: 0)
-              Image(systemName: active ? "arrow.up.forward.app" : "chevron.right")
-                .font(.callout).accessibilityHidden(true)
+              if active {
+                Image(systemName: "checkmark.circle.fill")
+                  .foregroundStyle(.tint).accessibilityHidden(true)
+              }
             }
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .padding(.vertical, 4)
             .contentShape(Rectangle())
           }
           .buttonStyle(.plain)
           .accessibilityElement(children: .combine)
+          .accessibilityValue(active ? "Geöffnet" : "Offline verfügbar")
           .accessibilityHint(active ? "Zur Karte wechseln." : "Offline-Karte öffnen.")
           Menu {
             Button(active ? "Karte anzeigen" : "Karte öffnen", systemImage: "map") {
               if active { showMap() } else { model.openRegion(region.directory) }
             }
+            Button("Kartendetails", systemImage: "info.circle") { regionDetails = region }
             Button("Region löschen …", systemImage: "trash", role: .destructive) {
               deletingRegion = region
             }
           } label: {
-            Image(systemName: "ellipsis.circle")
+            Image(systemName: "ellipsis")
               .frame(minWidth: 44, minHeight: 44)
               .contentShape(Rectangle())
           }
@@ -362,8 +392,12 @@ private struct DemoSidebar: View {
           .menuIndicator(.hidden)
           .accessibilityLabel("Aktionen für \(region.name)")
         }
+        .listRowBackground(
+          RoundedRectangle(cornerRadius: 8)
+            .fill(active ? Color.accentColor.opacity(0.10) : .clear))
         .disabled(model.busy)
         .contextMenu {
+          Button("Kartendetails", systemImage: "info.circle") { regionDetails = region }
           Button("Region löschen …", systemImage: "trash", role: .destructive) {
             deletingRegion = region
           }.disabled(model.busy)
@@ -375,11 +409,7 @@ private struct DemoSidebar: View {
         }
       }
     } header: {
-      Text("Deine Offline-Karten")
-    } footer: {
-      Text(
-        "\(model.installed.count) \(model.installed.count == 1 ? "Region" : "Regionen") · \(model.installedBytes.formatted(.byteCount(style: .file))) auf dem Gerät"
-      )
+      Text("Offline-Karten")
     }
   }
 
@@ -395,6 +425,8 @@ private struct DemoSidebar: View {
         )
         .font(.callout).foregroundStyle(.secondary)
       }
+      Text("Importprofil: \(options.poiPreset.displayName)")
+        .font(.caption).foregroundStyle(.secondary)
       Button {
         model.resumePendingImport()
       } label: {
@@ -443,13 +475,28 @@ private struct DemoSidebar: View {
 
   private var sourceStorage: some View {
     Section {
-      if model.downloadBytes > 0 {
-        LabeledContent(
-          "PBF-Downloads", value: model.downloadBytes.formatted(.byteCount(style: .file)))
-        Button("Downloads entfernen", systemImage: "trash", role: .destructive) {
-          clearingDownloads = true
+      DisclosureGroup(isExpanded: $storageExpanded) {
+        if !model.installed.isEmpty {
+          LabeledContent(
+            "Offline-Karten", value: model.installedBytes.formatted(.byteCount(style: .file)))
         }
-        .disabled(model.busy || model.pending != nil)
+        if model.downloadBytes > 0 {
+          LabeledContent(
+            "PBF-Downloads", value: model.downloadBytes.formatted(.byteCount(style: .file)))
+          Button("Downloads entfernen …", systemImage: "trash", role: .destructive) {
+            clearingDownloads = true
+          }
+          .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+          .disabled(model.busy || model.pending != nil)
+          Text(
+            model.pending == nil
+              ? "Quelldateien können nach dem Import entfernt werden. Deine Karten bleiben verfügbar."
+              : "Die Quelldatei wird noch für den unterbrochenen Import benötigt.")
+            .font(.caption).foregroundStyle(.secondary)
+            .lineLimit(nil).fixedSize(horizontal: false, vertical: true)
+        }
+      } label: {
+        Label("Speicher", systemImage: "internaldrive")
       }
       if let error = model.storageError {
         DisclosureGroup {
@@ -459,24 +506,172 @@ private struct DemoSidebar: View {
             .font(.callout).foregroundStyle(.secondary)
         }
       }
-    } header: {
-      Text("Speicher verwalten")
-    } footer: {
-      Text(
-        model.pending == nil
-          ? "Heruntergeladene Quelldateien können nach dem Import entfernt werden. Deine Offline-Karten bleiben verfügbar."
-          : "Die Quelldatei wird noch für den unterbrochenen Import benötigt.")
+    }
+  }
+}
+
+private struct DemoRegionDetails: View {
+  let region: InstalledRegion
+  @Environment(\.dismiss) private var dismiss
+
+  var body: some View {
+    NavigationStack {
+      List {
+        Section {
+          Label(region.name, systemImage: "map").font(.title3.weight(.semibold))
+          LabeledContent("Speicher", value: region.byteCount.formatted(.byteCount(style: .file)))
+          LabeledContent("Importprofil", value: region.poiPreset?.displayName ?? "Bisheriger Import")
+          if let date = region.importedAt {
+            LabeledContent("Importiert", value: date.formatted(date: .abbreviated, time: .omitted))
+          }
+        }
+        if region.poiPreset != nil,
+          (region.importRevision ?? 0) < RegionManifest.currentImportRevision
+        {
+          Text("Erneut importieren, um aktuelle Importregeln zu nutzen.")
+            .font(.callout).foregroundStyle(.secondary)
+        }
+        if region.format < RegionManifest.currentFormat {
+          Text("Erneut importieren, um Speicherplatz zu sparen.")
+            .font(.callout).foregroundStyle(.secondary)
+        }
+      }
+      .navigationTitle("Kartendetails")
+      #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+      #endif
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Schließen", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
+        }
+      }
+    }
+    #if os(macOS)
+      .frame(minWidth: 400, idealWidth: 460, minHeight: 320)
+    #else
+      .presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
+    #endif
+  }
+}
+
+private struct DemoAddMapSheet: View {
+  let model: DemoModel
+  @Environment(\.dismiss) private var dismiss
+  @State private var showingSliceDownload = false
+  @State private var importing = false
+  @State private var fileError: String?
+
+  var body: some View {
+    NavigationStack {
+      List {
+        Section {
+          DemoImportPresetPicker(model: model)
+        } header: {
+          Text("Importprofil")
+        }
+        Section {
+          Button {
+            showingSliceDownload = true
+          } label: {
+            Label {
+              VStack(alignment: .leading, spacing: 4) {
+                Text("Umkreis herunterladen")
+                Text("30 bis 150 km um deinen Standort · SliceOSM")
+                  .font(.caption).foregroundStyle(.secondary)
+              }
+            } icon: {
+              Image(systemName: "location.circle")
+            }
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          Button {
+            importing = true
+          } label: {
+            Label("Lokale PBF importieren …", systemImage: "doc.badge.plus")
+              .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+              .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .accessibilityHint("Eine gespeicherte .osm.pbf-Datei auf diesem Gerät auswählen.")
+        } header: {
+          Text("Umkreis oder Datei")
+        }.disabled(model.busy || model.pending != nil)
+        CatalogPicker(model: model)
+      }
+      .scrollDismissesKeyboard(.interactively)
+      .navigationTitle("Karte hinzufügen")
+      #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+      #endif
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Schließen", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
+        }
+      }
+    }
+    #if os(macOS)
+      .frame(minWidth: 440, idealWidth: 520, minHeight: 560, idealHeight: 680)
+      .focusedSceneValue(
+        \.importAction,
+        DemoImportAction(
+          perform: { importing = true },
+          isEnabled: !model.busy && model.pending == nil))
+    #else
+      .presentationDetents([.large]).presentationDragIndicator(.visible)
+    #endif
+    .sheet(isPresented: $showingSliceDownload) { DemoSliceDownload(model: model) }
+    .fileImporter(isPresented: $importing, allowedContentTypes: [.data]) { result in
+      switch result {
+      case .success(let url): model.importFile(url)
+      case .failure(let error): fileError = FileDialogError.message(for: error)
+      }
+    }
+    .alert(
+      "Datei konnte nicht geöffnet werden",
+      isPresented: Binding(get: { fileError != nil }, set: { if !$0 { fileError = nil } })
+    ) {
+      Button("OK") { fileError = nil }
+    } message: {
+      Text(fileError ?? "")
+    }
+    .onChange(of: model.busy) { _, busy in
+      if busy { dismiss() }
     }
   }
 }
 
 private struct CatalogPicker: View {
   @Bindable var model: DemoModel
-  @State private var selectedRegion: GeofabrikRegion?
+  @State private var selectedRegion: CatalogSelection?
   @FocusState private var searchFocused: Bool
+
+  private struct CatalogSelection: Identifiable {
+    let region: OSMExtractRegion
+    let source: OSMExtractSource
+    let context: String
+    var id: String { source.rawValue + "/" + region.id }
+  }
 
   var body: some View {
     Section {
+      Picker("Quelle", selection: Binding(
+        get: { model.catalogSource },
+        set: {
+          searchFocused = false
+          model.selectCatalogSource($0)
+          Task { await model.loadCatalog() }
+        }
+      )) {
+        ForEach(OSMExtractSource.allCases) { source in
+          Text(source.displayName).tag(source)
+        }
+      }
+      .pickerStyle(.menu)
+      Text("Die Quellen bieten unterschiedliche Regionszuschnitte.")
+        .font(.caption).foregroundStyle(.secondary).lineLimit(nil)
+        .fixedSize(horizontal: false, vertical: true)
       HStack(spacing: 8) {
         Image(systemName: "magnifyingglass").foregroundStyle(.secondary).accessibilityHidden(true)
         TextField("Region oder Land suchen", text: $model.catalogQuery)
@@ -530,12 +725,16 @@ private struct CatalogPicker: View {
           systemImage: "magnifyingglass"
         )
         .font(.callout).foregroundStyle(.secondary)
-        if !query.isEmpty { Button("Alle Regionen anzeigen") { model.catalogQuery = "" } }
+        .lineLimit(nil).fixedSize(horizontal: false, vertical: true)
+        if !query.isEmpty {
+          Button("Alle Regionen anzeigen") { model.catalogQuery = "" }.buttonStyle(.plain)
+        }
       }
       ForEach(model.filteredRegions) { region in
         Button {
           searchFocused = false
-          selectedRegion = region
+          selectedRegion = CatalogSelection(
+            region: region, source: model.catalogSource, context: model.catalogContext(for: region))
         } label: {
           HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
@@ -571,9 +770,10 @@ private struct CatalogPicker: View {
         Task { await model.loadCatalog(refresh: model.catalogLoaded) }
       }
       .frame(minHeight: 44, alignment: .leading)
+      .buttonStyle(.plain)
       .disabled(model.catalogLoading)
     } header: {
-      Text("Region von Geofabrik laden")
+      Text("Region herunterladen")
     } footer: {
       Text(
         model.busy
@@ -582,16 +782,21 @@ private struct CatalogPicker: View {
             ? "Schließe zuerst den unterbrochenen Import ab oder entferne seine Fortsetzung aus der Liste."
             : "Zum Herunterladen ist Internet nötig. Die Region wird danach automatisch für die Offline-Nutzung aufbereitet."
       )
+      .font(.caption).fontWeight(.regular).foregroundStyle(.secondary)
+      .lineLimit(nil).fixedSize(horizontal: false, vertical: true)
     }
-    .sheet(item: $selectedRegion) { region in
-      CatalogDownloadSheet(model: model, region: region)
+    .sheet(item: $selectedRegion) { selection in
+      CatalogDownloadSheet(
+        model: model, region: selection.region, source: selection.source, context: selection.context)
     }
   }
 }
 
 private struct CatalogDownloadSheet: View {
   let model: DemoModel
-  let region: GeofabrikRegion
+  let region: OSMExtractRegion
+  let source: OSMExtractSource
+  let context: String
   @Environment(\.dismiss) private var dismiss
 
   var body: some View {
@@ -600,11 +805,10 @@ private struct CatalogDownloadSheet: View {
         Section {
           VStack(alignment: .leading, spacing: 8) {
             Label(region.name, systemImage: "map").font(.title2.bold())
-            let context = model.catalogContext(for: region)
             if !context.isEmpty { Text(context).foregroundStyle(.secondary) }
           }
           .padding(.vertical, 4)
-          Label("PBF von Geofabrik herunterladen", systemImage: "arrow.down.circle")
+          Label("PBF von \(source.displayName) herunterladen", systemImage: "arrow.down.circle")
           Label("Karte, Suche und Routing lokal aufbereiten", systemImage: "gearshape.2")
           Label("Anschließend ohne Internet nutzen", systemImage: "checkmark.circle")
         } footer: {
@@ -618,7 +822,7 @@ private struct CatalogDownloadSheet: View {
       .safeAreaInset(edge: .bottom, spacing: 0) {
         Button {
           dismiss()
-          model.download(region)
+          model.download(region, source: source)
         } label: {
           Label("Herunterladen und importieren", systemImage: "arrow.down.to.line")
             .frame(maxWidth: .infinity, minHeight: 44)

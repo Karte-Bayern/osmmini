@@ -24,15 +24,23 @@ public struct RegionManifest: Codable, Sendable {
   /// Format written by the current importer. Previously published format 1–3
   /// regions remain readable; reimporting also packs bidirectional road chains.
   public static let currentFormat = 4
+  /// Import rules can evolve while existing region files remain readable.
+  public static let currentImportRevision = 8
   public let format: Int, name: String, nodes: Int, edges: Int
   public let bounds: RegionBounds
   public let minZoom: Int, maxZoom: Int
   public let sourceSHA256: String
+  /// Missing on older regions, whose imported POI selection is unspecified.
+  public let poiPreset: POIImportPreset?
+  /// Missing on older regions; those remain readable but are not reused for a new import.
+  public let importRevision: Int?
   enum CodingKeys: String, CodingKey {
     case format, name, nodes, edges, bounds
     case minZoom = "min_zoom"
     case maxZoom = "max_zoom"
     case sourceSHA256 = "source_sha256"
+    case poiPreset = "poi_preset"
+    case importRevision = "import_revision"
   }
 }
 public struct ImportProgress: Codable, Sendable, Equatable {
@@ -43,6 +51,7 @@ public struct ImportOptions: Codable, Sendable {
   public var pbf: String, destination: String, name: String
   public var minZoom = 5, maxZoom = 14, maxImportNodes = 8_000_000
   public var tileMemoryBytes: Int64 = 256 * 1024 * 1024
+  public var poiPreset: POIImportPreset = .everyday
   public init(pbf: URL, destination: URL, name: String) {
     self.pbf = pbf.path
     self.destination = destination.path
@@ -54,6 +63,21 @@ public struct ImportOptions: Codable, Sendable {
     case maxZoom = "max_zoom"
     case maxImportNodes = "max_import_nodes"
     case tileMemoryBytes = "tile_memory_bytes"
+    case poiPreset = "poi_preset"
+  }
+
+  public init(from decoder: any Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    pbf = try values.decode(String.self, forKey: .pbf)
+    destination = try values.decode(String.self, forKey: .destination)
+    name = try values.decode(String.self, forKey: .name)
+    minZoom = try values.decodeIfPresent(Int.self, forKey: .minZoom) ?? 5
+    maxZoom = try values.decodeIfPresent(Int.self, forKey: .maxZoom) ?? 14
+    maxImportNodes = try values.decodeIfPresent(Int.self, forKey: .maxImportNodes) ?? 8_000_000
+    tileMemoryBytes = try values.decodeIfPresent(Int64.self, forKey: .tileMemoryBytes)
+      ?? 256 * 1024 * 1024
+    // Saved imports predate profiles and must retain their original full POI selection.
+    poiPreset = try values.decodeIfPresent(POIImportPreset.self, forKey: .poiPreset) ?? .all
   }
 }
 public struct SearchResult: Codable, Sendable, Identifiable {
@@ -72,20 +96,51 @@ public struct PlaceDetails: Codable, Sendable, Equatable {
   public let openingHours: String?
   public let phone: String?
   public let website: String?
+  public let emergency: EmergencyDetails?
 
   public init(
     address: String? = nil, openingHours: String? = nil, phone: String? = nil,
-    website: String? = nil
+    website: String? = nil, emergency: EmergencyDetails? = nil
   ) {
     self.address = address
     self.openingHours = openingHours
     self.phone = phone
     self.website = website
+    self.emergency = emergency
   }
 
   enum CodingKeys: String, CodingKey {
-    case address, phone, website
+    case address, phone, website, emergency
     case openingHours = "opening_hours"
+  }
+}
+
+/// Technical source text from OSM. Values keep their original units and wording.
+public struct EmergencyDetails: Codable, Sendable, Equatable {
+  public let reference: String?
+  public let hydrantType: String?
+  public let diameter: String?
+  public let pressure: String?
+  public let waterSource: String?
+  public let waterVolume: String?
+
+  public init(
+    reference: String? = nil, hydrantType: String? = nil, diameter: String? = nil,
+    pressure: String? = nil, waterSource: String? = nil, waterVolume: String? = nil
+  ) {
+    self.reference = reference
+    self.hydrantType = hydrantType
+    self.diameter = diameter
+    self.pressure = pressure
+    self.waterSource = waterSource
+    self.waterVolume = waterVolume
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case reference, diameter, pressure
+    case hydrantType = "hydrant_type"
+    case waterSource = "water_source"
+    case waterVolume = "water_volume"
   }
 }
 public enum RoutingEngine: String, Codable, Sendable {

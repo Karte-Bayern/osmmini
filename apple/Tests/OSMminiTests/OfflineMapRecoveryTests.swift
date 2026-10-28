@@ -635,3 +635,43 @@ private actor PendingMapViewport {
         minZoom: minZoom, maxZoom: maxZoom) == nil)
   }
 }
+
+@Test func continuousRegionOverviewUsesTheAvailableSpaceWithoutClipping() throws {
+  let bounds = RegionBounds(minLat: 48.5, maxLat: 49.1, minLon: 12.1, maxLon: 12.95)
+  let corners = [
+    Coordinate(lat: bounds.minLat, lon: bounds.minLon),
+    Coordinate(lat: bounds.maxLat, lon: bounds.maxLon),
+  ]
+  for size in [CGSize(width: 900, height: 700), CGSize(width: 390, height: 650),
+    CGSize(width: 800, height: 300)]
+  {
+    let viewport = try #require(OfflineMapContinuousViewport.fitting(
+      bounds, size: size, minZoom: 5, maxZoom: 18))
+    let offsets = corners.map { WebMercator.offset($0, from: viewport.center, displayZoom: viewport.zoom) }
+    let width = abs(offsets[1].x - offsets[0].x)
+    let height = abs(offsets[1].y - offsets[0].y)
+    for offset in offsets {
+      #expect(abs(offset.x) <= size.width / 2 - 24 + 0.000_001)
+      #expect(abs(offset.y) <= size.height / 2 - 24 + 0.000_001)
+    }
+    // One dimension must use the full available extent, even between tile levels.
+    #expect(min(abs(width - (size.width - 48)), abs(height - (size.height - 48))) < 0.000_001)
+    #expect(viewport.zoom != floor(viewport.zoom))
+  }
+}
+
+@Test func continuousRegionFitHandlesSmallViewsInvalidBoundsAndZoomLimits() throws {
+  let point = RegionBounds(minLat: 48, maxLat: 48, minLon: 12, maxLon: 12)
+  #expect(OfflineMapContinuousViewport.fitting(point, size: CGSize(width: 100, height: 50),
+    minZoom: 5, maxZoom: 18)?.zoom == 18)
+  let world = RegionBounds(minLat: -85, maxLat: 85, minLon: -180, maxLon: 180)
+  #expect(OfflineMapContinuousViewport.fitting(world, size: CGSize(width: 10, height: 10),
+    minZoom: 5, maxZoom: 18)?.zoom == 5)
+  #expect(OfflineMapContinuousViewport.fitting(point, size: .zero, minZoom: 5, maxZoom: 18) == nil)
+  #expect(OfflineMapContinuousViewport.fitting(point, size: CGSize(width: 390, height: 650),
+    minZoom: 18, maxZoom: 5) == nil)
+  let crossing = try #require(OfflineMapContinuousViewport.fitting(
+    RegionBounds(minLat: -10, maxLat: 10, minLon: 170, maxLon: -170),
+    size: CGSize(width: 800, height: 600), minZoom: 0, maxZoom: 18))
+  #expect(abs(abs(crossing.center.lon) - 180) < 0.000_001)
+}

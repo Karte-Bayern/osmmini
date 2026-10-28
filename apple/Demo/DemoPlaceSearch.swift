@@ -163,10 +163,9 @@ struct DemoPlaceSearch: View {
               repeating: GridItem(.flexible(), alignment: .leading),
               count: dynamicTypeSize.isAccessibilitySize ? 1 : 2), spacing: 8
           ) {
-            suggestedSearch("Café", image: "cup.and.saucer")
-            suggestedSearch("Supermarkt", image: "cart")
-            suggestedSearch("Apotheke", image: "cross.case")
-            suggestedSearch("Tankstelle", image: "fuelpump")
+            ForEach(DemoSearchSuggestion.forPreset(model.engine?.manifest.poiPreset)) { suggestion in
+              suggestedSearch(suggestion.query, image: suggestion.symbol)
+            }
           }.buttonStyle(.bordered)
         } header: {
           Text("Kategorien in dieser Region")
@@ -197,7 +196,7 @@ struct DemoPlaceSearch: View {
       }
     }
     if model.engine != nil,
-      (savedMatches + recentMatches).contains(where: { !model.contains($0.place.coordinate) })
+      (savedMatches + recentMatches).contains(where: { !model.canSelectPlace($0.place, target: target) })
     {
       Section {
         Button("Andere Offline-Karte öffnen", systemImage: "map") {
@@ -215,10 +214,10 @@ struct DemoPlaceSearch: View {
   }
 
   private func personalRow(_ entry: DemoPlaceLibrary.Entry, saved: Bool) -> some View {
-    let available = model.contains(entry.place.coordinate)
+    let available = model.canSelectPlace(entry.place, target: target)
     return HStack(spacing: 8) {
       Button {
-        guard !model.busy, model.contains(entry.place.coordinate) else { return }
+        guard !model.busy, model.canSelectPlace(entry.place, target: target) else { return }
         focused = false
         selected(entry.place)
       } label: {
@@ -359,5 +358,33 @@ struct DemoPlaceSearch: View {
       Label(query, systemImage: image)
         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
     }.accessibilityHint("In der geöffneten Offline-Region suchen")
+  }
+}
+
+struct DemoSearchSuggestion: Identifiable, Equatable {
+  let query: String
+  let symbol: String
+  var id: String { query }
+
+  static func forPreset(_ preset: POIImportPreset?) -> [Self] {
+    let values: [(String, String)]
+    switch preset {
+    case .firefighting:
+      values = [("Hydranten", "drop.fill"), ("Löschwasser", "drop.circle.fill"),
+        ("Feuerwehr", "flame.fill"), ("Rettungspunkte", "mappin.and.ellipse")]
+    case .outdoor:
+      values = [("Trinkwasser", "drop.fill"), ("Gipfel", "mountain.2.fill"),
+        ("Schutzhütten", "house.fill"), ("Camping", "tent.fill")]
+    case .cycling:
+      values = [("Reparaturstation", "wrench.fill"), ("Trinkwasser", "drop.fill"),
+        ("Fahrradverleih", "bicycle"), ("Rastplätze", "leaf.fill")]
+    case .travel:
+      values = [("Hotels", "bed.double.fill"), ("Sehenswürdigkeiten", "binoculars.fill"),
+        ("Bahnhof", "tram.fill"), ("Parkplatz", "parkingsign")]
+    default:
+      values = [("Café", "cup.and.saucer"), ("Supermarkt", "cart"),
+        ("Apotheke", "cross.case"), ("Tankstelle", "fuelpump")]
+    }
+    return values.map { Self(query: $0.0, symbol: $0.1) }
   }
 }

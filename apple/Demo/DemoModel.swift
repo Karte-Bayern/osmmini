@@ -52,6 +52,16 @@ struct DemoPlace: Codable, Equatable, Sendable {
     case "artwork": return "Kunstwerk"
     case "recycling": return "Recyclingstelle"
     case "telephone": return "Öffentliches Telefon"
+    case "fire_hydrant", "suction_point", "fire_water_pond", "water_tank", "fire_station",
+      "ambulance_station", "defibrillator", "access_point", "assembly_point", "police",
+      "fire_service_inlet", "fire_hose", "siren", "phone", "fire_extinguisher", "first_aid":
+      return DemoPlaceText.category(category, kind: kind)
+    case "peak", "saddle", "spring", "cave_entrance", "shelter", "bench", "bbq", "picnic_table",
+      "nature_reserve", "alpine_hut", "wilderness_hut", "caravan_site", "information", "guidepost",
+      "bicycle_shop", "bicycle", "bicycle_repair_station", "bicycle_rental", "tram_stop",
+      "public_transport_stop", "ferry_terminal", "aerodrome", "airport_terminal", "station", "bus_stop",
+      "parking_entrance":
+      return DemoPlaceText.category(category, kind: kind)
     default: return name
     }
   }
@@ -63,22 +73,35 @@ struct DemoImportFailure: Codable, Sendable {
   let phase: String?
 }
 
+struct DemoSliceRequest: Codable, Sendable {
+  let center: Coordinate
+  let radiusKM: Int
+  let poiPreset: POIImportPreset?
+  var resolvedPOIPreset: POIImportPreset { poiPreset ?? .all }
+
+  init(center: Coordinate, radiusKM: Int, poiPreset: POIImportPreset? = nil) {
+    self.center = center
+    self.radiusKM = radiusKM
+    self.poiPreset = poiPreset
+  }
+}
+
 /// Normalize catalog text and establish its display order once per load. Query
 /// changes only scan these immutable strings and retain the first 50 matches.
 struct DemoCatalogSearch: Sendable {
   struct Matches {
-    let regions: [GeofabrikRegion]
+    let regions: [OSMExtractRegion]
     let count: Int
   }
 
   private struct Record: Sendable {
-    let region: GeofabrikRegion
+    let region: OSMExtractRegion
     let name: String
     let id: String
     let context: String
   }
 
-  private let byID: [String: GeofabrikRegion]
+  private let byID: [String: OSMExtractRegion]
   private var records: [Record]
   private(set) var localeIdentifier: String
 
@@ -88,7 +111,7 @@ struct DemoCatalogSearch: Sendable {
     localeIdentifier = Locale.current.identifier
   }
 
-  init(_ regions: [GeofabrikRegion]) throws {
+  init(_ regions: [OSMExtractRegion]) throws {
     let byID = Dictionary(regions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     self.byID = byID
     records = try regions.map { region in
@@ -116,8 +139,8 @@ struct DemoCatalogSearch: Sendable {
   func matches(_ query: String) -> Matches {
     let words = Self.words(query)
     let query = words.joined(separator: " ")
-    var exact: [GeofabrikRegion] = []
-    var others: [GeofabrikRegion] = []
+    var exact: [OSMExtractRegion] = []
+    var others: [OSMExtractRegion] = []
     var count = 0
     for record in records {
       guard words.allSatisfy({ record.context.contains($0) }) else { continue }
@@ -132,11 +155,11 @@ struct DemoCatalogSearch: Sendable {
     return Matches(regions: exact, count: count)
   }
 
-  func context(for region: GeofabrikRegion) -> String {
+  func context(for region: OSMExtractRegion) -> String {
     Self.context(for: region, byID: byID)
   }
 
-  private static func context(for region: GeofabrikRegion, byID: [String: GeofabrikRegion])
+  private static func context(for region: OSMExtractRegion, byID: [String: OSMExtractRegion])
     -> String
   {
     var names: [String] = []
@@ -169,11 +192,14 @@ struct DemoCatalogSearch: Sendable {
   private(set) var storageError: String?
   private(set) var downloadBytes: Int64 = 0
   private(set) var regionError: String?
-  private(set) var filteredRegions: [GeofabrikRegion] = []
+  private(set) var filteredRegions: [OSMExtractRegion] = []
   private(set) var catalogMatchCount = 0
   private(set) var catalogLoading = false
   private(set) var catalogLoaded = false
   private(set) var catalogError: String?
+  private(set) var catalogSource = OSMExtractSource.geofabrik
+  private(set) var selectedPOIPreset = POIImportPreset.everyday
+  private(set) var pendingSlice: DemoSliceRequest?
   var catalogQuery = "Niederbayern" { didSet { filterCatalog() } }
   var query = "" { didSet { search() } }
   private(set) var results: [SearchResult] = []
@@ -200,6 +226,7 @@ struct DemoCatalogSearch: Sendable {
     }
   }
   var canCalculateRoute: Bool { !busy && engine != nil && start != nil && destination != nil }
+  var canDisplayPlaces: Bool { engine != nil || layers.entries.contains(where: \.isVisible) }
   var canCancel: Bool { busy && activity != .deleting }
   var installedBytes: Int64 { installed.reduce(0) { $0 + $1.byteCount } }
   private(set) var status = "Region herunterladen oder eine lokale PBF importieren."
@@ -220,13 +247,24 @@ struct DemoCatalogSearch: Sendable {
   @ObservationIgnored private var searchPresentations: Set<UUID> = []
   @ObservationIgnored private var installedID: UUID?
   @ObservationIgnored private var catalogSearch = DemoCatalogSearch()
+  @ObservationIgnored private var catalogLoadID: UUID?
   @ObservationIgnored private var started = false
   let root: URL
-  let geofabrik: Geofabrik
+  private let geofabrik: OSMExtracts
+  private let openStreetMapFrance: OSMExtracts
+  private let sliceOSM: SliceOSM
+  let layers: DemoMapLayers
+  private(set) var layerFocus: KMLDocument?
+  private(set) var layerFocusRequest: UUID?
+  private(set) var layerImportError: String?
+  private var layerImportTask: Task<Void, Never>?
   let places: DemoPlaceLibrary
   private let defaults: UserDefaults
 
-  init(root: URL? = nil, defaults: UserDefaults = .standard, geofabrik: Geofabrik? = nil) {
+  init(
+    root: URL? = nil, defaults: UserDefaults = .standard, geofabrik: Geofabrik? = nil,
+    openStreetMapFrance: OSMExtracts? = nil, sliceOSM: SliceOSM? = nil
+  ) {
     let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[
       0]
     self.root =
@@ -235,6 +273,13 @@ struct DemoCatalogSearch: Sendable {
         URL(fileURLWithPath: $0, isDirectory: true)
       } ?? support.appendingPathComponent("OSMminiDemo", isDirectory: true)
     self.defaults = defaults
+    if let raw = defaults.string(forKey: "poiImportPreset"), let preset = POIImportPreset(rawValue: raw) {
+      selectedPOIPreset = preset
+    }
+    if let raw = defaults.string(forKey: "catalogSource"), let source = OSMExtractSource(rawValue: raw) {
+      catalogSource = source
+    }
+    layers = DemoMapLayers(root: self.root)
     places = DemoPlaceLibrary(defaults: defaults)
     if let raw = defaults.string(forKey: "routeObjective"),
       let objective = RouteObjective(rawValue: raw),
@@ -244,7 +289,19 @@ struct DemoCatalogSearch: Sendable {
     }
     self.geofabrik =
       geofabrik
-      ?? Geofabrik(directory: self.root.appendingPathComponent("downloads", isDirectory: true))
+      ?? OSMExtracts(directory: self.root.appendingPathComponent("downloads", isDirectory: true))
+    self.openStreetMapFrance = openStreetMapFrance
+      ?? OSMExtracts(
+        directory: self.root.appendingPathComponent("downloads", isDirectory: true),
+        source: .openStreetMapFrance)
+    self.sliceOSM = sliceOSM
+      ?? SliceOSM(directory: self.root.appendingPathComponent("downloads", isDirectory: true))
+    if let data = defaults.data(forKey: "pendingSliceDownload"),
+      let request = try? JSONDecoder().decode(DemoSliceRequest.self, from: data),
+      (try? SliceOSMRegion(center: request.center, radiusKM: request.radiusKM, name: "Umkreis")) != nil
+    {
+      pendingSlice = request
+    }
     if let data = defaults.data(forKey: "pendingImport") {
       if let saved = try? JSONDecoder().decode(ImportOptions.self, from: data) {
         pending = try? DemoStorage.restoredImport(saved, in: self.root)
@@ -261,6 +318,7 @@ struct DemoCatalogSearch: Sendable {
   func start(arguments: [String] = CommandLine.arguments) async {
     guard !started else { return }
     started = true
+    await layers.restore()
     await refreshInstalled()
     let explicitRegion = arguments.firstIndex(of: "--region").flatMap {
       $0 + 1 < arguments.count ? arguments[$0 + 1] : nil
@@ -274,7 +332,10 @@ struct DemoCatalogSearch: Sendable {
     }
     // Reopening a local region needs no catalog request. The catalog can still
     // be loaded explicitly in the sidebar when choosing another region.
-    if engine == nil, !arguments.contains("--offline") { await loadCatalog() }
+    if engine == nil, layers.entries.isEmpty, !arguments.contains("--offline") { await loadCatalog() }
+    // Opening a document can finish before the last basemap has reopened.
+    // Restore the explicit file framing after startup publishes that engine.
+    if layerFocus != nil, focus == nil { layerFocusRequest = UUID() }
   }
 
   func refreshInstalled() async {
@@ -296,13 +357,41 @@ struct DemoCatalogSearch: Sendable {
     }
   }
 
+  func selectPOIPreset(_ preset: POIImportPreset) {
+    selectedPOIPreset = preset
+    defaults.set(preset.rawValue, forKey: "poiImportPreset")
+  }
+
+  func selectCatalogSource(_ source: OSMExtractSource) {
+    guard source != catalogSource else { return }
+    catalogSource = source
+    defaults.set(source.rawValue, forKey: "catalogSource")
+    catalogLoadID = nil
+    catalogLoading = false
+    catalogLoaded = false
+    catalogError = nil
+    catalogSearch = DemoCatalogSearch()
+    filterCatalog()
+  }
+
+  private func extractClient(for source: OSMExtractSource) -> OSMExtracts {
+    switch source {
+    case .geofabrik: geofabrik
+    case .openStreetMapFrance: openStreetMapFrance
+    }
+  }
+
   func loadCatalog(refresh: Bool = false) async {
     guard !catalogLoading else { return }
+    let id = UUID()
+    let source = catalogSource
+    catalogLoadID = id
     catalogLoading = true
     catalogError = nil
-    defer { catalogLoading = false }
+    defer { if catalogLoadID == id { catalogLoading = false } }
     do {
-      let regions = try await geofabrik.regions(refresh: refresh)
+      let regions = try await extractClient(for: source).regions(refresh: refresh)
+      guard catalogLoadID == id else { return }
       let preparation = Task.detached(priority: .utility) { try DemoCatalogSearch(regions) }
       let prepared = try await withTaskCancellationHandler {
         try await preparation.value
@@ -310,10 +399,13 @@ struct DemoCatalogSearch: Sendable {
         preparation.cancel()
       }
       try Task.checkCancellation()
+      guard catalogLoadID == id else { return }
       catalogSearch = prepared
       catalogLoaded = true
       filterCatalog()
-    } catch is CancellationError {} catch { catalogError = error.localizedDescription }
+    } catch is CancellationError {} catch {
+      if catalogLoadID == id { catalogError = error.localizedDescription }
+    }
   }
 
   private func filterCatalog() {
@@ -325,7 +417,7 @@ struct DemoCatalogSearch: Sendable {
     filteredRegions = matches.regions
   }
 
-  func catalogContext(for region: GeofabrikRegion) -> String {
+  func catalogContext(for region: OSMExtractRegion) -> String {
     catalogSearch.context(for: region)
   }
 
@@ -515,11 +607,15 @@ struct DemoCatalogSearch: Sendable {
     if let previous { await previous.close() }
   }
 
-  func download(_ region: GeofabrikRegion) {
+  func download(_ region: OSMExtractRegion, source: OSMExtractSource? = nil) {
     guard canStartImport() else { return }
-    run(.downloading, status: "\(region.name) wird von Geofabrik geladen …") { [self] id in
-      let phase = beginPhase(id, status: "\(region.name) wird von Geofabrik geladen …")
-      let source = try await geofabrik.download(region) { [weak self] bytes, total in
+    let preset = selectedPOIPreset
+    let provider = source ?? catalogSource
+    let client = extractClient(for: provider)
+    let message = "\(region.name) wird von \(provider.displayName) geladen …"
+    run(.downloading, status: message) { [self] id in
+      let phase = beginPhase(id, status: message)
+      let source = try await client.download(region) { [weak self] bytes, total in
         Task { @MainActor in
           self?.receiveProgress(
             phase, fraction: total > 0 ? Double(bytes) / Double(total) : nil,
@@ -528,12 +624,87 @@ struct DemoCatalogSearch: Sendable {
         }
       }
       try Task.checkCancellation()
-      try await prepare(source, name: region.name, operation: id)
+      try await prepare(source, name: region.name, preset: preset, operation: id)
     }
+  }
+
+  func downloadSlice(center: Coordinate, radiusKM: Int, poiPreset: POIImportPreset? = nil) {
+    guard canStartImport() else { return }
+    let preset = poiPreset ?? selectedPOIPreset
+    pendingSlice = DemoSliceRequest(center: center, radiusKM: radiusKM, poiPreset: preset)
+    if let data = try? JSONEncoder().encode(pendingSlice) {
+      defaults.set(data, forKey: "pendingSliceDownload")
+    }
+    let name = "Umkreis \(radiusKM) km"
+    let message = "SliceOSM erstellt deinen Kartenausschnitt …"
+    run(.downloading, status: message) { [self] id in
+      let phase = beginPhase(id, status: message)
+      let source = try await sliceOSM.download(center: center, radiusKM: radiusKM, name: name) {
+        [weak self] progress in
+        Task { @MainActor in
+          switch progress {
+          case .preparing(let fraction):
+            self?.receiveProgress(phase, fraction: fraction, status: message)
+          case .downloading(let bytes, let total):
+            self?.receiveProgress(
+              phase, fraction: total > 0 ? Double(bytes) / Double(total) : nil,
+              status: "Download: \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))")
+          }
+        }
+      }
+      try Task.checkCancellation()
+      // Once preparation owns a checkpoint, its existing import recovery takes over.
+      defer { if pending != nil { clearSliceDownload() } }
+      try await prepare(source, name: name, preset: preset, operation: id)
+      clearSliceDownload()
+    }
+  }
+
+  func resumeSliceDownload() {
+    guard let pendingSlice else { return }
+    downloadSlice(
+      center: pendingSlice.center, radiusKM: pendingSlice.radiusKM,
+      poiPreset: pendingSlice.resolvedPOIPreset)
+  }
+
+  private func clearSliceDownload() {
+    pendingSlice = nil
+    defaults.removeObject(forKey: "pendingSliceDownload")
+  }
+
+  func importMapLayer(_ source: URL) {
+    guard layerImportTask == nil else { return }
+    layerImportError = nil
+    layerImportTask = Task { [self] in
+      defer { layerImportTask = nil }
+      do {
+        let id = try await layers.importFile(source)
+        try Task.checkCancellation()
+        focusMapLayer(id: id)
+      } catch {
+        layerImportError = FileDialogError.message(for: error)
+      }
+    }
+  }
+
+  func cancelMapLayerImport() { layerImportTask?.cancel() }
+  func dismissLayerImportError() { layerImportError = nil }
+
+  func focusMapLayer(id: UUID) {
+    guard let entry = layers.entries.first(where: { $0.id == id }) else { return }
+    do {
+      if !entry.isVisible { try layers.toggleVisible(id: id) }
+      inspectedPlace = nil
+      focus = nil
+      focusRequest = nil
+      layerFocus = entry.document
+      layerFocusRequest = UUID()
+    } catch { layerImportError = error.localizedDescription }
   }
 
   func importFile(_ source: URL) {
     guard canStartImport() else { return }
+    let preset = selectedPOIPreset
     run(.importing, status: "PBF wird in den lokalen App-Speicher übernommen …") { [self] id in
       guard source.pathExtension.lowercased() == "pbf" else {
         throw OSMminiError.native("Eine .osm.pbf-Datei auswählen.")
@@ -553,25 +724,30 @@ struct DemoCatalogSearch: Sendable {
       try Task.checkCancellation()
       let name = source.deletingPathExtension().lastPathComponent
       try await prepare(
-        copy, name: name.hasSuffix(".osm") ? String(name.dropLast(4)) : name, operation: id)
+        copy, name: name.hasSuffix(".osm") ? String(name.dropLast(4)) : name,
+        preset: preset, operation: id)
     }
   }
 
-  private func prepare(_ source: URL, name: String, operation: UUID) async throws {
+  private func prepare(
+    _ source: URL, name: String, preset: POIImportPreset, operation: UUID
+  ) async throws {
     guard pending == nil else {
       throw OSMminiError.native(
         "Zuerst den unterbrochenen Import fortsetzen oder aus der Liste entfernen.")
     }
-    let options = ImportOptions(
+    var configuredOptions = ImportOptions(
       pbf: source,
       destination: root.appendingPathComponent(
         "\(name.replacingOccurrences(of: "/", with: "-"))-\(UUID().uuidString.prefix(8))"),
       name: name)
+    configuredOptions.poiPreset = preset
     let root = root
+    let options = configuredOptions
     let checking = Task.detached(priority: .utility) {
       try DemoRegionStorage.matchingRegion(
         for: source, in: root, minZoom: options.minZoom, maxZoom: options.maxZoom,
-        minimumFormat: RegionManifest.currentFormat)
+        poiPreset: options.poiPreset, minimumFormat: RegionManifest.currentFormat)
     }
     let existing = try await withTaskCancellationHandler {
       try await checking.value
@@ -724,7 +900,7 @@ struct DemoCatalogSearch: Sendable {
   }
 
   func inspect(_ place: DemoPlace, minimumZoom: Int? = nil) {
-    guard !busy, engine != nil else { return }
+    guard !busy, canDisplayPlaces else { return }
     places.remember(place)
     inspectedPlace = preferredPlace(place)
     focusOn(place.coordinate, minimumZoom: minimumZoom)
@@ -736,7 +912,7 @@ struct DemoCatalogSearch: Sendable {
     _ place: DemoPlace, as point: RoutePoint, minimumZoom: Int? = nil,
     remember: Bool = true
   ) {
-    guard !busy, engine != nil else { return }
+    guard !busy, canSelectPlace(place, target: point) else { return }
     if remember { places.remember(place) }
     let place = preferredPlace(place)
     selectedRoutePoint = point
@@ -753,7 +929,7 @@ struct DemoCatalogSearch: Sendable {
   }
 
   func focusOn(_ coordinate: Coordinate, minimumZoom: Int? = nil) {
-    guard engine != nil else { return }
+    guard canDisplayPlaces else { return }
     focus = coordinate
     focusMinimumZoom = minimumZoom
     focusRequest = UUID()
@@ -763,6 +939,11 @@ struct DemoCatalogSearch: Sendable {
     guard let bounds = engine?.manifest.bounds else { return false }
     return coordinate.lat >= bounds.minLat && coordinate.lat <= bounds.maxLat
       && coordinate.lon >= bounds.minLon && coordinate.lon <= bounds.maxLon
+  }
+
+  func canSelectPlace(_ place: DemoPlace, target: RoutePoint?) -> Bool {
+    if contains(place.coordinate) { return true }
+    return target == nil && canDisplayPlaces && (engine == nil || place.kind == "kml")
   }
 
   func swapRoutePoints() {

@@ -17,9 +17,9 @@
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Dein Standort wird auf der Offline-Karte angezeigt und kann als Routenstart verwendet werden.</string>
+	<string>Dein Standort dient zur Kartenanzeige, als Routenstart und auf Wunsch als Mittelpunkt eines Offline-Kartenausschnitts.</string>
 	<key>NSLocationUsageDescription</key>
-	<string>Dein Standort wird auf der Offline-Karte angezeigt und kann als Routenstart verwendet werden.</string>
+	<string>Dein Standort dient zur Kartenanzeige, als Routenstart und auf Wunsch als Mittelpunkt eines Offline-Kartenausschnitts.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -43,5 +43,46 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>KML-Kartenebene</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.google.earth.kml</string>
+			</array>
+		</dict>
+	</array>
+	<key>UTImportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.google.earth.kml</string>
+			<key>UTTypeDescription</key>
+			<string>Keyhole Markup Language</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.xml</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>kml</string>
+				</array>
+				<key>public.mime-type</key>
+				<array>
+					<string>application/vnd.google-earth.kml+xml</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 </dict>
 </plist>

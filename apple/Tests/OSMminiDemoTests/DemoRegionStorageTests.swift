@@ -14,7 +14,9 @@ struct DemoRegionStorageTests {
 
   @discardableResult private func makeRegion(
     _ directory: URL, name: String = "Testregion", createdAt: String? = nil,
-    sourceSHA256: String = "abc", minZoom: Int = 5, maxZoom: Int = 14, format: Int = 1
+    sourceSHA256: String = "abc", minZoom: Int = 5, maxZoom: Int = 14, format: Int = 1,
+    poiPreset: POIImportPreset? = .everyday,
+    importRevision: Int? = RegionManifest.currentImportRevision
   ) throws -> Int64 {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     var manifest: [String: Any] = [
@@ -22,6 +24,8 @@ struct DemoRegionStorageTests {
       "bounds": ["min_lat": 48, "max_lat": 49, "min_lon": 12, "max_lon": 13],
       "min_zoom": minZoom, "max_zoom": maxZoom, "source_sha256": sourceSHA256,
     ]
+    if let poiPreset { manifest["poi_preset"] = poiPreset.rawValue }
+    if let importRevision { manifest["import_revision"] = importRevision }
     if let createdAt { manifest["created_at"] = createdAt }
     let data = try JSONSerialization.data(withJSONObject: manifest, options: [.sortedKeys])
     try data.write(to: directory.appendingPathComponent("manifest.json"))
@@ -186,6 +190,36 @@ struct DemoRegionStorageTests {
       try DemoRegionStorage.matchingRegion(for: source, in: root, minZoom: 5, maxZoom: 14) == nil)
   }
 
+  @Test func matchingRegionRequiresTheSameExplicitPOIPreset() throws {
+    let root = try workspace()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let source = root.appendingPathComponent("source.osm.pbf")
+    let data = Data("same source across profiles".utf8)
+    try data.write(to: source)
+    let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    let legacy = root.appendingPathComponent("a-legacy")
+    try makeRegion(
+      legacy, sourceSHA256: digest, format: RegionManifest.currentFormat, poiPreset: nil)
+    #expect(try DemoRegionStorage.regions(in: root).first?.poiPreset == nil)
+    for preset in POIImportPreset.allCases {
+      #expect(
+        try DemoRegionStorage.matchingRegion(
+          for: source, in: root, minZoom: 5, maxZoom: 14, poiPreset: preset) == nil)
+    }
+    for preset in POIImportPreset.allCases {
+      let directory = root.appendingPathComponent(preset.rawValue)
+      try makeRegion(
+        directory, sourceSHA256: digest, format: RegionManifest.currentFormat, poiPreset: preset)
+    }
+    for preset in POIImportPreset.allCases {
+      #expect(
+        try DemoRegionStorage.matchingRegion(
+          for: source, in: root, minZoom: 5, maxZoom: 14, poiPreset: preset)
+          == root.appendingPathComponent(preset.rawValue).resolvingSymlinksInPath())
+    }
+    #expect(FileManager.default.fileExists(atPath: legacy.appendingPathComponent("manifest.json").path))
+  }
+
   @Test func compactReimportSkipsLegacyRegionAndReusesCurrentFormat() throws {
     let root = try workspace()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -220,6 +254,37 @@ struct DemoRegionStorageTests {
       FileManager.default.fileExists(atPath: legacy.appendingPathComponent("manifest.json").path))
     #expect(
       FileManager.default.fileExists(atPath: previous.appendingPathComponent("manifest.json").path))
+  }
+
+  @Test func matchingRegionRequiresCurrentImportRulesWhileOlderVariantsRemainReadable() throws {
+    let root = try workspace()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let source = root.appendingPathComponent("source.osm.pbf")
+    let data = Data("same source with revised POI rules".utf8)
+    try data.write(to: source)
+    let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    for (name, revision) in [
+      ("legacy", nil), ("previous", 7), ("future", RegionManifest.currentImportRevision + 1),
+    ] {
+      try makeRegion(
+        root.appendingPathComponent(name), sourceSHA256: digest,
+        format: RegionManifest.currentFormat, poiPreset: .all, importRevision: revision)
+    }
+    let stored = try DemoRegionStorage.regions(in: root)
+    #expect(stored.count == 3)
+    #expect(stored.first { $0.directory.lastPathComponent == "legacy" }?.importRevision == nil)
+    #expect(stored.first { $0.directory.lastPathComponent == "previous" }?.importRevision == 7)
+    #expect(
+      try DemoRegionStorage.matchingRegion(
+        for: source, in: root, minZoom: 5, maxZoom: 14, poiPreset: .all) == nil)
+    let current = root.appendingPathComponent("current")
+    try makeRegion(
+      current, sourceSHA256: digest, format: RegionManifest.currentFormat, poiPreset: .all)
+    #expect(
+      try DemoRegionStorage.matchingRegion(
+        for: source, in: root, minZoom: 5, maxZoom: 14, poiPreset: .all)
+        == current.resolvingSymlinksInPath())
+    #expect(try DemoRegionStorage.regions(in: root).count == 4)
   }
 
   @Test func matchingRegionIgnoresUnpublishedAndLinkedCandidates() throws {

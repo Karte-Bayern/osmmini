@@ -193,10 +193,14 @@ import Observation
 
   private static func validDetails(_ details: PlaceDetails?) -> Bool {
     guard let details else { return true }
-    return [
+    let values: [(String?, Int)] = [
       (details.address, 1024), (details.openingHours, 1024), (details.phone, 128),
       (details.website, 2048),
-    ].allSatisfy { value, limit in
+      (details.emergency?.reference, 256), (details.emergency?.hydrantType, 256),
+      (details.emergency?.diameter, 256), (details.emergency?.pressure, 256),
+      (details.emergency?.waterSource, 256), (details.emergency?.waterVolume, 256),
+    ]
+    return values.allSatisfy { value, limit in
       guard let value else { return true }
       return value.utf8.count <= limit
         && !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)

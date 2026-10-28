@@ -111,6 +111,16 @@ private final class DemoCatalogURLProtocol: URLProtocol, @unchecked Sendable {
     return try JSONSerialization.data(withJSONObject: ["features": features])
   }
 
+  private func franceCatalogData() throws -> Data {
+    try JSONSerialization.data(withJSONObject: [
+      "truncated": false,
+      "tree": [
+        ["path": "osc_modif/polygons/europe.poly", "type": "blob"],
+        ["path": "osc_modif/polygons/europe/gibraltar.poly", "type": "blob"],
+      ],
+    ])
+  }
+
   private func readyModel() async throws -> DemoModel {
     let region = root.appendingPathComponent("prepared")
     var options = ImportOptions(pbf: try fixture(), destination: region, name: "Testregion")
@@ -345,6 +355,98 @@ private final class DemoCatalogURLProtocol: URLProtocol, @unchecked Sendable {
     model.catalogQuery = "neuer kontinent"
     #expect(model.filteredRegions.map(\.id) == ["parent", "child"])
     #expect(model.catalogContext(for: oldChild) == "Neuer Kontinent")
+  }
+
+  @Test func catalogSourceSwitchUsesSeparateOfflineCachesAndPersistsTheSelection() async throws {
+    defer { cleanup() }
+    let downloads = root.appendingPathComponent("downloads")
+    try FileManager.default.createDirectory(at: downloads, withIntermediateDirectories: true)
+    try catalogData([
+      ("europe", "Europa Geofabrik", nil), ("gibraltar", "Gibraltar Geofabrik", "europe"),
+    ]).write(to: downloads.appendingPathComponent("geofabrik-index.json"))
+    try franceCatalogData().write(to: downloads.appendingPathComponent("osmfr-index.json"))
+    let model = DemoModel(root: root, defaults: defaults)
+    model.catalogQuery = "Gibraltar"
+    await model.loadCatalog()
+    #expect(model.filteredRegions.map(\.id) == ["gibraltar"])
+
+    model.selectCatalogSource(.openStreetMapFrance)
+    #expect(model.catalogSource == .openStreetMapFrance)
+    #expect(!model.catalogLoaded)
+    #expect(model.filteredRegions.isEmpty)
+    #expect(model.catalogQuery == "Gibraltar")
+    await model.loadCatalog()
+    let france = try #require(model.filteredRegions.first)
+    #expect(france.id == "europe/gibraltar")
+    #expect(france.name == "Gibraltar")
+    #expect(model.catalogContext(for: france) == "Europe")
+    #expect(defaults.string(forKey: "catalogSource") == OSMExtractSource.openStreetMapFrance.rawValue)
+    #expect(DemoModel(root: root, defaults: defaults).catalogSource == .openStreetMapFrance)
+
+    model.selectCatalogSource(.geofabrik)
+    await model.loadCatalog()
+    let geofabrik = try #require(model.filteredRegions.first)
+    #expect(geofabrik.id == "gibraltar")
+    #expect(model.catalogContext(for: geofabrik) == "Europa Geofabrik")
+    #expect(model.catalogError == nil)
+  }
+
+  @Test func aPreviousProviderResponseCannotReplaceTheCurrentCatalogOrItsErrorState() async throws {
+    defer { cleanup() }
+    let downloads = root.appendingPathComponent("downloads")
+    try FileManager.default.createDirectory(at: downloads, withIntermediateDirectories: true)
+    try franceCatalogData().write(to: downloads.appendingPathComponent("osmfr-index.json"))
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.protocolClasses = [DemoCatalogURLProtocol.self]
+    configuration.urlCache = nil
+    let session = URLSession(configuration: configuration)
+    defer { session.invalidateAndCancel() }
+    for status in [200, 503] {
+      DemoCatalogURLProtocol.state.configure(
+        try catalogData([("old", "Old Geofabrik Region", nil)]), status: status, delay: 0.05)
+      let geofabrik = Geofabrik(
+        directory: downloads, catalogSession: session, downloadConfiguration: { .ephemeral })
+      let model = DemoModel(root: root, defaults: defaults, geofabrik: geofabrik)
+      model.selectCatalogSource(.geofabrik)
+      model.catalogQuery = "gibraltar"
+      let loading = Task { await model.loadCatalog(refresh: true) }
+      let clock = ContinuousClock()
+      let deadline = clock.now.advanced(by: .seconds(5))
+      while DemoCatalogURLProtocol.state.count == 0, clock.now < deadline {
+        try await Task.sleep(for: .milliseconds(1))
+      }
+      #expect(DemoCatalogURLProtocol.state.count == 1)
+      model.selectCatalogSource(.openStreetMapFrance)
+      await model.loadCatalog()
+      #expect(model.filteredRegions.map(\.id) == ["europe/gibraltar"])
+      await loading.value
+      #expect(model.catalogSource == .openStreetMapFrance)
+      #expect(model.filteredRegions.map(\.id) == ["europe/gibraltar"])
+      #expect(model.catalogLoaded)
+      #expect(!model.catalogLoading)
+      #expect(model.catalogError == nil)
+    }
+  }
+
+  @Test func downloadUsesThePresentedSourceEvenAfterTheCatalogSelectionChanges() async throws {
+    defer { cleanup() }
+    let downloads = root.appendingPathComponent("downloads")
+    try FileManager.default.createDirectory(at: downloads, withIntermediateDirectories: true)
+    let region = OSMExtractRegion(
+      id: "europe/gibraltar", name: "Testregion", parent: "europe",
+      pbfURL: URL(string: "https://download.openstreetmap.fr/extracts/europe/gibraltar-latest.osm.pbf")!)
+    let cached = downloads.appendingPathComponent(OSMExtracts.cacheFilename(region.pbfURL))
+    try FileManager.default.copyItem(at: fixture(), to: cached)
+    let model = DemoModel(root: root, defaults: defaults)
+    model.selectCatalogSource(.openStreetMapFrance)
+    model.selectCatalogSource(.geofabrik)
+    model.download(region, source: .openStreetMapFrance)
+    #expect(model.status.contains("OpenStreetMap France"))
+    await model.operation?.value
+    #expect(model.engine?.manifest.name == "Testregion")
+    #expect(model.importFailure == nil)
+    #expect(model.pending == nil)
+    await model.engine?.close()
   }
 
   @Test func catalogPreparationAndFilteringKeepMapObservationIsolated() async throws {

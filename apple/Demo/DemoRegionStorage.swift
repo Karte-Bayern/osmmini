@@ -7,6 +7,8 @@ struct DemoStoredRegion: Identifiable, Sendable, Equatable {
   let name: String
   let format: Int
   let nodes: Int
+  let poiPreset: POIImportPreset?
+  let importRevision: Int?
   /// Logical size of the region's regular files, including its manifest.
   let byteCount: Int64
   let importedAt: Date?
@@ -28,6 +30,8 @@ enum DemoRegionStorage {
         name: manifest.region.name,
         format: manifest.region.format,
         nodes: manifest.region.nodes,
+        poiPreset: manifest.region.poiPreset,
+        importRevision: manifest.region.importRevision,
         byteCount: try byteCount(in: directory),
         importedAt: manifest.importedAt)
     }.sorted {
@@ -47,9 +51,11 @@ enum DemoRegionStorage {
 
   /// Call from a worker, as with the other storage operations. Hashing retains
   /// at most one MiB of PBF data and checks cancellation between reads.
+  /// Legacy regions remain readable, but only an explicit matching POI preset
+  /// and the current import rules can satisfy a new import request.
   static func matchingRegion(
     for source: URL, in root: URL, minZoom: Int, maxZoom: Int,
-    minimumFormat: Int = 1
+    poiPreset: POIImportPreset = .everyday, minimumFormat: Int = 1
   ) throws -> URL? {
     try Task.checkCancellation()
     let root = root.resolvingSymlinksInPath().standardizedFileURL
@@ -61,7 +67,9 @@ enum DemoRegionStorage {
       guard let manifest = try? publishedManifest(directory, in: root),
         manifest.region.format >= minimumFormat,
         manifest.region.format <= RegionManifest.currentFormat,
-        manifest.region.minZoom == minZoom, manifest.region.maxZoom == maxZoom
+        manifest.region.minZoom == minZoom, manifest.region.maxZoom == maxZoom,
+        manifest.region.poiPreset == poiPreset,
+        manifest.region.importRevision == RegionManifest.currentImportRevision
       else { return nil }
       return (directory.standardizedFileURL, manifest.region.sourceSHA256)
     }

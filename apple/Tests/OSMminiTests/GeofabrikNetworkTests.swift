@@ -85,11 +85,13 @@ private func networkDirectory() throws -> URL {
   return directory
 }
 
-private func networkClient(_ directory: URL) -> (Geofabrik, URLSession) {
+private func networkClient(
+  _ directory: URL, source: OSMExtractSource = .geofabrik
+) -> (Geofabrik, URLSession) {
   let session = URLSession(configuration: GeofabrikURLProtocol.configuration())
   return (
     Geofabrik(
-      directory: directory, catalogSession: session,
+      directory: directory, source: source, catalogSession: session,
       downloadConfiguration: { GeofabrikURLProtocol.configuration() }), session
   )
 }
@@ -125,6 +127,82 @@ private final class DownloadProgressRecorder: @unchecked Sendable {
 }
 
 @Suite(.serialized) struct GeofabrikNetworkTests {
+  private var franceCatalog: Data {
+    Data(
+      #"{"truncated":false,"tree":[{"path":"osc_modif/polygons/europe.poly","type":"blob"},{"path":"osc_modif/polygons/europe/gibraltar.poly","type":"blob"}]}"#.utf8)
+  }
+
+  @Test func franceCatalogUsesOfficialIndexAndSeparatePersistentCache() async throws {
+    let directory = try networkDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    try catalogFixture(3).write(to: directory.appendingPathComponent("geofabrik-index.json"))
+    GeofabrikURLProtocol.state.configure(franceCatalog)
+    let (client, session) = networkClient(directory, source: .openStreetMapFrance)
+    defer { session.invalidateAndCancel() }
+    #expect(client.source == .openStreetMapFrance)
+    #expect(try await client.regions().count == 2)
+    #expect(GeofabrikURLProtocol.state.requestedURLs == [OSMExtractSource.openStreetMapFrance.catalogURL])
+    let cache = directory.appendingPathComponent("osmfr-index.json")
+    #expect(try Data(contentsOf: cache) == franceCatalog)
+    let (offline, offlineSession) = networkClient(directory, source: .openStreetMapFrance)
+    defer { offlineSession.invalidateAndCancel() }
+    #expect(try await offline.regions().count == 2)
+    let (legacy, legacySession) = networkClient(directory)
+    defer { legacySession.invalidateAndCancel() }
+    #expect(try await legacy.regions().count == 3)
+    #expect(GeofabrikURLProtocol.state.count == 1)
+  }
+
+  @Test func franceIncompleteRefreshPreservesOfflineCatalog() async throws {
+    let directory = try networkDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let cache = directory.appendingPathComponent("osmfr-index.json")
+    try franceCatalog.write(to: cache)
+    let (client, session) = networkClient(directory, source: .openStreetMapFrance)
+    defer { session.invalidateAndCancel() }
+    #expect(try await client.regions().count == 2)
+    GeofabrikURLProtocol.state.configure(Data(#"{"truncated":true,"tree":[]}"#.utf8))
+    do {
+      _ = try await client.regions(refresh: true)
+      Issue.record("incomplete provider index replaced the offline catalog")
+    } catch {}
+    #expect(try await client.regions().count == 2)
+    #expect(try Data(contentsOf: cache) == franceCatalog)
+    #expect(GeofabrikURLProtocol.state.count == 1)
+  }
+
+  @Test func providerDownloadsKeepEqualBasenamesSeparateAndRejectAnotherSource() async throws {
+    let directory = try networkDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let bytes = Data(repeating: 7, count: 512)
+    GeofabrikURLProtocol.state.configure(bytes)
+    let (geofabrik, geofabrikSession) = networkClient(directory)
+    let (france, franceSession) = networkClient(directory, source: .openStreetMapFrance)
+    defer { geofabrikSession.invalidateAndCancel(); franceSession.invalidateAndCancel() }
+    let geofabrikRegion = OSMExtractRegion(
+      id: "gibraltar", name: "Gibraltar", parent: "europe",
+      pbfURL: URL(string: "https://download.geofabrik.de/europe/gibraltar-latest.osm.pbf")!)
+    let franceRegion = OSMExtractRegion(
+      id: "europe/gibraltar", name: "Gibraltar", parent: "europe",
+      pbfURL: URL(string: "https://download.openstreetmap.fr/extracts/europe/gibraltar-latest.osm.pbf")!)
+    do {
+      _ = try await geofabrik.download(franceRegion)
+      Issue.record("Geofabrik client accepted another provider")
+    } catch {}
+    do {
+      _ = try await france.download(geofabrikRegion)
+      Issue.record("France client accepted another provider")
+    } catch {}
+    #expect(GeofabrikURLProtocol.state.count == 0)
+    let first = try await geofabrik.download(geofabrikRegion)
+    let second = try await france.download(franceRegion)
+    #expect(first != second)
+    #expect(try Data(contentsOf: first) == bytes)
+    #expect(try Data(contentsOf: second) == bytes)
+    #expect(GeofabrikURLProtocol.state.count == 2)
+    #expect(try await france.download(franceRegion) == second)
+    #expect(GeofabrikURLProtocol.state.count == 2)
+  }
   @Test func localProtocolDownloadsSmallFixture() async throws {
     let expected = Data("local fixture, no network".utf8)
     GeofabrikURLProtocol.state.configure(expected)

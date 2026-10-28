@@ -85,6 +85,15 @@ func normalized(s string) string {
 }
 
 func buildSearch(ctx context.Context, path string, r *osm.Router, source string) error {
+	return buildSearchWithPreset(ctx, path, r, source, POIPresetAll)
+}
+
+func buildSearchWithPreset(ctx context.Context, path string, r *osm.Router, source string, preset POIPreset) error {
+	var err error
+	preset, err = preset.normalized()
+	if err != nil {
+		return err
+	}
 	if err := cleanSearchScratch(ctx, filepath.Dir(path)); err != nil {
 		return err
 	}
@@ -147,49 +156,72 @@ func buildSearch(ctx context.Context, path string, r *osm.Router, source string)
 	defer func() { ways.Close(); os.Remove(ways.Name()) }()
 	wayWriter := bufio.NewWriter(ways)
 	var refs []int64
-	poiKey := func(k string) bool {
-		switch k {
-		case "amenity", "shop", "tourism", "leisure", "office", "emergency", "place":
-			return true
+	result := func(id int64, kind string, c osm.Coord, tags osm.Tags, category string) SearchResult {
+		label := strings.TrimSpace(tags["name"])
+		street := strings.TrimSpace(tags["addr:street"])
+		if street == "" {
+			street = strings.TrimSpace(tags["addr:place"])
 		}
-		return false
-	}
-	category := func(tags osm.Tags) string {
-		for _, k := range []string{"amenity", "shop", "tourism", "leisure", "office", "emergency", "place"} {
-			if v := tags[k]; v != "" {
-				return v
+		address := strings.TrimSpace(street + " " + tags["addr:housenumber"])
+		text := address + " " + tags["addr:postcode"]
+		details := detailsFromTags(tags)
+		filteredPOI := category == "" && presetCategory(tags, POIPresetAll) != ""
+		if filteredPOI {
+			// Keep address lookup without restoring an excluded POI's name or category.
+			label = address
+			if details != nil {
+				details.Emergency = nil
+			}
+		} else {
+			text += " " + tags["brand"] + " " + poiSearchAliases(category)
+			if category == emergencyCategory(tags) && details != nil && details.Emergency != nil {
+				text += " " + details.Emergency.Reference
 			}
 		}
-		return ""
-	}
-	result := func(id int64, kind string, c osm.Coord, tags osm.Tags) SearchResult {
-		label := strings.TrimSpace(tags["name"])
-		address := strings.TrimSpace(tags["addr:street"] + " " + tags["addr:housenumber"])
+		keepEmergency := preset == POIPresetAll || preset == POIPresetFirefighting ||
+			(preset == POIPresetOutdoor && category == emergencyCategory(tags))
+		if details != nil && !keepEmergency {
+			details.Emergency = nil
+		}
+		if label == "" && category == emergencyCategory(tags) && category != "" {
+			label = poiLabel(category)
+			if reference := detailValue(tags["ref"], 256); reference != "" {
+				label += " " + reference
+			}
+		}
 		if label == "" {
 			label = address
 		}
 		if label == "" {
-			label = category(tags)
+			label = poiLabel(category)
 		}
 		if city := tags["addr:city"]; city != "" {
 			label += " · " + city
 		}
-		return SearchResult{ID: id, Kind: kind, Label: label, Coordinate: c, Category: category(tags), Place: tags["place"], Text: address + " " + tags["addr:postcode"] + " " + tags["brand"], Details: detailsFromTags(tags)}
+		return SearchResult{ID: id, Kind: kind, Label: label, Coordinate: c, Category: category, Place: tags["place"], Text: text, Details: cleanDetails(details)}
 	}
-	opts := osm.Options{Context: ctx, EmitWayNodeIDs: true, TaggedWayKey: func(k string) bool { return poiKey(k) || strings.HasPrefix(k, "addr:") }, KeepTag: func(k string) bool {
-		return k == "name" || k == "brand" || poiKey(k) || strings.HasPrefix(k, "addr:") || detailTag(k)
+	opts := osm.Options{Context: ctx, EmitWayNodeIDs: true, TaggedNodeKey: func(k string) bool {
+		return searchPOIKey(k) || strings.HasPrefix(k, "addr:")
+	}, TaggedWayKey: func(k string) bool {
+		// highway=emergency_access_point is a node-only special case. Ordinary
+		// road ways already have their searchable names in the routing graph.
+		return k != "highway" && searchPOIKey(k) || strings.HasPrefix(k, "addr:")
+	}, KeepTag: func(k string) bool {
+		return k == "name" || k == "brand" || searchPOIKey(k) || strings.HasPrefix(k, "addr:") || detailTag(k)
 	}}
 	err = osm.ExtractFile(source, opts, osm.Callbacks{TaggedNode: func(n osm.Node) error {
-		if category(n.Tags) == "" && n.Tags["addr:street"] == "" {
+		category := presetCategory(n.Tags, preset)
+		if category == "" && strings.TrimSpace(n.Tags["addr:street"]) == "" && strings.TrimSpace(n.Tags["addr:place"]) == "" {
 			return nil
 		}
-		return emit(result(n.ID, "node", osm.Coord{Lat: n.Lat, Lon: n.Lon}, n.Tags))
+		return emit(result(n.ID, "node", osm.Coord{Lat: n.Lat, Lon: n.Lon}, n.Tags, category))
 	}, TaggedWay: func(way osm.Way) error {
-		if category(way.Tags) == "" && way.Tags["addr:street"] == "" {
+		category := presetCategory(way.Tags, preset)
+		if category == "" && strings.TrimSpace(way.Tags["addr:street"]) == "" && strings.TrimSpace(way.Tags["addr:place"]) == "" {
 			return nil
 		}
 		refs = append(refs, way.NodeIDs...)
-		return writeSearchWay(wayWriter, result(way.ID, "way", osm.Coord{}, way.Tags), way.NodeIDs)
+		return writeSearchWay(wayWriter, result(way.ID, "way", osm.Coord{}, way.Tags, category), way.NodeIDs)
 	}})
 	if err != nil {
 		return err

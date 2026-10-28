@@ -8,6 +8,7 @@ LISTEN ?= :8080
 ADMIN_TOKEN ?=
 BAYERN_PBF ?= bayern.osm.pbf
 GEOFABRIK_URL ?= https://download.geofabrik.de/europe/germany/bayern-latest.osm.pbf
+PBF_URL ?= $(GEOFABRIK_URL)
 # sqliteimport enables tinySQL's pure-Go (modernc.org/sqlite, no cgo) MBTiles/
 # GeoPackage import (see cmd/geodata_tiles.go). Does not affect cmd/wasm,
 # which is built separately with its own GOOS=js GOARCH=wasm invocation.
@@ -69,12 +70,15 @@ ensure-maplibre-assets: ## Verify local MapLibre assets, downloading them when m
 		$(MAKE) maplibre-assets; \
 	fi
 
-pbf-download: ## Download a Geofabrik PBF extract into PBF (set GEOFABRIK_URL to pick a region; skips if PBF already exists, use FORCE=1 to refetch).
+pbf-download: ## Download an OSM extract from PBF_URL into PBF (skips existing files; use FORCE=1 to refetch).
 	@if [ -e "$(PBF)" ] && [ "$(FORCE)" != "1" ]; then \
 		echo "$(PBF) already exists, skipping (use FORCE=1 to refetch)."; \
 	else \
-		echo "Downloading $(GEOFABRIK_URL) -> $(PBF) ..."; \
-		curl -fsSL --retry 3 "$(GEOFABRIK_URL)" -o "$(PBF)"; \
+		echo "Downloading $(PBF_URL) -> $(PBF) ..."; \
+		set -e; stage=$$(mktemp "$(PBF).download.XXXXXX"); \
+		trap 'rm -f "$$stage"' EXIT HUP INT TERM; \
+		curl -fsSL --retry 3 "$(PBF_URL)" -o "$$stage"; \
+		mv -f "$$stage" "$(PBF)"; \
 	fi
 
 offline-prep: pbf-download ensure-micromap-assets maplibre-assets ## Prepare everything needed for a fully offline deployment: PBF extract + local microMap and MapLibre assets (no CDN needed at runtime).
@@ -125,5 +129,9 @@ check-mobile: ## Test the offline Go library without SQLite or cgo.
 	@mkdir -p "$(BIN_DIR)"
 	CGO_ENABLED=0 $(GO) build -o "$(BIN_DIR)/prepare-region" ./cmd/prepare-region
 
-clean: ## Remove locally built binaries.
+clean: ## Remove BIN_DIR plus top-level PBF files and osmmini binaries.
 	rm -rf "$(BIN_DIR)"
+	find . -maxdepth 1 \( -type f -o -type l \) \
+		\( -iname '*.pbf' -o -name 'osmmini' -o -name 'osmmini.exe' \
+		-o -name 'osmmini-server' -o -name 'osmmini-server.exe' -o -name 'osmmini.wasm' \) \
+		-exec rm -f -- {} +

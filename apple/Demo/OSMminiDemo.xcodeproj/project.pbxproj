@@ -17,6 +17,11 @@
 		A00000000000000000000024 /* DemoRegionStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000025 /* DemoRegionStorage.swift */; };
 		A00000000000000000000028 /* DemoPlaceLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000029 /* DemoPlaceLibrary.swift */; };
 		A00000000000000000000030 /* DemoPlaceSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000031 /* DemoPlaceSearch.swift */; };
+		A00000000000000000000032 /* DemoSliceSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000033 /* DemoSliceSelection.swift */; };
+		A00000000000000000000034 /* DemoSliceDownload.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000035 /* DemoSliceDownload.swift */; };
+		A00000000000000000000036 /* DemoMapLayers.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000037 /* DemoMapLayers.swift */; };
+		A00000000000000000000038 /* DemoMapLayersSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000039 /* DemoMapLayersSection.swift */; };
+		A00000000000000000000040 /* DemoImportPresetPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000041 /* DemoImportPresetPicker.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -31,6 +36,11 @@
 		A00000000000000000000026 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Configuration/Signing.xcconfig; sourceTree = "<group>"; };
 		A00000000000000000000029 /* DemoPlaceLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoPlaceLibrary.swift; sourceTree = "<group>"; };
 		A00000000000000000000031 /* DemoPlaceSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoPlaceSearch.swift; sourceTree = "<group>"; };
+		A00000000000000000000033 /* DemoSliceSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoSliceSelection.swift; sourceTree = "<group>"; };
+		A00000000000000000000035 /* DemoSliceDownload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoSliceDownload.swift; sourceTree = "<group>"; };
+		A00000000000000000000037 /* DemoMapLayers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoMapLayers.swift; sourceTree = "<group>"; };
+		A00000000000000000000039 /* DemoMapLayersSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoMapLayersSection.swift; sourceTree = "<group>"; };
+		A00000000000000000000041 /* DemoImportPresetPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DemoImportPresetPicker.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -57,6 +67,11 @@
 				A00000000000000000000025 /* DemoRegionStorage.swift */,
 				A00000000000000000000029 /* DemoPlaceLibrary.swift */,
 				A00000000000000000000031 /* DemoPlaceSearch.swift */,
+				A00000000000000000000033 /* DemoSliceSelection.swift */,
+				A00000000000000000000035 /* DemoSliceDownload.swift */,
+				A00000000000000000000039 /* DemoMapLayersSection.swift */,
+				A00000000000000000000041 /* DemoImportPresetPicker.swift */,
+				A00000000000000000000037 /* DemoMapLayers.swift */,
 				A00000000000000000000026 /* Signing.xcconfig */,
 				A00000000000000000000008 /* Products */,
 			);
@@ -147,6 +162,11 @@
 				A00000000000000000000024 /* DemoRegionStorage.swift in Sources */,
 				A00000000000000000000028 /* DemoPlaceLibrary.swift in Sources */,
 				A00000000000000000000030 /* DemoPlaceSearch.swift in Sources */,
+				A00000000000000000000032 /* DemoSliceSelection.swift in Sources */,
+				A00000000000000000000034 /* DemoSliceDownload.swift in Sources */,
+				A00000000000000000000038 /* DemoMapLayersSection.swift in Sources */,
+				A00000000000000000000040 /* DemoImportPresetPicker.swift in Sources */,
+				A00000000000000000000036 /* DemoMapLayers.swift in Sources */,
 				A00000000000000000000016 /* RouteExporter.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

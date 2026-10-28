@@ -28,7 +28,7 @@ Requires Go 1.26.5+, `curl`, and an OSM PBF extract. Node.js is needed for brows
 tests; building microMap assets also requires npm.
 
 ```sh
-make offline-prep GEOFABRIK_URL='https://download.geofabrik.de/europe/germany/bayern/niederbayern-latest.osm.pbf'
+make offline-prep PBF_URL='https://download.geofabrik.de/europe/germany/bayern/niederbayern-latest.osm.pbf'
 make run
 ```
 
@@ -38,6 +38,26 @@ once; subsequent use needs no network connection.
 
 Use `make run PBF=/path/to/region.osm.pbf` for an existing extract.
 `go run ./cmd help` lists commands and flags.
+
+`make clean` deletes `bin/` (or `BIN_DIR`) and all PBF files directly in the
+current directory, plus root-level `osmmini`, `osmmini-server`, their `.exe`
+variants and `osmmini.wasm`. The PBF search does not descend into subdirectories.
+Symlinks are unlinked, leaving their targets untouched. Use
+`make -n clean` to preview the commands without deleting files.
+
+`PBF_URL` also accepts extracts from other providers, including
+[OpenStreetMap France](https://download.openstreetmap.fr/extracts/):
+
+```sh
+make offline-prep PBF=gibraltar.osm.pbf PBF_URL='https://download.openstreetmap.fr/extracts/europe/gibraltar-latest.osm.pbf'
+make run PBF=gibraltar.osm.pbf
+```
+
+The default remains the Geofabrik Bavaria extract. Existing `GEOFABRIK_URL`
+overrides remain supported; `PBF_URL` takes precedence when both are set.
+Failed or cancelled PBF downloads leave the destination unchanged.
+Downloads and asset preparation require network access; routing, search and the
+prepared local basemap work offline afterward.
 
 ## Map profiles
 

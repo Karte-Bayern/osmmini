@@ -1,21 +1,33 @@
 import CryptoKit
 import Foundation
 
-public struct GeofabrikRegion: Codable, Sendable, Identifiable, Hashable {
+public struct OSMExtractRegion: Codable, Sendable, Identifiable, Hashable {
   public let id: String, name: String
   public let parent: String?
   public let pbfURL: URL
+
+  public init(id: String, name: String, parent: String?, pbfURL: URL) {
+    self.id = id
+    self.name = name
+    self.parent = parent
+    self.pbfURL = pbfURL
+  }
 }
 
-/// Uses Geofabrik's public machine-readable catalog, without scraping HTML or
-/// hardcoding today's region list. The cached catalog is available offline.
-public actor Geofabrik {
-  public static let catalogURL = URL(string: "https://download.geofabrik.de/index-v1-nogeom.json")!
+/// Compatibility names for clients of the original Geofabrik-only API.
+public typealias GeofabrikRegion = OSMExtractRegion
+public typealias Geofabrik = OSMExtracts
+
+/// Loads a provider's public machine-readable catalog and retains it offline.
+/// Each instance owns one source; downloads and redirects stay with that source.
+public actor OSMExtracts {
+  public static let catalogURL = OSMExtractSource.geofabrik.catalogURL
+  public nonisolated let source: OSMExtractSource
   private let directory: URL
   private let catalogSession: URLSession
   private let downloadConfiguration: @Sendable () -> URLSessionConfiguration
-  private var catalog: [GeofabrikRegion]?
-  private var catalogResult: Result<[GeofabrikRegion], any Error>?
+  private var catalog: [OSMExtractRegion]?
+  private var catalogResult: Result<[OSMExtractRegion], any Error>?
   private var catalogRevision: UInt64 = 0
   private enum TransferKey: Hashable, Sendable {
     case catalog
@@ -29,17 +41,19 @@ public actor Geofabrik {
   private var waiters: [TransferKey: [Waiter]] = [:]
   private var downloadProgress: [TransferKey: GeofabrikDownloadProgress] = [:]
 
-  public init(directory: URL) {
+  public init(directory: URL, source: OSMExtractSource = .geofabrik) {
+    self.source = source
     self.directory = directory
     catalogSession = .shared
     downloadConfiguration = { .default }
   }
   // Inject sessions without process-wide URLProtocol registration in tests.
   init(
-    directory: URL, catalogSession: URLSession,
+    directory: URL, source: OSMExtractSource = .geofabrik, catalogSession: URLSession,
     downloadConfiguration: @escaping @Sendable () -> URLSessionConfiguration
   ) {
     self.directory = directory
+    self.source = source
     self.catalogSession = catalogSession
     self.downloadConfiguration = downloadConfiguration
   }
@@ -54,7 +68,7 @@ public actor Geofabrik {
     }
     let features: [Feature]
   }
-  public func regions(refresh: Bool = false) async throws -> [GeofabrikRegion] {
+  public func regions(refresh: Bool = false) async throws -> [OSMExtractRegion] {
     try Task.checkCancellation()
     if !refresh, let catalog { return catalog }
     let previousRevision = catalogRevision
@@ -70,23 +84,27 @@ public actor Geofabrik {
     }
     let directory = directory
     let session = catalogSession
+    let source = source
     let loading = Task.detached(priority: .utility) {
       try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-      let cache = directory.appendingPathComponent("geofabrik-index.json")
+      let cache = directory.appendingPathComponent(source.cacheFilename)
       let maximumCatalogBytes = 64 * 1024 * 1024
       if !refresh, let size = try? cache.resourceValues(forKeys: [.fileSizeKey]).fileSize,
         size > 0, size <= maximumCatalogBytes,
         let cached = try? Data(contentsOf: cache, options: .mappedIfSafe),
-        let regions = try? Self.decodeCatalog(cached)
+        let regions = try? Self.decodeCatalog(cached, source: source)
       {
         try Task.checkCancellation()
         return regions
       }
-      let (downloaded, response) = try await session.data(from: Self.catalogURL)
+      var request = URLRequest(url: source.catalogURL)
+      request.setValue("OSMmini-Apple/1.0 (offline regional maps)", forHTTPHeaderField: "User-Agent")
+      request.setValue("application/json", forHTTPHeaderField: "Accept")
+      let (downloaded, response) = try await session.data(for: request)
       guard let http = response as? HTTPURLResponse, http.statusCode == 200,
         downloaded.count <= maximumCatalogBytes
-      else { throw OSMminiError.native("Geofabrik catalog unavailable or too large") }
-      let regions = try Self.decodeCatalog(downloaded)
+      else { throw OSMminiError.native("\(source.displayName) catalog unavailable or too large") }
+      let regions = try Self.decodeCatalog(downloaded, source: source)
       try Task.checkCancellation()
       try downloaded.write(to: cache, options: .atomic)
       return regions
@@ -110,20 +128,74 @@ public actor Geofabrik {
       throw error
     }
   }
-  public static func decodeCatalog(_ data: Data) throws -> [GeofabrikRegion] {
-    try JSONDecoder().decode(Catalog.self, from: data).features.compactMap { feature in
-      let p = feature.properties
-      guard let raw = p.urls["pbf"], let url = URL(string: raw), permitted(url) else { return nil }
-      return GeofabrikRegion(id: p.id, name: p.name, parent: p.parent, pbfURL: url)
-    }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+  public static func decodeCatalog(_ data: Data) throws -> [OSMExtractRegion] {
+    try decodeCatalog(data, source: .geofabrik)
+  }
+
+  public static func decodeCatalog(_ data: Data, source: OSMExtractSource) throws -> [OSMExtractRegion] {
+    let regions: [OSMExtractRegion]
+    switch source {
+    case .geofabrik:
+      regions = try JSONDecoder().decode(Catalog.self, from: data).features.compactMap { feature in
+        let p = feature.properties
+        guard let raw = p.urls["pbf"], let url = URL(string: raw), source.permitsDownload(url)
+        else { return nil }
+        return OSMExtractRegion(id: p.id, name: p.name, parent: p.parent, pbfURL: url)
+      }
+    case .openStreetMapFrance:
+      regions = try decodeFranceCatalog(data)
+    }
+    guard !regions.isEmpty else {
+      throw OSMminiError.native("\(source.displayName) catalog contains no available regions")
+    }
+    return regions.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+  }
+
+  private static func decodeFranceCatalog(_ data: Data) throws -> [OSMExtractRegion] {
+    struct Tree: Decodable {
+      struct Entry: Decodable {
+        let path: String
+        let type: String
+        let mode: String?
+      }
+      let truncated: Bool
+      let tree: [Entry]
+    }
+    let catalog = try JSONDecoder().decode(Tree.self, from: data)
+    guard !catalog.truncated else {
+      throw OSMminiError.native("OpenStreetMap France catalog is incomplete")
+    }
+    // The provider's init_extracts_link.sh maps these polygons to the same
+    // relative paths under /extracts/, followed by -latest.osm.pbf.
+    let prefix = "osc_modif/polygons/"
+    var seen: Set<String> = []
+    return catalog.tree.compactMap { entry in
+      guard entry.type == "blob", entry.mode == nil || entry.mode == "100644"
+        || entry.mode == "100755",
+        entry.path.hasPrefix(prefix), entry.path.hasSuffix(".poly")
+      else { return nil }
+      let path = String(entry.path.dropFirst(prefix.count).dropLast(".poly".count))
+      guard OSMExtractSource.validRegionPath(path), seen.insert(path).inserted,
+        let url = URL(string: "https://download.openstreetmap.fr/extracts/\(path)-latest.osm.pbf"),
+        OSMExtractSource.openStreetMapFrance.permitsDownload(url)
+      else { return nil }
+      let components = path.split(separator: "/")
+      let name = String(components.last!)
+        .replacingOccurrences(of: "_", with: " ").replacingOccurrences(of: "-", with: " ")
+        .capitalized(with: Locale(identifier: "en_US_POSIX"))
+      return OSMExtractRegion(
+        id: path, name: name,
+        parent: components.count > 1 ? components.dropLast().joined(separator: "/") : nil,
+        pbfURL: url)
+    }
   }
   public func download(
-    _ region: GeofabrikRegion, maximumBytes: Int64 = 2 * 1024 * 1024 * 1024,
+    _ region: OSMExtractRegion, maximumBytes: Int64 = 2 * 1024 * 1024 * 1024,
     progress: (@Sendable (Int64, Int64) -> Void)? = nil
   ) async throws -> URL {
     try Task.checkCancellation()
-    guard Self.permitted(region.pbfURL), maximumBytes > 0 else {
-      throw OSMminiError.native("Invalid Geofabrik download")
+    guard source.permitsDownload(region.pbfURL), maximumBytes > 0 else {
+      throw OSMminiError.native("Invalid \(source.displayName) download")
     }
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     // Different regions can have the same basename (e.g. Georgia in Europe
@@ -146,7 +218,7 @@ public actor Geofabrik {
     }
   }
   private func download(
-    _ region: GeofabrikRegion, target: URL, key: TransferKey, maximumBytes: Int64,
+    _ region: OSMExtractRegion, target: URL, key: TransferKey, maximumBytes: Int64,
     progress: GeofabrikDownloadProgress
   ) async throws -> URL {
     try await acquire(key)
@@ -162,6 +234,7 @@ public actor Geofabrik {
     }
     let transfer = DownloadTransfer(
       url: region.pbfURL, target: target, maximumBytes: maximumBytes,
+      providerName: source.displayName, permitsURL: source.permitsDownload,
       progress: { progress.send($0, $1) },
       configuration: downloadConfiguration())
     let downloaded = try await withTaskCancellationHandler {
@@ -211,10 +284,6 @@ public actor Geofabrik {
     } else {
       active.remove(key)
     }
-  }
-  fileprivate static func permitted(_ url: URL) -> Bool {
-    url.scheme == "https" && url.host == "download.geofabrik.de" && url.user == nil
-      && url.password == nil && url.path.hasSuffix(".osm.pbf")
   }
   static func cacheFilename(_ url: URL) -> String {
     let digest = SHA256.hash(data: Data(url.absoluteString.utf8))
@@ -329,7 +398,7 @@ struct DownloadProgressThrottle {
   }
 }
 
-private final class DownloadTransfer: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+final class DownloadTransfer: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
   let url: URL, target: URL, maximumBytes: Int64
   let progress: (@Sendable (Int64, Int64) -> Void)?
   private let lock = NSLock()
@@ -343,12 +412,18 @@ private final class DownloadTransfer: NSObject, URLSessionDownloadDelegate, @unc
   private var downloadResult: Result<URL, any Error>?
   private var throttle = DownloadProgressThrottle()
   private let configuration: URLSessionConfiguration
+  private let providerName: String
+  private let permitsURL: @Sendable (URL) -> Bool
   private var resumeURL: URL { target.appendingPathExtension("resume") }
   init(
-    url: URL, target: URL, maximumBytes: Int64, progress: (@Sendable (Int64, Int64) -> Void)?,
+    url: URL, target: URL, maximumBytes: Int64, providerName: String,
+    permitsURL: @escaping @Sendable (URL) -> Bool,
+    progress: (@Sendable (Int64, Int64) -> Void)?,
     configuration: URLSessionConfiguration
   ) {
     self.url = url
+    self.providerName = providerName
+    self.permitsURL = permitsURL
     self.target = target
     self.maximumBytes = maximumBytes
     self.progress = progress
@@ -413,7 +488,7 @@ private final class DownloadTransfer: NSObject, URLSessionDownloadDelegate, @unc
     willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
     completionHandler: @escaping @Sendable (URLRequest?) -> Void
   ) {
-    completionHandler(request.url.map(Geofabrik.permitted) == true ? request : nil)
+    completionHandler(request.url.map(permitsURL) == true ? request : nil)
   }
   func urlSession(
     _ session: URLSession, downloadTask: URLSessionDownloadTask,
@@ -421,8 +496,8 @@ private final class DownloadTransfer: NSObject, URLSessionDownloadDelegate, @unc
   ) {
     do {
       guard let response = downloadTask.response as? HTTPURLResponse,
-        (200...299).contains(response.statusCode)
-      else { throw OSMminiError.native("Geofabrik download returned an HTTP error") }
+        (200...299).contains(response.statusCode), response.url.map(permitsURL) == true
+      else { throw OSMminiError.native("\(providerName) download returned an HTTP error") }
       let attributes = try FileManager.default.attributesOfItem(atPath: location.path)
       let bytes = (attributes[.size] as? NSNumber)?.int64Value ?? 0
       guard bytes > 0, bytes <= maximumBytes else {

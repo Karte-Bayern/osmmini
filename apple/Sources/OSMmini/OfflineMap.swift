@@ -4,8 +4,12 @@ import SwiftUI
 /// basemap, web view, HTTP server, external fonts or network requests are used.
 /// It renders the layers produced by tinyTiles' built-in regional generator.
 public struct OfflineMap: View {
-  public let engine: OfflineEngine
+  public let engine: OfflineEngine?
   public var route: Route?
+  /// Local vector files are drawn independently of the offline basemap.
+  public var overlays: [KMLDocument]
+  public var overlayFocus: KMLDocument?
+  public var overlayFocusRequest: UUID?
   public var onSelect: ((Coordinate) -> Void)?
   /// Receives named streets and points of interest from the visible offline
   /// tiles. When present, this replaces `onSelect`; empty taps still return a
@@ -33,16 +37,28 @@ public struct OfflineMap: View {
   public var onLocate: (() -> Void)?
   /// The host is currently waiting for a location fix or permission.
   public var isLocating: Bool
+  /// Cancel a pending fix or stop location updates from the location control.
+  public var onStopLocation: (() -> Void)?
   private let initialCenter: Coordinate?
   @State private var center: Coordinate
-  @State private var zoom: Int
-  @State private var tileLoader = OfflineMapTileLoader()
+  @State private var zoom: Double
+  @State private var zoomAnimator = OfflineMapZoomAnimator()
+  @State private var lastMagnification: Double?
+  @GestureState private var isMagnifying = false
+  @State private var tileLoader = OfflineMapTileLoader(retainingPreviousTiles: true)
   @State private var viewportFitter = OfflineMapViewportFitter()
   @State private var routeLoader = OfflineMapRouteLoader()
+  @State private var overlayLoader = OfflineMapOverlayLoader()
   @State private var cameraIntent = OfflineMapCameraIntent()
   @State private var retry = 0
   @GestureState private var drag = CGSize.zero
-  private var maximumDisplayZoom: Int { max(18, engine.manifest.maxZoom) }
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  private var detailZoom: Int { Int(floor(zoom)) }
+  private var minimumDisplayZoom: Int { engine?.manifest.minZoom ?? 0 }
+  private var maximumDisplayZoom: Int { max(18, engine?.manifest.maxZoom ?? 18) }
+  private var mapOwner: ObjectIdentifier { engine.map(ObjectIdentifier.init) ?? ObjectIdentifier(tileLoader) }
+  private var mapName: String { engine?.manifest.name ?? overlays.first?.name ?? "KML-Karte" }
   private var displayedMarkers: [OfflineMapMarker] {
     OfflineMapMarker.make(legacy: markers, start: routeStart, destination: routeDestination)
   }
@@ -56,18 +72,24 @@ public struct OfflineMap: View {
     let path: [Coordinate]?
   }
   public init(
-    engine: OfflineEngine, route: Route? = nil, center: Coordinate? = nil,
+    engine: OfflineEngine? = nil, route: Route? = nil, center: Coordinate? = nil,
+    overlays: [KMLDocument] = [], overlayFocus: KMLDocument? = nil,
+    overlayFocusRequest: UUID? = nil,
     markers: [Coordinate] = [], focus: Coordinate? = nil, focusRequest: UUID? = nil,
     focusMinimumZoom: Int? = nil,
     routeStart: Coordinate? = nil, routeDestination: Coordinate? = nil,
     selection: Coordinate? = nil,
     userLocation: Coordinate? = nil, userLocationAccuracy: Double? = nil,
     onLocate: (() -> Void)? = nil, isLocating: Bool = false,
+    onStopLocation: (() -> Void)? = nil,
     onFeatureSelect: ((MapSelection) -> Void)? = nil,
     onSelect: ((Coordinate) -> Void)? = nil
   ) {
     self.engine = engine
     self.route = route
+    self.overlays = overlays
+    self.overlayFocus = overlayFocus
+    self.overlayFocusRequest = overlayFocusRequest
     self.onSelect = onSelect
     self.onFeatureSelect = onFeatureSelect
     self.markers = markers
@@ -81,42 +103,59 @@ public struct OfflineMap: View {
     self.userLocationAccuracy = userLocationAccuracy
     self.onLocate = onLocate
     self.isLocating = isLocating
+    self.onStopLocation = onStopLocation
     initialCenter = center
-    let initialZoom = max(engine.manifest.minZoom, min(11, engine.manifest.maxZoom))
+    let initialZoom = max(engine?.manifest.minZoom ?? 0, min(11, engine?.manifest.maxZoom ?? 18))
     let focusedViewport = OfflineMapViewport.focusing(
       focus, currentZoom: initialZoom, minimumZoom: focusMinimumZoom,
-      minZoom: engine.manifest.minZoom, maxZoom: max(18, engine.manifest.maxZoom))
+      minZoom: engine?.manifest.minZoom ?? 0, maxZoom: max(18, engine?.manifest.maxZoom ?? 18))
     _center = State(
-      initialValue: focusedViewport?.center ?? center ?? engine.manifest.bounds.center)
-    _zoom = State(initialValue: focusedViewport?.zoom ?? initialZoom)
+      initialValue: focusedViewport?.center ?? center ?? engine?.manifest.bounds.center
+        ?? overlays.first?.firstCoordinate ?? Coordinate(lat: 0, lon: 0))
+    _zoom = State(initialValue: Double(focusedViewport?.zoom ?? initialZoom))
   }
   public var body: some View {
     GeometryReader { geometry in
       let size = geometry.size
       let tilePlan = OfflineMapTilePlan.make(
-        center: center, zoom: zoom, size: size, baseMaxZoom: engine.manifest.maxZoom)
-      let keys = tilePlan.keys
-      let request = TileRequest(owner: ObjectIdentifier(engine), keys: keys, retry: retry)
-      let routeRequest = RouteViewportRequest(owner: ObjectIdentifier(engine), path: route?.path)
+        center: center, displayZoom: zoom, size: size, baseMaxZoom: engine?.manifest.maxZoom ?? 14)
+      let keys = engine == nil ? [] : tilePlan.keys
+      let request = TileRequest(owner: mapOwner, keys: keys, retry: retry)
+      let routeRequest = RouteViewportRequest(owner: mapOwner, path: route?.path)
       Canvas { context, canvasSize in
         context.fill(
           Path(CGRect(origin: .zero, size: canvasSize)),
           with: .color(Color(red: 0.96, green: 0.95, blue: 0.92)))
         var labelTiles: [OfflineMapLabelTile] = []
-        for placement in tilePlan.base {
+        let fallback = OfflineMapTileFallback.regions(
+          for: tilePlan.base, cache: tileLoader.cache, owner: request.owner,
+          center: center, displayZoom: zoom, size: canvasSize)
+        let regions = fallback + tilePlan.base.map {
+          OfflineMapTileFallback.Region(placement: $0, clips: [])
+        }
+        for region in regions {
+          let placement = region.placement
           let key = placement.key
           guard let tile = tileLoader.cache.tile(for: key, owner: request.owner) else { continue }
-          let scale = placement.scale(at: zoom)
-          let tileOrigin = placement.origin(center: center, zoom: zoom, size: canvasSize)
+          let scale = placement.scale(atDisplayZoom: zoom)
+          let tileOrigin = placement.origin(center: center, displayZoom: zoom, size: canvasSize)
           let offset = CGPoint(x: tileOrigin.x + drag.width, y: tileOrigin.y + drag.height)
           var tileContext = context
+          if !region.clips.isEmpty {
+            var clip = Path()
+            for frame in region.clips {
+              clip.addRect(frame.offsetBy(dx: drag.width, dy: drag.height))
+            }
+            tileContext.clip(to: clip)
+          }
           tileContext.translateBy(x: offset.x, y: offset.y)
           tileContext.scaleBy(x: scale, y: scale)
           tileContext.clip(to: Path(CGRect(x: 0, y: 0, width: 256, height: 256)))
           let visible = CGRect(
             x: -offset.x / scale, y: -offset.y / scale,
             width: canvasSize.width / scale, height: canvasSize.height / scale)
-          let maximumRoadWidth = PreparedMapTile.roadWidth(major: true, overzoom: zoom - key.z)
+          let overzoom = max(0, detailZoom - key.z)
+          let maximumRoadWidth = PreparedMapTile.roadWidth(major: true, overzoom: overzoom)
           let padding = ((maximumRoadWidth + 1) / 2 + 1) / scale
           for index in tile.featureIndices(in: visible, padding: padding) {
             let feature = tile.features[index]
@@ -137,7 +176,7 @@ public struct OfflineMap: View {
                 feature.path, with: .color(Color(red: 0.83, green: 0.79, blue: 0.75)),
                 style: FillStyle(eoFill: true))
             case .road(let major):
-              let width = PreparedMapTile.roadWidth(major: major, overzoom: zoom - key.z)
+              let width = PreparedMapTile.roadWidth(major: major, overzoom: overzoom)
               tileContext.stroke(
                 feature.path, with: .color(.gray.opacity(0.45)),
                 style: StrokeStyle(
@@ -148,13 +187,13 @@ public struct OfflineMap: View {
                 style: StrokeStyle(lineWidth: width / scale, lineCap: .round, lineJoin: .round))
             }
           }
-          if !tile.labels.isEmpty || !tile.selectablePoints.isEmpty {
+          if region.clips.isEmpty && (!tile.labels.isEmpty || !tile.selectablePoints.isEmpty) {
             labelTiles.append(OfflineMapLabelTile(tile: tile, offset: offset, scale: scale))
           }
         }
         if let userLocation, userLocation.lon.isFinite,
           let accuracyRadius = OfflineMapLocationAccuracy.radius(
-            userLocationAccuracy, latitude: userLocation.lat, zoom: zoom)
+            userLocationAccuracy, latitude: userLocation.lat, displayZoom: zoom)
         {
           let radius = min(accuracyRadius, hypot(canvasSize.width, canvasSize.height) * 2)
           let point = screen(userLocation, size: canvasSize)
@@ -166,7 +205,7 @@ public struct OfflineMap: View {
         }
         if let preparedRoute = routeLoader.route(owner: request.owner, coordinates: route?.path) {
           for placement in preparedRoute.visible(
-            center: center, zoom: zoom, size: canvasSize, translation: drag)
+            center: center, displayZoom: zoom, size: canvasSize, translation: drag)
           {
             var routeContext = context
             routeContext.translateBy(x: placement.origin.x, y: placement.origin.y)
@@ -182,18 +221,22 @@ public struct OfflineMap: View {
           guard let tile = tileLoader.cache.tile(for: placement.key, owner: request.owner) else {
             continue
           }
-          let origin = placement.origin(center: center, zoom: zoom, size: canvasSize)
+          let origin = placement.origin(center: center, displayZoom: zoom, size: canvasSize)
           detailTiles.append(
             OfflineMapLabelTile(
               tile: tile,
               offset: CGPoint(x: origin.x + drag.width, y: origin.y + drag.height),
-              scale: placement.scale(at: zoom)))
+              scale: placement.scale(atDisplayZoom: zoom)))
         }
         let poiMarkers = OfflineMapPOILayout.markers(
-          in: tilePlan.hasDetailPOIs ? detailTiles : labelTiles, zoom: zoom, size: canvasSize)
+          in: tilePlan.hasDetailPOIs ? detailTiles : labelTiles, zoom: detailZoom, size: canvasSize)
         drawPlacePoints(labelTiles, context: &context, size: canvasSize)
         drawPOIs(poiMarkers, context: &context)
         drawLabels(labelTiles, poiMarkers: poiMarkers, context: &context, size: canvasSize)
+        for overlay in overlayLoader.prepared(for: overlays) {
+          overlay.draw(
+            in: &context, center: center, displayZoom: zoom, size: canvasSize, translation: drag)
+        }
         if let selection, selection.lat.isFinite, selection.lon.isFinite {
           let point = screen(selection, size: canvasSize)
           let pin = Path(
@@ -231,11 +274,11 @@ public struct OfflineMap: View {
       .environment(\.lineLimit, 1)
       .environment(\.truncationMode, .tail)
       .accessibilityElement(children: .ignore)
-      .accessibilityLabel("Offline-Karte von \(engine.manifest.name)")
+      .accessibilityLabel("Offline-Karte von \(mapName)")
       .accessibilityHint(
         onSelect == nil && onFeatureSelect == nil
-          ? "Doppeltippen oder mit Plus und Minus zoomen. Mit dem Regionsknopf die ganze Region anzeigen."
-          : "Doppeltippen oder mit Plus und Minus zoomen. Antippen wählt einen Ort. A markiert den Start, B das Ziel."
+          ? "Mit Scrollrad, Trackpad, zwei Fingern oder Plus und Minus zoomen. Ziehen verschiebt die Karte."
+          : "Mit Scrollrad, Trackpad, zwei Fingern oder Plus und Minus zoomen. Antippen wählt einen Ort. A markiert den Start, B das Ziel."
       )
       .contentShape(Rectangle())
       .gesture(
@@ -249,20 +292,21 @@ public struct OfflineMap: View {
           }
           .exclusively(
             before: SpatialTapGesture(count: 2).onEnded { tap in
-              navigate()
-              guard zoom < maximumDisplayZoom,
-                let viewport = OfflineMapViewport.zooming(
-                  center: center, from: zoom, to: zoom + 1, at: tap.location, size: size)
-              else { return }
-              center = viewport.center
-              zoom = viewport.zoom
+              animateZoom(
+                to: zoomAnimator.destination(adding: 1, to: zoom), at: tap.location, size: size)
             }.exclusively(
               before: SpatialTapGesture().onEnded { tap in
                 guard onSelect != nil || onFeatureSelect != nil else { return }
                 navigate()
                 if let onFeatureSelect {
+                  if let selected = overlayLoader.prepared(for: overlays).reversed().lazy.compactMap({
+                    $0.select(at: tap.location, center: center, displayZoom: zoom, size: size)
+                  }).first {
+                    onFeatureSelect(selected)
+                    return
+                  }
                   if let selection = OfflineMapSelection.select(
-                    at: tap.location, center: center, zoom: zoom, size: size,
+                    at: tap.location, center: center, displayZoom: zoom, size: size,
                     placements: tilePlan.placements, baseZoom: tilePlan.baseZoom,
                     poiZoom: tilePlan.poiZoom, labelObstacles: labelObstacles(size: size),
                     tile: { tileLoader.cache.tile(for: $0, owner: request.owner) })
@@ -280,18 +324,55 @@ public struct OfflineMap: View {
               })
           )
       )
-      .simultaneousGesture(
-        MagnifyGesture().onChanged { _ in navigate() }.onEnded { value in
-          navigate()
-          let delta = Int(log2(value.magnification).rounded())
-          zoom = max(engine.manifest.minZoom, min(maximumDisplayZoom, zoom + delta))
+      #if os(macOS)
+        .background {
+          OfflineMapMacInput(
+            excluding: [
+              controlsLayout(size: size).frame,
+              CGRect(x: 0, y: max(0, size.height - 82), width: 240, height: 82),
+            ],
+            onScrollZoom: { delta, anchor in
+              animateZoom(
+                to: zoomAnimator.destination(adding: delta, to: zoom), at: anchor, size: size)
+            },
+            onMagnify: { delta, anchor in
+              changeZoom(to: zoom + delta, at: anchor, size: size)
+            })
         }
-      )
+      #else
+        .simultaneousGesture(
+          MagnifyGesture(minimumScaleDelta: 0.001)
+            .updating($isMagnifying) { _, state, _ in state = true }
+            .onChanged { value in
+              let previous = lastMagnification ?? 1
+              lastMagnification = value.magnification
+              guard previous > 0, value.magnification > 0 else { return }
+              changeZoom(
+                to: zoom + log2(value.magnification / previous),
+                at: CGPoint(
+                  x: value.startAnchor.x * size.width, y: value.startAnchor.y * size.height),
+                size: size)
+            }
+            .onEnded { _ in lastMagnification = nil }
+        )
+        .onChange(of: isMagnifying) { _, active in
+          if !active { lastMagnification = nil }
+        }
+      #endif
       .overlay(alignment: .topTrailing) {
-        ViewThatFits(in: .vertical) {
-          VStack(spacing: 8) { controls(size: size) }
-          HStack(spacing: 8) { controls(size: size) }
-        }.buttonStyle(MapControlStyle()).padding()
+        let metrics = controlsLayout(size: size)
+        let layout = metrics.isVertical
+          ? AnyLayout(VStackLayout(spacing: 0)) : AnyLayout(HStackLayout(spacing: 0))
+        layout { controls(size: size, metrics: metrics) }
+          .buttonStyle(MapControlStyle(symbolSize: metrics.buttonSize == 36 ? 16 : 18))
+          .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+          .clipShape(RoundedRectangle(cornerRadius: 12))
+          .overlay {
+            RoundedRectangle(cornerRadius: 12).strokeBorder(.primary.opacity(0.12))
+              .allowsHitTesting(false)
+          }
+          .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
+          .padding(OfflineMapControlsLayout.inset)
       }
       .overlay(alignment: .topLeading) {
         if tileLoader.isLoading,
@@ -309,7 +390,7 @@ public struct OfflineMap: View {
       }
       .overlay(alignment: .bottomLeading) {
         VStack(alignment: .leading, spacing: 6) {
-          if let scale = OfflineMapScale.make(latitude: center.lat, zoom: zoom) {
+          if let scale = OfflineMapScale.make(latitude: center.lat, displayZoom: zoom) {
             VStack(alignment: .leading, spacing: 2) {
               Text(scale.label).font(.caption2.monospacedDigit())
               Path { path in
@@ -331,21 +412,28 @@ public struct OfflineMap: View {
               .frame(minHeight: 44)
               .disabled(tileLoader.isLoading)
           }
-          Link(
-            "© OpenStreetMap contributors · ODbL",
-            destination: URL(string: "https://www.openstreetmap.org/copyright")!
-          )
-          .font(.caption2).dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-          .accessibilityLabel("© OpenStreetMap contributors · ODbL")
+          if engine != nil {
+            Link(
+              "© OpenStreetMap contributors · ODbL",
+              destination: URL(string: "https://www.openstreetmap.org/copyright")!
+            )
+            .font(.caption2).dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+            .accessibilityLabel("© OpenStreetMap contributors · ODbL")
+          }
         }.padding(6).background(.regularMaterial)
       }
       .task(id: request) {
+        guard let engine else {
+          await tileLoader.load(owner: request.owner, keys: []) { _ in throw CancellationError() }
+          return
+        }
         let loadingKeys = OfflineMapTilePlacement.loadingKeys(
           in: tilePlan.placements, center: center)
         await tileLoader.load(owner: request.owner, keys: loadingKeys) { [engine] key in
           try await PreparedMapTile.prepare(engine.tile(z: key.z, x: key.x, y: key.y))
         }
       }
+      .task(id: overlays) { await overlayLoader.load(overlays) }
       .task(id: routeRequest) {
         await routeLoader.load(owner: routeRequest.owner, coordinates: routeRequest.path)
       }
@@ -354,61 +442,100 @@ public struct OfflineMap: View {
           coordinate: focus, id: focusRequest, minimumZoom: focusMinimumZoom)
       ) { _, request in
         guard
-          let viewport = OfflineMapViewport.focusing(
+          let viewport = OfflineMapContinuousViewport.focusing(
             request.coordinate, currentZoom: zoom, minimumZoom: request.minimumZoom,
-            minZoom: engine.manifest.minZoom, maxZoom: maximumDisplayZoom)
+            minZoom: minimumDisplayZoom, maxZoom: maximumDisplayZoom)
         else { return }
         navigate()
         center = viewport.center
         zoom = viewport.zoom
       }
       .onChange(
-        of: RouteViewportRequest(owner: ObjectIdentifier(engine), path: route?.path), initial: true
+        of: RouteViewportRequest(owner: mapOwner, path: route?.path), initial: true
       ) { _, request in
         let update = cameraIntent.update(
           owner: request.owner, path: request.path,
           hasExplicitCenter: initialCenter != nil || focus != nil)
         viewportFitter.cancel()
+        zoomAnimator.cancel()
         if update == .engine {
-          let initialZoom = max(engine.manifest.minZoom, min(11, engine.manifest.maxZoom))
+          let initialZoom = max(engine?.manifest.minZoom ?? 0, min(11, engine?.manifest.maxZoom ?? 18))
           let focusedViewport = OfflineMapViewport.focusing(
             focus, currentZoom: initialZoom, minimumZoom: focusMinimumZoom,
-            minZoom: engine.manifest.minZoom, maxZoom: maximumDisplayZoom)
-          center = focusedViewport?.center ?? initialCenter ?? engine.manifest.bounds.center
-          zoom = focusedViewport?.zoom ?? initialZoom
+            minZoom: minimumDisplayZoom, maxZoom: maximumDisplayZoom)
+          center = focusedViewport?.center ?? initialCenter ?? engine?.manifest.bounds.center
+            ?? overlays.first?.firstCoordinate ?? Coordinate(lat: 0, lon: 0)
+          zoom = Double(focusedViewport?.zoom ?? initialZoom)
         }
         updateViewport(size: size)
       }
-      .onChange(of: size) { _, _ in updateViewport(size: size) }
-      .onDisappear { viewportFitter.cancel() }
+      .onChange(
+        of: OfflineMapOverlayFocusRequest(document: overlayFocus, id: overlayFocusRequest),
+        initial: true
+      ) { _, request in
+        guard request.document != nil else { return }
+        cameraIntent.showOverlay()
+        updateViewport(size: size)
+      }
+      .onChange(of: overlays) { _, documents in
+        if let overlayFocus, !documents.contains(overlayFocus), cameraIntent.framing == .overlay {
+          navigate()
+        }
+      }
+      .onChange(of: size) { _, _ in
+        updateViewport(size: size)
+      }
+      .onDisappear {
+        viewportFitter.cancel()
+        zoomAnimator.cancel()
+      }
     }
   }
   private func world(_ c: Coordinate) -> CGPoint {
-    WebMercator.world(c, zoom: zoom)
+    WebMercator.world(c, displayZoom: zoom)
   }
   private struct MapControlStyle: ButtonStyle {
+    let symbolSize: CGFloat
     @Environment(\.isEnabled) private var isEnabled
     func makeBody(configuration: Configuration) -> some View {
       configuration.label
-        .font(.system(size: 18, weight: .medium))
+        .font(.system(size: symbolSize, weight: .medium))
         .foregroundStyle(.primary)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-        .overlay {
-          RoundedRectangle(cornerRadius: 10)
-            .strokeBorder(.primary.opacity(configuration.isPressed ? 0.3 : 0.12))
-        }
-        .opacity(isEnabled ? (configuration.isPressed ? 0.65 : 1) : 0.4)
-        .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
+        .contentShape(Rectangle())
+        .background(.primary.opacity(configuration.isPressed ? 0.12 : 0))
+        .opacity(isEnabled ? 1 : 0.4)
     }
   }
-  @ViewBuilder private func controls(size: CGSize) -> some View {
+
+  private func controlsLayout(size: CGSize) -> OfflineMapControlsLayout {
+    #if os(macOS)
+      let buttonSize: CGFloat = dynamicTypeSize.isAccessibilitySize ? 44 : 36
+    #else
+      let buttonSize: CGFloat = 44
+    #endif
+    return OfflineMapControlsLayout(
+      mapSize: size, buttonSize: buttonSize,
+      hasLocation: onLocate != nil || userLocation != nil, hasRoute: route?.path.isEmpty == false)
+  }
+
+  private func controlSeparator(_ metrics: OfflineMapControlsLayout) -> some View {
+    Rectangle().fill(.primary.opacity(0.12))
+      .frame(
+        width: metrics.isVertical ? metrics.buttonSize - 16 : OfflineMapControlsLayout.separator,
+        height: metrics.isVertical ? OfflineMapControlsLayout.separator : metrics.buttonSize - 16)
+      .accessibilityHidden(true)
+  }
+
+  @ViewBuilder private func controls(size: CGSize, metrics: OfflineMapControlsLayout) -> some View {
     if onLocate != nil || userLocation != nil {
       Button {
-        if let onLocate {
+        if isLocating, let onStopLocation {
+          onStopLocation()
+        } else if let onLocate {
           onLocate()
-        } else if let viewport = OfflineMapViewport.focusing(
+        } else if let viewport = OfflineMapContinuousViewport.focusing(
           userLocation, currentZoom: zoom, minimumZoom: 16,
-          minZoom: engine.manifest.minZoom, maxZoom: maximumDisplayZoom)
+          minZoom: minimumDisplayZoom, maxZoom: maximumDisplayZoom)
         {
           navigate()
           center = viewport.center
@@ -421,41 +548,50 @@ public struct OfflineMap: View {
           } else {
             Image(systemName: userLocation == nil ? "location" : "location.fill")
           }
-        }.frame(width: 44, height: 44)
+        }.frame(width: metrics.buttonSize, height: metrics.buttonSize)
       }
-      .accessibilityLabel(isLocating ? "Standort wird ermittelt" : "Auf meinen Standort zoomen")
-      .help("Aktuellen GPS-Standort heranzoomen")
-      .disabled(isLocating)
+      .accessibilityLabel(
+        isLocating
+          ? (onStopLocation == nil ? "Standort wird ermittelt" : "Standortsuche abbrechen")
+          : "Auf meinen Standort zoomen")
+      .help(
+        isLocating && onStopLocation != nil
+          ? "Standortsuche abbrechen" : "Aktuellen GPS-Standort heranzoomen")
+      .disabled(isLocating && onStopLocation == nil)
+      .contextMenu {
+        if let onStopLocation, isLocating || userLocation != nil {
+          Button("Standort ausschalten", systemImage: "location.slash", action: onStopLocation)
+        }
+      }
+      controlSeparator(metrics)
     }
     Button {
-      navigate()
-      zoom = min(maximumDisplayZoom, zoom + 1)
+      animateZoom(
+        to: zoomAnimator.destination(adding: 1, to: zoom),
+        at: CGPoint(x: size.width / 2, y: size.height / 2), size: size)
     } label: {
-      Image(systemName: "plus").frame(width: 44, height: 44)
+      Image(systemName: "plus").frame(width: metrics.buttonSize, height: metrics.buttonSize)
     }.accessibilityLabel("Vergrößern")
       .help("Karte vergrößern")
-      .disabled(zoom >= maximumDisplayZoom)
+      .disabled(zoom >= Double(maximumDisplayZoom))
+    controlSeparator(metrics)
     Button {
-      navigate()
-      zoom = max(engine.manifest.minZoom, zoom - 1)
+      animateZoom(
+        to: zoomAnimator.destination(adding: -1, to: zoom),
+        at: CGPoint(x: size.width / 2, y: size.height / 2), size: size)
     } label: {
-      Image(systemName: "minus").frame(width: 44, height: 44)
+      Image(systemName: "minus").frame(width: metrics.buttonSize, height: metrics.buttonSize)
     }.accessibilityLabel("Verkleinern")
       .help("Karte verkleinern")
-      .disabled(zoom <= engine.manifest.minZoom)
-    Button {
-      cameraIntent.showRegion()
-      updateViewport(size: size)
-    } label: {
-      Image(systemName: "scope").frame(width: 44, height: 44)
-    }.accessibilityLabel("Ganze Region anzeigen")
-      .help("Ganze Offline-Region anzeigen")
+      .disabled(zoom <= Double(minimumDisplayZoom))
     if let route, !route.path.isEmpty {
+      controlSeparator(metrics)
       Button {
         cameraIntent.showRoute()
         updateViewport(size: size)
       } label: {
-        Image(systemName: "arrow.up.left.and.arrow.down.right").frame(width: 44, height: 44)
+        Image(systemName: "arrow.up.left.and.arrow.down.right")
+          .frame(width: metrics.buttonSize, height: metrics.buttonSize)
       }.accessibilityLabel("Ganze Route anzeigen")
         .help("Ganze Route anzeigen")
     }
@@ -474,16 +610,8 @@ public struct OfflineMap: View {
     }
   }
   private func labelObstacles(size: CGSize) -> [CGRect] {
-    let controlLength: CGFloat =
-      (route?.path.isEmpty == false ? 232 : 180)
-      + (onLocate != nil || userLocation != nil ? 52 : 0)
-    let controlsSize =
-      size.height >= controlLength
-      ? CGSize(width: 76, height: controlLength) : CGSize(width: controlLength, height: 76)
     var obstacles = [
-      CGRect(
-        x: max(0, size.width - controlsSize.width), y: 0, width: controlsSize.width,
-        height: controlsSize.height),
+      controlsLayout(size: size).frame,
       CGRect(x: 0, y: max(0, size.height - 80), width: min(size.width, 260), height: 80),
     ]
     for coordinate in displayedMarkers.map(\.coordinate)
@@ -501,14 +629,14 @@ public struct OfflineMap: View {
   ) {
     var obstacles = labelObstacles(size: size)
     for marker in poiMarkers {
-      let markerRadius = marker.radius(at: zoom)
+      let markerRadius = marker.radius(at: detailZoom)
       obstacles.append(
         CGRect(
           x: marker.point.x - markerRadius - 2, y: marker.point.y - markerRadius - 2,
           width: markerRadius * 2 + 4, height: markerRadius * 2 + 4))
     }
     let poiLabels = OfflineMapPOILayout.labels(
-      for: poiMarkers, zoom: zoom, size: size, excluding: obstacles)
+      for: poiMarkers, zoom: detailZoom, size: size, excluding: obstacles)
     obstacles.append(contentsOf: poiLabels.map(\.frame))
     var layout = OfflineMapLabelLayout(obstacles: obstacles, viewport: size)
     let viewport = CGRect(origin: .zero, size: size)
@@ -553,7 +681,7 @@ public struct OfflineMap: View {
   private func drawPOIs(_ markers: [OfflineMapPOILayout.Marker], context: inout GraphicsContext) {
     let groupInk = Color(red: 0.24, green: 0.27, blue: 0.42)
     for marker in markers {
-      let radius = marker.radius(at: zoom)
+      let radius = marker.radius(at: detailZoom)
       let category = POICategory(marker.feature.category)
       let dot = Path(
         ellipseIn: CGRect(
@@ -603,34 +731,80 @@ public struct OfflineMap: View {
     }
   }
   private func coordinate(_ p: CGPoint) -> Coordinate {
-    WebMercator.coordinate(p, zoom: zoom)
+    WebMercator.coordinate(p, displayZoom: zoom)
   }
   private func screen(_ c: Coordinate, size: CGSize) -> CGPoint {
-    let p = WebMercator.offset(c, from: center, zoom: zoom)
+    let p = WebMercator.offset(c, from: center, displayZoom: zoom)
     return CGPoint(
       x: p.x + size.width / 2 + drag.width,
       y: p.y + size.height / 2 + drag.height)
   }
-  private func navigate() {
+  private func navigate(cancelZoom: Bool = true) {
     cameraIntent.navigate()
     viewportFitter.cancel()
+    if cancelZoom { zoomAnimator.cancel() }
+  }
+
+  private func changeZoom(to target: Double, at anchor: CGPoint, size: CGSize) {
+    navigate()
+    guard let viewport = OfflineMapContinuousViewport.zooming(
+      center: center, from: zoom, to: target, at: anchor, size: size,
+      minZoom: minimumDisplayZoom, maxZoom: maximumDisplayZoom)
+    else { return }
+    center = viewport.center
+    zoom = viewport.zoom
+  }
+
+  private func animateZoom(to target: Double, at anchor: CGPoint, size: CGSize) {
+    if reduceMotion {
+      changeZoom(to: target, at: anchor, size: size)
+      return
+    }
+    navigate(cancelZoom: false)
+    zoomAnimator.animate(
+      from: OfflineMapContinuousViewport(center: center, zoom: zoom), to: target,
+      anchor: anchor, size: size,
+      minZoom: minimumDisplayZoom, maxZoom: maximumDisplayZoom
+    ) { viewport in
+      center = viewport.center
+      zoom = viewport.zoom
+    }
   }
   private func updateViewport(size: CGSize) {
     viewportFitter.cancel()
+    zoomAnimator.cancel()
     let apply: @MainActor (OfflineMapViewport) -> Void = { viewport in
       center = viewport.center
-      zoom = viewport.zoom
+      zoom = Double(viewport.zoom)
     }
     switch cameraIntent.framing {
     case .manual: break
     case .region:
-      viewportFitter.fit(
-        engine.manifest.bounds, size: size, minZoom: engine.manifest.minZoom,
-        maxZoom: maximumDisplayZoom, apply: apply)
+      if let engine {
+        // Bounds fit in constant time and retain fractional zoom, avoiding the
+        // unused space introduced by rounding down to a source tile level.
+        if let viewport = OfflineMapContinuousViewport.fitting(
+          engine.manifest.bounds, size: size, minZoom: minimumDisplayZoom,
+          maxZoom: maximumDisplayZoom)
+        {
+          center = viewport.center
+          zoom = viewport.zoom
+        }
+      } else {
+        viewportFitter.fit(
+          overlays.flatMap(\.coordinates), size: size, minZoom: minimumDisplayZoom,
+          maxZoom: maximumDisplayZoom, apply: apply)
+      }
+    case .overlay:
+      if let overlayFocus, overlays.contains(overlayFocus) {
+        viewportFitter.fit(
+          overlayFocus.coordinates, size: size, minZoom: minimumDisplayZoom,
+          maxZoom: maximumDisplayZoom, apply: apply)
+      }
     case .route:
       if let route {
         viewportFitter.fit(
-          route.path, size: size, minZoom: engine.manifest.minZoom,
+          route.path, size: size, minZoom: minimumDisplayZoom,
           maxZoom: maximumDisplayZoom, apply: apply)
       }
     }

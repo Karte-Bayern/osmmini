@@ -21,6 +21,7 @@ func main() {
 	minZoom := flag.Int("min-zoom", 5, "first map zoom (5…14)")
 	maxZoom := flag.Int("max-zoom", 14, "last map zoom (5…14)")
 	memory := flag.Int64("tile-memory-mb", 256, "tinySQL tile import cache budget in MiB; not a total process limit")
+	poiPreset := flag.String("poi-preset", "all", "points of interest: everyday, firefighting, outdoor, cycling, travel or all")
 	flag.Parse()
 	if *pbf == "" || *output == "" {
 		flag.Usage()
@@ -28,7 +29,7 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	m, err := mobile.Import(ctx, mobile.ImportOptions{PBF: *pbf, Destination: *output, Name: *name, MinZoom: *minZoom, MaxZoom: *maxZoom, MaxImportNodes: *maxNodes, TileMemoryBytes: *memory << 20}, func(p mobile.Progress) { fmt.Fprintf(os.Stderr, "%3.0f%% %s\n", p.Fraction*100, p.Phase) })
+	m, err := mobile.Import(ctx, mobile.ImportOptions{PBF: *pbf, Destination: *output, Name: *name, MinZoom: *minZoom, MaxZoom: *maxZoom, MaxImportNodes: *maxNodes, TileMemoryBytes: *memory << 20, POIPreset: mobile.POIPreset(*poiPreset)}, func(p mobile.Progress) { fmt.Fprintf(os.Stderr, "%3.0f%% %s\n", p.Fraction*100, p.Phase) })
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

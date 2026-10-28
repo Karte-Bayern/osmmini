@@ -5,7 +5,11 @@ enum WebMercator {
   static let maximumLatitude = 85.0511
 
   static func world(_ coordinate: Coordinate, zoom: Int) -> CGPoint {
-    let scale = exp2(Double(zoom)) * 256
+    world(coordinate, displayZoom: Double(zoom))
+  }
+
+  static func world(_ coordinate: Coordinate, displayZoom: Double) -> CGPoint {
+    let scale = exp2(displayZoom) * 256
     let latitude = max(-maximumLatitude, min(maximumLatitude, coordinate.lat)) * .pi / 180
     return CGPoint(
       x: (coordinate.lon + 180) / 360 * scale,
@@ -13,7 +17,11 @@ enum WebMercator {
   }
 
   static func coordinate(_ point: CGPoint, zoom: Int) -> Coordinate {
-    let scale = exp2(Double(zoom)) * 256
+    coordinate(point, displayZoom: Double(zoom))
+  }
+
+  static func coordinate(_ point: CGPoint, displayZoom: Double) -> Coordinate {
+    let scale = exp2(displayZoom) * 256
     let latitude = atan(sinh(.pi * (1 - 2 * point.y / scale))) * 180 / .pi
     let longitude =
       ((point.x / scale * 360).truncatingRemainder(dividingBy: 360) + 360)
@@ -22,9 +30,15 @@ enum WebMercator {
   }
 
   static func offset(_ coordinate: Coordinate, from center: Coordinate, zoom: Int) -> CGPoint {
-    let point = world(coordinate, zoom: zoom)
-    let origin = world(center, zoom: zoom)
-    let scale = exp2(Double(zoom)) * 256
+    offset(coordinate, from: center, displayZoom: Double(zoom))
+  }
+
+  static func offset(
+    _ coordinate: Coordinate, from center: Coordinate, displayZoom: Double
+  ) -> CGPoint {
+    let point = world(coordinate, displayZoom: displayZoom)
+    let origin = world(center, displayZoom: displayZoom)
+    let scale = exp2(displayZoom) * 256
     var dx = (point.x - origin.x).truncatingRemainder(dividingBy: scale)
     if dx > scale / 2 { dx -= scale }
     if dx < -scale / 2 { dx += scale }
@@ -32,9 +46,96 @@ enum WebMercator {
   }
 
   static func metersPerPixel(latitude: Double, zoom: Int) -> Double? {
-    guard latitude.isFinite, abs(latitude) <= 90, (0...30).contains(zoom) else { return nil }
+    metersPerPixel(latitude: latitude, displayZoom: Double(zoom))
+  }
+
+  static func metersPerPixel(latitude: Double, displayZoom: Double) -> Double? {
+    guard latitude.isFinite, abs(latitude) <= 90, displayZoom.isFinite,
+      (0...30).contains(displayZoom)
+    else { return nil }
     let latitude = min(maximumLatitude, max(-maximumLatitude, latitude))
-    return cos(latitude * .pi / 180) * 40_075_016.685_578_49 / (256 * exp2(Double(zoom)))
+    return cos(latitude * .pi / 180) * 40_075_016.685_578_49 / (256 * exp2(displayZoom))
+  }
+}
+
+/// Display zoom remains continuous; only the source tile level is integral.
+struct OfflineMapContinuousViewport: Sendable {
+  let center: Coordinate
+  let zoom: Double
+
+  static func focusing(
+    _ coordinate: Coordinate?, currentZoom: Double, minimumZoom: Int? = nil,
+    minZoom: Int, maxZoom: Int
+  ) -> Self? {
+    guard let coordinate, coordinate.lat.isFinite, abs(coordinate.lat) <= 90,
+      coordinate.lon.isFinite, currentZoom.isFinite, (0...30).contains(currentZoom),
+      minZoom >= 0, maxZoom >= minZoom, maxZoom <= 30
+    else { return nil }
+    let zoom = max(currentZoom, Double(minimumZoom ?? minZoom))
+    return Self(center: coordinate, zoom: max(Double(minZoom), min(Double(maxZoom), zoom)))
+  }
+
+  /// Region bounds describe an interval, which may cover more than half the world.
+  /// Unlike a route, that interval must not be replaced with the shorter longitude arc.
+  static func fitting(
+    _ bounds: RegionBounds, size: CGSize, minZoom: Int, maxZoom: Int,
+    padding: CGFloat = 24
+  ) -> Self? {
+    guard !Task.isCancelled, size.width.isFinite, size.height.isFinite,
+      size.width > 0, size.height > 0, padding.isFinite,
+      minZoom >= 0, maxZoom >= minZoom, maxZoom <= 30,
+      bounds.minLat.isFinite, bounds.maxLat.isFinite, bounds.minLon.isFinite,
+      bounds.maxLon.isFinite, bounds.minLat >= -90, bounds.maxLat <= 90,
+      bounds.minLat <= bounds.maxLat, bounds.minLon >= -180, bounds.minLon <= 180,
+      bounds.maxLon >= -180, bounds.maxLon <= 180
+    else { return nil }
+    let northWest = WebMercator.world(
+      Coordinate(lat: bounds.maxLat, lon: bounds.minLon), zoom: 0)
+    let southEast = WebMercator.world(
+      Coordinate(lat: bounds.minLat, lon: bounds.maxLon), zoom: 0)
+    var longitudeSpan = bounds.maxLon - bounds.minLon
+    if longitudeSpan < 0 { longitudeSpan += 360 }
+    let width = longitudeSpan / 360 * 256
+    let height = southEast.y - northWest.y
+    let inset = min(max(0, padding), min(size.width, size.height) / 4)
+    let scaleX = width > 0 ? (size.width - 2 * inset) / width : .infinity
+    let scaleY = height > 0 ? (size.height - 2 * inset) / height : .infinity
+    let scale = min(scaleX, scaleY)
+    let fittedZoom = scale.isFinite ? log2(scale) : Double(maxZoom)
+    return Self(
+      center: WebMercator.coordinate(
+        CGPoint(x: northWest.x + width / 2, y: (northWest.y + southEast.y) / 2), zoom: 0),
+      zoom: max(Double(minZoom), min(Double(maxZoom), fittedZoom)))
+  }
+
+  /// Clamp the requested zoom before projecting so the cursor anchor cannot drift
+  /// when a gesture reaches either display limit.
+  static func zooming(
+    center: Coordinate, from oldZoom: Double, to requestedZoom: Double,
+    at anchor: CGPoint, size: CGSize, minZoom: Int = 0, maxZoom: Int = 30
+  ) -> Self? {
+    guard center.lat.isFinite, abs(center.lat) <= 90, center.lon.isFinite,
+      oldZoom.isFinite, (0...30).contains(oldZoom), requestedZoom.isFinite,
+      minZoom >= 0, maxZoom >= minZoom, maxZoom <= 30,
+      anchor.x.isFinite, anchor.y.isFinite, size.width.isFinite, size.height.isFinite,
+      size.width > 0, size.height > 0
+    else { return nil }
+    let zoom = max(Double(minZoom), min(Double(maxZoom), requestedZoom))
+    guard zoom != oldZoom else { return Self(center: center, zoom: zoom) }
+    let offset = CGPoint(x: anchor.x - size.width / 2, y: anchor.y - size.height / 2)
+    let origin = WebMercator.world(
+      Coordinate(lat: center.lat, lon: center.lon.truncatingRemainder(dividingBy: 360)),
+      displayZoom: oldZoom)
+    let scale = exp2(zoom - oldZoom)
+    // The anchor may lie beyond the world's north/south edge at an overview
+    // zoom. Keep it in projected space; a latitude round-trip would clamp it
+    // to the pole and move the camera before the zoom even starts.
+    let projected = CGPoint(
+      x: (origin.x + offset.x) * scale, y: (origin.y + offset.y) * scale)
+    return Self(
+      center: WebMercator.coordinate(
+        CGPoint(x: projected.x - offset.x, y: projected.y - offset.y), displayZoom: zoom),
+      zoom: zoom)
   }
 }
 
@@ -48,55 +149,32 @@ struct OfflineMapViewport: Sendable {
     _ coordinate: Coordinate?, currentZoom: Int, minimumZoom: Int? = nil,
     minZoom: Int, maxZoom: Int
   ) -> Self? {
-    guard let coordinate, coordinate.lat.isFinite, abs(coordinate.lat) <= 90,
-      coordinate.lon.isFinite, (0...30).contains(currentZoom),
-      minZoom >= 0, maxZoom >= minZoom, maxZoom <= 30
+    guard let viewport = OfflineMapContinuousViewport.focusing(
+      coordinate, currentZoom: Double(currentZoom), minimumZoom: minimumZoom,
+      minZoom: minZoom, maxZoom: maxZoom)
     else { return nil }
-    return Self(
-      center: coordinate,
-      zoom: max(minZoom, min(maxZoom, max(currentZoom, minimumZoom ?? currentZoom))))
+    return Self(center: viewport.center, zoom: Int(viewport.zoom))
   }
 
   /// Keep the coordinate under a double tap fixed while changing zoom.
   static func zooming(
     center: Coordinate, from oldZoom: Int, to zoom: Int, at anchor: CGPoint, size: CGSize
   ) -> Self? {
-    guard center.lat.isFinite, abs(center.lat) <= 90, center.lon.isFinite,
-      (0...30).contains(oldZoom), (0...30).contains(zoom),
-      anchor.x.isFinite, anchor.y.isFinite, size.width.isFinite, size.height.isFinite,
-      size.width > 0, size.height > 0
+    guard (0...30).contains(zoom),
+      let viewport = OfflineMapContinuousViewport.zooming(
+        center: center, from: Double(oldZoom), to: Double(zoom), at: anchor, size: size)
     else { return nil }
-    let offset = CGPoint(x: anchor.x - size.width / 2, y: anchor.y - size.height / 2)
-    let origin = WebMercator.world(center, zoom: oldZoom)
-    let point = WebMercator.coordinate(
-      CGPoint(x: origin.x + offset.x, y: origin.y + offset.y), zoom: oldZoom)
-    let projected = WebMercator.world(point, zoom: zoom)
-    return Self(
-      center: WebMercator.coordinate(
-        CGPoint(x: projected.x - offset.x, y: projected.y - offset.y), zoom: zoom), zoom: zoom)
+    return Self(center: viewport.center, zoom: Int(viewport.zoom))
   }
 
-  /// Region bounds describe an interval, which may cover more than half the world.
-  /// Unlike a route, that interval must not be replaced with the shorter longitude arc.
   static func fitting(
     _ bounds: RegionBounds, size: CGSize, minZoom: Int, maxZoom: Int,
     padding: CGFloat = 48
   ) -> Self? {
-    guard bounds.minLat.isFinite, bounds.maxLat.isFinite, bounds.minLon.isFinite,
-      bounds.maxLon.isFinite, bounds.minLat >= -90, bounds.maxLat <= 90,
-      bounds.minLat <= bounds.maxLat, bounds.minLon >= -180, bounds.minLon <= 180,
-      bounds.maxLon >= -180, bounds.maxLon <= 180
+    guard let viewport = OfflineMapContinuousViewport.fitting(
+      bounds, size: size, minZoom: minZoom, maxZoom: maxZoom, padding: padding)
     else { return nil }
-    let northWest = WebMercator.world(
-      Coordinate(lat: bounds.maxLat, lon: bounds.minLon), zoom: 0)
-    let southEast = WebMercator.world(
-      Coordinate(lat: bounds.minLat, lon: bounds.maxLon), zoom: 0)
-    var longitudeSpan = bounds.maxLon - bounds.minLon
-    if longitudeSpan < 0 { longitudeSpan += 360 }
-    return fitting(
-      minX: northWest.x, maxX: northWest.x + longitudeSpan / 360 * 256,
-      minY: northWest.y, maxY: southEast.y, size: size, minZoom: minZoom, maxZoom: maxZoom,
-      padding: padding)
+    return Self(center: viewport.center, zoom: Int(floor(viewport.zoom)))
   }
 
   /// Fit projected coordinates, using the shortest longitude arc across the dateline.
@@ -171,7 +249,7 @@ struct OfflineMapViewport: Sendable {
 /// Automatic framing follows viewport resizing until the user deliberately moves
 /// the map. Clearing a route retains the current view instead of jumping away.
 struct OfflineMapCameraIntent {
-  enum Framing { case region, route, manual }
+  enum Framing { case region, route, overlay, manual }
   enum Update { case engine, route, unchanged }
   private(set) var framing: Framing = .region
   private(set) var owner: ObjectIdentifier?
@@ -199,6 +277,7 @@ struct OfflineMapCameraIntent {
   mutating func navigate() { framing = .manual }
   mutating func showRegion() { framing = .region }
   mutating func showRoute() { framing = .route }
+  mutating func showOverlay() { framing = .overlay }
 }
 
 struct OfflineMapFocusRequest: Equatable {
@@ -415,8 +494,12 @@ struct OfflineMapLabelLayout {
 
 enum OfflineMapLocationAccuracy {
   static func radius(_ accuracy: Double?, latitude: Double, zoom: Int) -> CGFloat? {
+    radius(accuracy, latitude: latitude, displayZoom: Double(zoom))
+  }
+
+  static func radius(_ accuracy: Double?, latitude: Double, displayZoom: Double) -> CGFloat? {
     guard let accuracy, accuracy.isFinite, accuracy > 0,
-      let metersPerPixel = WebMercator.metersPerPixel(latitude: latitude, zoom: zoom)
+      let metersPerPixel = WebMercator.metersPerPixel(latitude: latitude, displayZoom: displayZoom)
     else { return nil }
     let radius = accuracy / metersPerPixel
     return radius.isFinite ? radius : nil
@@ -434,8 +517,12 @@ struct OfflineMapScale {
   }
 
   static func make(latitude: Double, zoom: Int, maximumWidth: CGFloat = 112) -> Self? {
+    make(latitude: latitude, displayZoom: Double(zoom), maximumWidth: maximumWidth)
+  }
+
+  static func make(latitude: Double, displayZoom: Double, maximumWidth: CGFloat = 112) -> Self? {
     guard maximumWidth.isFinite, maximumWidth > 0,
-      let metersPerPixel = WebMercator.metersPerPixel(latitude: latitude, zoom: zoom)
+      let metersPerPixel = WebMercator.metersPerPixel(latitude: latitude, displayZoom: displayZoom)
     else { return nil }
     let available = metersPerPixel * maximumWidth
     guard available.isFinite, available > 0 else { return nil }
@@ -546,16 +633,23 @@ struct OfflineMapTilePlacement: Hashable {
   let key: MapTileKey
   let worldX: Int
 
-  func scale(at zoom: Int) -> CGFloat {
-    exp2(Double(zoom - key.z))
+  func scale(at zoom: Int) -> CGFloat { scale(atDisplayZoom: Double(zoom)) }
+
+  func scale(atDisplayZoom zoom: Double) -> CGFloat {
+    exp2(zoom - Double(key.z))
   }
 
   /// Source geometry remains in 256-pixel tile coordinates, even when the
   /// display zoom exceeds the finest tile available in the offline region.
   func origin(center: Coordinate, zoom: Int, size: CGSize) -> CGPoint {
+    origin(center: center, displayZoom: Double(zoom), size: size)
+  }
+
+  func origin(center: Coordinate, displayZoom: Double, size: CGSize) -> CGPoint {
     let projected = WebMercator.world(
-      Coordinate(lat: center.lat, lon: center.lon.truncatingRemainder(dividingBy: 360)), zoom: zoom)
-    let tileSize = 256 * scale(at: zoom)
+      Coordinate(lat: center.lat, lon: center.lon.truncatingRemainder(dividingBy: 360)),
+      displayZoom: displayZoom)
+    let tileSize = 256 * scale(atDisplayZoom: displayZoom)
     return CGPoint(
       x: Double(worldX) * tileSize - projected.x + size.width / 2,
       y: Double(key.y) * tileSize - projected.y + size.height / 2)
@@ -587,14 +681,23 @@ struct OfflineMapTilePlacement: Hashable {
   static func visible(
     center: Coordinate, zoom: Int, size: CGSize, tileZoom: Int? = nil
   ) -> [Self] {
-    let sourceZoom = min(zoom, tileZoom ?? zoom)
-    guard size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0,
-      zoom >= 0, zoom <= 30, sourceZoom >= 0, center.lat.isFinite, center.lon.isFinite
+    visible(center: center, displayZoom: Double(zoom), size: size, tileZoom: tileZoom)
+  }
+
+  static func visible(
+    center: Coordinate, displayZoom: Double, size: CGSize, tileZoom: Int? = nil
+  ) -> [Self] {
+    guard displayZoom.isFinite, (0...30).contains(displayZoom),
+      size.width.isFinite, size.height.isFinite, size.width > 0, size.height > 0,
+      center.lat.isFinite, center.lon.isFinite
     else { return [] }
+    let sourceZoom = min(Int(floor(displayZoom)), tileZoom ?? Int(floor(displayZoom)))
+    guard sourceZoom >= 0 else { return [] }
     let origin = WebMercator.world(
-      Coordinate(lat: center.lat, lon: center.lon.truncatingRemainder(dividingBy: 360)), zoom: zoom)
+      Coordinate(lat: center.lat, lon: center.lon.truncatingRemainder(dividingBy: 360)),
+      displayZoom: displayZoom)
     let count = Int(exp2(Double(sourceZoom)))
-    let tileSize = 256 * exp2(Double(zoom - sourceZoom))
+    let tileSize = 256 * exp2(displayZoom - Double(sourceZoom))
     let halfWidth = min(size.width / 2, CGFloat(PreparedMapTileCache.capacity) * tileSize)
     let halfHeight = min(size.height / 2, CGFloat(PreparedMapTileCache.capacity) * tileSize)
     let minX = Int(floor((origin.x - halfWidth) / tileSize))
@@ -629,9 +732,18 @@ struct OfflineMapTilePlan {
   static func make(
     center: Coordinate, zoom: Int, size: CGSize, baseMaxZoom: Int
   ) -> Self {
+    make(center: center, displayZoom: Double(zoom), size: size, baseMaxZoom: baseMaxZoom)
+  }
+
+  static func make(
+    center: Coordinate, displayZoom: Double, size: CGSize, baseMaxZoom: Int
+  ) -> Self {
+    guard displayZoom.isFinite, (0...30).contains(displayZoom), (0...30).contains(baseMaxZoom)
+    else { return Self(base: [], details: [], baseZoom: 0, poiZoom: nil) }
+    let zoom = Int(floor(displayZoom))
     let baseZoom = min(zoom, baseMaxZoom)
     let base = OfflineMapTilePlacement.visible(
-      center: center, zoom: zoom, size: size, tileZoom: baseMaxZoom)
+      center: center, displayZoom: displayZoom, size: size, tileZoom: baseMaxZoom)
     let poiZoom = zoom >= 14 ? min(zoom, 18) : nil
     guard !base.isEmpty, let poiZoom, poiZoom > baseZoom else {
       return Self(base: base, details: [], baseZoom: baseZoom, poiZoom: zoom >= 14 ? baseZoom : nil)
@@ -639,7 +751,7 @@ struct OfflineMapTilePlan {
     let remaining = max(
       0, PreparedMapTileCache.capacity - OfflineMapTilePlacement.keys(in: base).count)
     let candidates = OfflineMapTilePlacement.visible(
-      center: center, zoom: zoom, size: size, tileZoom: poiZoom)
+      center: center, displayZoom: displayZoom, size: size, tileZoom: poiZoom)
     let allowed = Set(
       OfflineMapTilePlacement.loadingKeys(in: candidates, center: center).prefix(remaining))
     return Self(
@@ -664,6 +776,11 @@ struct OfflineMapTilePlan {
   private var revision = 0
   private var failureCount = 0
   private(set) var isLoading = false
+  private let retainingPreviousTiles: Bool
+
+  init(retainingPreviousTiles: Bool = false) {
+    self.retainingPreviousTiles = retainingPreviousTiles
+  }
 
   func failures(owner: ObjectIdentifier, keys: [MapTileKey]) -> Int {
     // Successful loading is the normal render path. Avoid rebuilding the
@@ -682,7 +799,7 @@ struct OfflineMapTilePlan {
     self.owner = owner
     self.keys = Set(keys)
     failureCount = 0
-    cache.updateViewport(owner: owner, keys: keys)
+    cache.updateViewport(owner: owner, keys: keys, retainingPreviousTiles: retainingPreviousTiles)
     var seen: Set<MapTileKey> = []
     let missing = keys.prefix(PreparedMapTileCache.capacity).filter {
       seen.insert($0).inserted && cache.tile(for: $0, owner: owner) == nil
