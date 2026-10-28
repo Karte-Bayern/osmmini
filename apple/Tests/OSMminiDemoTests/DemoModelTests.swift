@@ -698,6 +698,15 @@ private final class DemoCatalogURLProtocol: URLProtocol, @unchecked Sendable {
     let original = try #require(model.engine?.manifest)
     #expect(original.minZoom == 5 && original.maxZoom == 14)
     #expect(model.installed.count == 1)
+    let engine = try #require(model.engine)
+    model.usePlace(
+      DemoPlace(coordinate: Coordinate(lat: 48.001, lon: 12.001), name: "Abfahrt", category: nil),
+      as: .start)
+    model.usePlace(
+      DemoPlace(coordinate: Coordinate(lat: 48.003, lon: 12.003), name: "Ankunft", category: nil),
+      as: .destination)
+    await model.operation?.value
+    let route = try #require(model.route)
     let files = Set(try FileManager.default.contentsOfDirectory(atPath: root.path))
     let graph = directory.appendingPathComponent("graph.bin")
     let graphDate = try graph.resourceValues(forKeys: [.contentModificationDateKey])
@@ -710,6 +719,9 @@ private final class DemoCatalogURLProtocol: URLProtocol, @unchecked Sendable {
     #expect(model.pending == nil)
     #expect(defaults.data(forKey: "pendingImport") == nil)
     #expect(model.activeDirectory == directory)
+    #expect(model.engine === engine)
+    #expect(model.route?.path == route.path && model.route?.distanceM == route.distanceM)
+    #expect(model.startLabel == "Abfahrt" && model.destinationLabel == "Ankunft")
     #expect(model.engine?.manifest.sourceSHA256 == original.sourceSHA256)
     #expect(model.engine?.manifest.minZoom == original.minZoom)
     #expect(model.engine?.manifest.maxZoom == original.maxZoom)

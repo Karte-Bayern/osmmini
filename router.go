@@ -1,9 +1,11 @@
 package osmmini
 
 import (
+	"bytes"
 	"cmp"
 	"container/heap"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
@@ -431,8 +433,7 @@ func BuildRouterWithAddressesOptions(path string, bo BuildOptions) (*Router, []A
 				}
 			}
 
-			ids := make([]int64, len(w.NodeIDs))
-			copy(ids, w.NodeIDs)
+			ids := w.NodeIDs
 			if filterWin == nil {
 				for _, id := range ids {
 					if _, exists := referenced[id]; exists {
@@ -445,7 +446,7 @@ func BuildRouterWithAddressesOptions(path string, bo BuildOptions) (*Router, []A
 				}
 			}
 			highways = append(highways, highwayWay{
-				nodes:      ids,
+				refs:       packHighwayRefs(ids),
 				hwyType:    strings.ToLower(strings.TrimSpace(hwy)),
 				speedKph:   speed,
 				maxHeightM: mh,
@@ -591,26 +592,41 @@ func visitHighwayEdges(ctx context.Context, coords map[int64]Coord, highways []h
 				return err
 			}
 		}
-		for i := 0; i < len(hw.nodes)-1; i++ {
-			aID, bID := hw.nodes[i], hw.nodes[i+1]
-			a, okA := coords[aID]
+		refs := hw.refs
+		aID, n := binary.Varint(refs)
+		if n <= 0 {
+			return errors.New("invalid imported highway references")
+		}
+		refs = refs[n:]
+		a, okA := coords[aID]
+		for segment := 0; len(refs) > 0; segment++ {
+			if segment%4096 == 0 && ctx != nil {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+			}
+			delta, n := binary.Varint(refs)
+			if n <= 0 {
+				return errors.New("invalid imported highway references")
+			}
+			refs = refs[n:]
+			bID := aID + delta
 			b, okB := coords[bID]
-			if !okA || !okB {
-				continue
+			if okA && okB {
+				d := haversineMeters(a.Lat, a.Lon, b.Lat, b.Lon)
+				if d > 0 && !math.IsNaN(d) && !math.IsInf(d, 0) {
+					switch hw.oneway {
+					case 1:
+						visit(aID, bID, d, hw)
+					case -1:
+						visit(bID, aID, d, hw)
+					default:
+						visit(aID, bID, d, hw)
+						visit(bID, aID, d, hw)
+					}
+				}
 			}
-			d := haversineMeters(a.Lat, a.Lon, b.Lat, b.Lon)
-			if d <= 0 || math.IsNaN(d) || math.IsInf(d, 0) {
-				continue
-			}
-			switch hw.oneway {
-			case 1:
-				visit(aID, bID, d, hw)
-			case -1:
-				visit(bID, aID, d, hw)
-			default:
-				visit(aID, bID, d, hw)
-				visit(bID, aID, d, hw)
-			}
+			aID, a, okA = bID, b, okB
 		}
 	}
 	return nil
@@ -2221,12 +2237,27 @@ func (r *Router) nearestNodeBrute(lat, lon float64) (int64, float64, bool) {
 // ---- Highway parsing helpers ----
 
 type highwayWay struct {
-	nodes      []int64
+	refs       []byte // delta-varint OSM IDs; private to the importer
 	hwyType    string // OSM highway tag value
 	speedKph   float64
 	maxHeightM float64
 	maxWeightT float64
 	oneway     int8 // 0=both, 1=forward, -1=reverse
+}
+
+func packHighwayRefs(ids []int64) []byte {
+	// Most ways fit on the stack. Clone just their encoded bytes rather than
+	// retaining another full-width reference array for the entire import.
+	var buffer [512]byte
+	encoded := buffer[:0]
+	var previous int64
+	for _, id := range ids {
+		// Signed subtraction/addition intentionally wrap just as PBF deltas do,
+		// preserving even transitions across the ends of the int64 range.
+		encoded = binary.AppendVarint(encoded, id-previous)
+		previous = id
+	}
+	return bytes.Clone(encoded)
 }
 
 // DefaultHighwaySpeeds can be overridden by the caller (e.g. server settings)

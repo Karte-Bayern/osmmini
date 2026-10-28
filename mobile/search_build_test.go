@@ -175,26 +175,28 @@ func TestSearchWaySpoolPreservesCentroidAndMissingReferences(t *testing.T) {
 		t.Fatal(err)
 	}
 	reader := bufio.NewReader(&spool)
-	ids := []int64{1, 2, 3}
-	coordinates := []osm.Coord{{Lat: 1, Lon: 10}, {Lat: 2, Lon: 20}, {Lat: 3, Lon: 30}}
-	found := []bool{true, true, true}
-	got, err := readSearchWay(t.Context(), reader, ids, coordinates, found)
+	coordinates := map[int64]osm.Coord{1: {Lat: 1, Lon: 10}, 2: {Lat: 2, Lon: 20}, 3: {Lat: 3, Lon: 30}}
+	lookup := func(id int64) (osm.Coord, bool, error) {
+		coordinate, found := coordinates[id]
+		return coordinate, found, nil
+	}
+	got, err := readSearchWay(t.Context(), reader, lookup)
 	want := original
 	want.Coordinate = osm.Coord{Lat: 1.75, Lon: 17.5}
 	if err != nil || got != want {
 		t.Fatalf("way centroid/metadata = %+v, %v; want %+v", got, err, want)
 	}
-	if got, err = readSearchWay(t.Context(), reader, ids, coordinates, found); err != nil || got != (SearchResult{}) {
+	if got, err = readSearchWay(t.Context(), reader, lookup); err != nil || got != (SearchResult{}) {
 		t.Fatalf("way without known nodes = %+v, %v", got, err)
 	}
-	if _, err = readSearchWay(t.Context(), reader, ids, coordinates, found); err != io.EOF {
+	if _, err = readSearchWay(t.Context(), reader, lookup); err != io.EOF {
 		t.Fatalf("final way did not end stream: %v", err)
 	}
 }
 
 func TestSearchWaySpoolRejectsTruncationAndOversizedRecords(t *testing.T) {
 	for _, data := range [][]byte{[]byte("short"), binary.LittleEndian.AppendUint32(make([]byte, 4), 1), append(binary.LittleEndian.AppendUint32(nil, maxSearchRecordBytes+1), make([]byte, 4)...)} {
-		if _, err := readSearchWay(t.Context(), bufio.NewReader(bytes.NewReader(data)), nil, nil, nil); err == nil || err == io.EOF {
+		if _, err := readSearchWay(t.Context(), bufio.NewReader(bytes.NewReader(data)), nil); err == nil || err == io.EOF {
 			t.Fatalf("accepted truncated/oversized way %x: %v", data, err)
 		}
 	}
@@ -205,12 +207,12 @@ func TestSearchWaySpoolRejectsTruncationAndOversizedRecords(t *testing.T) {
 	}
 	writer.Flush()
 	truncated := data.Bytes()[:data.Len()-8]
-	if _, err := readSearchWay(t.Context(), bufio.NewReader(bytes.NewReader(truncated)), nil, nil, nil); err == nil || err == io.EOF {
+	if _, err := readSearchWay(t.Context(), bufio.NewReader(bytes.NewReader(truncated)), nil); err == nil || err == io.EOF {
 		t.Fatalf("accepted missing node reference: %v", err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if _, err := readSearchWay(ctx, bufio.NewReader(&data), nil, nil, nil); !errors.Is(err, context.Canceled) {
+	if _, err := readSearchWay(ctx, bufio.NewReader(&data), nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled way read: %v", err)
 	}
 }

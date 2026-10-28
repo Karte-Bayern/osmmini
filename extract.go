@@ -313,6 +313,7 @@ func processOSMData(raw []byte, wantHighway, wantNode, wantAddrWay, wantTaggedWa
 
 	var groupBuf [1][]byte
 	groups := groupBuf[:0]
+	wantStrings := wantHighway || wantAddrWay || wantTaggedWay || wantAddrRel || wantTaggedRel || cb.AddressNode != nil || cb.TaggedNode != nil
 
 	i := 0
 	for i < len(raw) {
@@ -332,7 +333,7 @@ func processOSMData(raw []byte, wantHighway, wantNode, wantAddrWay, wantTaggedWa
 			if err != nil {
 				return err
 			}
-			st, err := parseStringTable(msg)
+			st, err := parseStringTable(msg, wantStrings)
 			if err != nil {
 				return err
 			}
@@ -400,9 +401,12 @@ func processOSMData(raw []byte, wantHighway, wantNode, wantAddrWay, wantTaggedWa
 	return nil
 }
 
-func parseStringTable(raw []byte) ([]string, error) {
+func parseStringTable(raw []byte, retain bool) ([]string, error) {
 	// message StringTable { repeated bytes s = 1; }
-	st := make([]string, 0, 256)
+	var st []string
+	if retain {
+		st = make([]string, 0, 256)
+	}
 
 	i := 0
 	for i < len(raw) {
@@ -422,7 +426,11 @@ func parseStringTable(raw []byte) ([]string, error) {
 			if err != nil {
 				return nil, err
 			}
-			st = append(st, string(b))
+			// Coordinate-only passes still validate every field, but have no
+			// consumer for the string copies or their directory.
+			if retain {
+				st = append(st, string(b))
+			}
 
 		default:
 			if err := skipField(wire, raw, &i); err != nil {
@@ -431,6 +439,9 @@ func parseStringTable(raw []byte) ([]string, error) {
 		}
 	}
 
+	if !retain {
+		return nil, nil
+	}
 	if len(st) == 0 {
 		return []string{""}, nil
 	}

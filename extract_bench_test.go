@@ -70,3 +70,24 @@ func BenchmarkPBFBlob(b *testing.B) {
 		})
 	}
 }
+
+func BenchmarkCoordinateOnlyBlock(b *testing.B) {
+	const count = 8000
+	ids, lats, lons := make([]int64, count), make([]int64, count), make([]int64, count)
+	for i := range ids {
+		ids[i], lats[i], lons[i] = 1, 1, 1
+	}
+	table := []string{""}
+	for i := range count {
+		table = append(table, "Unneeded string-table value "+strconv.Itoa(i))
+	}
+	raw := testPBFBytesField(1, testPBFStringTable(table))
+	raw = append(raw, testPBFBytesField(2, testPBFPrimitiveGroup(2, testPBFDenseNodes(ids, lats, lons, nil)))...)
+	cb := Callbacks{Node: func(int64, float64, float64) error { return nil }}
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := processOSMData(raw, false, true, false, false, false, false, Options{}, cb); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

@@ -1,12 +1,42 @@
 package osmmini
 
 import (
+	"encoding/binary"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestPackedHighwayReferencesPreserveSignedIDsAndIndependentStorage(t *testing.T) {
+	for _, ids := range [][]int64{
+		{1, 2, 10000000000, 3, 3, -7},
+		{math.MinInt64, math.MaxInt64, 0, math.MinInt64, -1, math.MaxInt64},
+	} {
+		packed := packHighwayRefs(ids)
+		original := append([]byte(nil), packed...)
+		_ = packHighwayRefs([]int64{20, 21, 22})
+		if !reflect.DeepEqual(packed, original) {
+			t.Fatal("packing another way overwrote retained references")
+		}
+		var decoded []int64
+		var id int64
+		for len(packed) > 0 {
+			delta, n := binary.Varint(packed)
+			if n <= 0 {
+				t.Fatal("invalid retained reference encoding")
+			}
+			id += delta
+			decoded = append(decoded, id)
+			packed = packed[n:]
+		}
+		if !reflect.DeepEqual(ids, decoded) {
+			t.Fatalf("references changed: %v, want %v", decoded, ids)
+		}
+	}
+}
 
 func roadImportFixture(t *testing.T) string {
 	t.Helper()

@@ -999,7 +999,15 @@ private struct DemoMapCanvas: View {
   let onLocate: () -> Void
   let onStopLocation: () -> Void
   var body: some View {
-    if model.engine != nil || !model.layers.entries.isEmpty {
+    if model.mapSuspendedForImport {
+      ContentUnavailableView {
+        Label("Offline-Karte pausiert", systemImage: "pause.circle")
+      } description: {
+        Text("Die Kartenansicht pausiert während der Aufbereitung einer Offline-Karte.")
+      } actions: {
+        Button("Fortschritt anzeigen", action: showRegions).buttonStyle(.borderedProminent)
+      }
+    } else if model.engine != nil || !model.layers.entries.isEmpty {
       OfflineMap(
         engine: model.engine, route: model.route,
         overlays: model.layers.visibleDocuments,

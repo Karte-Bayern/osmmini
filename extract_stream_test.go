@@ -9,6 +9,30 @@ import (
 	"testing"
 )
 
+func TestCoordinateOnlyPassStillValidatesTheStringTable(t *testing.T) {
+	group := testPBFPrimitiveGroup(1, testPBFNode(12, nil, nil, 480000000, 120000000))
+	for _, table := range [][]byte{
+		testPBFVarintField(1, 7), // String entries require length-delimited fields.
+		{0x0a, 0x02, 'a'},        // Truncated string.
+		{0x80},                   // Truncated field tag.
+		{0x12, 0x05, 'a'},        // Unknown fields still need a valid wire payload.
+	} {
+		for _, tagged := range []bool{false, true} {
+			calls := 0
+			cb := Callbacks{Node: func(int64, float64, float64) error { calls++; return nil }}
+			if tagged {
+				cb.TaggedNode = func(Node) error { return nil }
+			}
+			// Field order is arbitrary; validate the table even after a group.
+			raw := testPBFBytesField(2, group)
+			raw = append(raw, testPBFBytesField(1, table)...)
+			if err := processOSMData(raw, false, true, false, false, false, false, Options{}, cb); err == nil || calls != 0 {
+				t.Fatalf("tagged=%v, table=%x: err=%v, callbacks=%d", tagged, table, err, calls)
+			}
+		}
+	}
+}
+
 func TestDenseNodesRepeatedPackedFields(t *testing.T) {
 	// Repeated packed fields are legal, including empty segments and an
 	// interleaved field order. Deltas continue across their segment boundaries.

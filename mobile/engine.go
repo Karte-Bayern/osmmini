@@ -287,25 +287,20 @@ func prepareGraphAndSearch(ctx context.Context, o ImportOptions, stage string, r
 		}
 	}
 	report("indexing_search", 0.35)
+	searchPath := filepath.Join(stage, "search.jsonl")
 	if _, err = os.Stat(filepath.Join(stage, "search.ready")); err != nil {
-		if err = buildSearchWithPreset(ctx, filepath.Join(stage, "search.jsonl"), router, o.PBF, o.POIPreset); err != nil {
+		if err = buildSearchArtifacts(ctx, searchPath, router, o.PBF, o.POIPreset); err != nil {
 			return importGraphInfo{}, err
 		}
 		if err = os.WriteFile(filepath.Join(stage, "search.ready"), []byte("1"), 0o600); err != nil {
 			return importGraphInfo{}, err
 		}
-	}
-	// Build the small settlement catalog once, while preparing the region.
-	// Opening it then needs no decompression or JSON decoding of address/POI
-	// records. Rebuild on resume from the completed, immutable search checkpoint.
-	search, err := openSearch(filepath.Join(stage, "search.jsonl"))
-	if err != nil {
-		return importGraphInfo{}, err
-	}
-	err = writePlaceCatalog(ctx, filepath.Join(stage, placeCatalogFilename), search)
-	search.close()
-	if err != nil {
-		return importGraphInfo{}, err
+	} else {
+		// Older checkpoints may contain only the search files. Rebuild missing
+		// derived data without decoding the source PBF again.
+		if err = restoreSearchArtifacts(ctx, searchPath); err != nil {
+			return importGraphInfo{}, err
+		}
 	}
 	bounds, _ := router.Bounds()
 	return importGraphInfo{nodes: router.NodeCount(), edges: router.EdgeCount(), bounds: bounds}, nil

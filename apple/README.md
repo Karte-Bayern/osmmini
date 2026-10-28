@@ -155,6 +155,13 @@ and clean up downloaded PBFs separately. Completed graph/search phases resume;
 an interrupted map build restarts that phase. Background completion while the
 app is suspended is not guaranteed.
 
+During native region preparation, the demo pauses the map and releases the
+previous engine and prepared drawing caches. Downloads and local PBF copies
+keep the current map available. If preparation fails or is cancelled, the app
+reopens the previous region and retains the planned route and its endpoints.
+Importing a matching PBF/profile reuses its prepared region; an already open
+matching region keeps its engine and planned route.
+
 The map displays local vector geometry, road/place labels, routes and location
 accuracy. It supports panning, continuous zooming and fitting the region or route.
 On macOS, scroll over the map or pinch the trackpad to zoom around the pointer.
@@ -271,10 +278,11 @@ manifest. Original OSM IDs, coordinates, directed connectivity and road geometry
 are preserved by chain packing.
 
 Published map files are immutable. Reimport into a new directory to update
-data or obtain the current storage format. A derived POI index may be cached
-locally when a region is opened; it is bound to the search-data checksum and
-does not replace source files. The first open builds this index; subsequent
-opens reuse it. Read-only regions use a temporary index. In writable regions,
+data or obtain the current storage format. New imports prepare settlement and
+spatial POI indexes while writing search records. Older regions can build the
+derived POI index on first open; later opens reuse it. The index is bound to the
+search-data checksum and does not replace source files. Read-only regions use
+a temporary index when none is available. In writable regions,
 interrupted index builds are cleaned up on the next open. Incompatible pending
 imports need a new workspace. Keep `NOTICE.txt` with distributed regions.
 
@@ -287,6 +295,13 @@ The default import cap is eight million referenced road nodes; change it with
 `-max-import-nodes`. Tile zooms default to 5–14. Node caps and tile-cache budgets
 are not total process-memory limits. Importing large extracts still requires
 memory for intermediate map geometry.
+
+Search import spills way-node references and coordinates to private temporary
+files instead of retaining region-sized arrays on the Go heap. This requires
+additional temporary disk space; completion and cancellation remove the files,
+and resumed imports discard abandoned scratch data. The upstream tinyTiles
+geometry generator still retains region-wide structures before artifact
+writing, so `TileMemoryBytes` is not a cap on that generation phase.
 
 ## Rendering and scope
 

@@ -25,7 +25,13 @@ const (
 // The fixed header contains a versioned magic, record count, payload CRC32 and
 // four reserved zero bytes. Count and checksum detect truncated whole records
 // as well as malformed JSON; publication never exposes a partially written file.
-func writePlaceCatalog(ctx context.Context, path string, search *searchReader) (err error) {
+func writePlaceCatalog(ctx context.Context, path string, search *searchReader) error {
+	return writePlaceCatalogFrom(ctx, path, func(visit func(SearchResult) error) error {
+		return scanSearchPlaces(ctx, search, visit)
+	})
+}
+
+func writePlaceCatalogFrom(ctx context.Context, path string, records func(func(SearchResult) error) error) (err error) {
 	if err = ctx.Err(); err != nil {
 		return err
 	}
@@ -45,7 +51,7 @@ func writePlaceCatalog(ctx context.Context, path string, search *searchReader) (
 	writer := bufio.NewWriterSize(io.MultiWriter(file, checksum), placeScanBufferBytes)
 	encoder := json.NewEncoder(writer)
 	var count uint64
-	err = scanSearchPlaces(ctx, search, func(record SearchResult) error {
+	err = records(func(record SearchResult) error {
 		record.Text = ""
 		if err := encoder.Encode(record); err != nil {
 			return err

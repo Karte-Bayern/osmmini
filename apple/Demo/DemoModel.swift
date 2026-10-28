@@ -185,8 +185,11 @@ struct DemoCatalogSearch: Sendable {
 @MainActor @Observable final class DemoModel {
   enum Activity { case opening, downloading, importing, routing, deleting }
   enum RoutePoint { case start, destination }
+  typealias RegionImporter =
+    @MainActor (ImportOptions, @escaping @Sendable (ImportProgress) -> Void) async throws -> RegionManifest
 
   private(set) var engine: OfflineEngine?
+  private(set) var mapSuspendedForImport = false
   private(set) var activeDirectory: URL?
   private(set) var installed: [InstalledRegion] = []
   private(set) var storageError: String?
@@ -226,7 +229,9 @@ struct DemoCatalogSearch: Sendable {
     }
   }
   var canCalculateRoute: Bool { !busy && engine != nil && start != nil && destination != nil }
-  var canDisplayPlaces: Bool { engine != nil || layers.entries.contains(where: \.isVisible) }
+  var canDisplayPlaces: Bool {
+    !mapSuspendedForImport && (engine != nil || layers.entries.contains(where: \.isVisible))
+  }
   var canCancel: Bool { busy && activity != .deleting }
   var installedBytes: Int64 { installed.reduce(0) { $0 + $1.byteCount } }
   private(set) var status = "Region herunterladen oder eine lokale PBF importieren."
@@ -249,6 +254,7 @@ struct DemoCatalogSearch: Sendable {
   @ObservationIgnored private var catalogSearch = DemoCatalogSearch()
   @ObservationIgnored private var catalogLoadID: UUID?
   @ObservationIgnored private var started = false
+  @ObservationIgnored private let importRegion: RegionImporter
   let root: URL
   private let geofabrik: OSMExtracts
   private let openStreetMapFrance: OSMExtracts
@@ -263,8 +269,12 @@ struct DemoCatalogSearch: Sendable {
 
   init(
     root: URL? = nil, defaults: UserDefaults = .standard, geofabrik: Geofabrik? = nil,
-    openStreetMapFrance: OSMExtracts? = nil, sliceOSM: SliceOSM? = nil
+    openStreetMapFrance: OSMExtracts? = nil, sliceOSM: SliceOSM? = nil,
+    importRegion: @escaping RegionImporter = { options, progress in
+      try await OfflineEngine.importPBF(options, progress: progress)
+    }
   ) {
+    self.importRegion = importRegion
     let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[
       0]
     self.root =
@@ -591,6 +601,7 @@ struct DemoCatalogSearch: Sendable {
     searchTask = nil
     let previous = engine
     engine = next
+    regionError = nil
     activeDirectory = directory
     route = nil
     results = []
@@ -760,8 +771,8 @@ struct DemoCatalogSearch: Sendable {
     }
     try Task.checkCancellation()
     if let existing {
-      try await open(existing)
-      status = "Diese PBF ist bereits importiert. Vorhandene Offline-Region geöffnet."
+      if activeDirectory != existing || engine == nil { try await open(existing) }
+      status = "Diese PBF ist bereits importiert. Die vorhandene Offline-Region ist bereit."
       return
     }
     let encoded = try DemoStorage.savedImport(options, in: root)
@@ -816,22 +827,58 @@ struct DemoCatalogSearch: Sendable {
   }
 
   private func resumeImport(_ options: ImportOptions, operation: UUID) async throws {
-    let phase = beginPhase(operation, status: "Offline-Region wird aufbereitet …")
-    _ = try await OfflineEngine.importPBF(options) { [weak self] progress in
-      Task { @MainActor in
-        self?.receiveProgress(
-          phase, fraction: progress.fraction, status: Self.phaseLabel(progress.phase))
-      }
+    let previousDirectory = engine == nil ? nil : activeDirectory
+    let previous = engine
+    mapSuspendedForImport = true
+    defer {
+      mapSuspendedForImport = false
+      if engine != nil, searchNeedsResume, !searchPresentations.isEmpty { search() }
     }
-    pending = nil
-    defaults.removeObject(forKey: "pendingImport")
-    clearImportDiagnostics()
-    let root = root
-    await Task.detached(priority: .utility) {
-      DemoStorage.removeImportedSource(options.pbf, in: root)
-    }.value
-    try Task.checkCancellation()
-    try await open(URL(fileURLWithPath: options.destination))
+    searchNeedsResume = searchNeedsResume || searching
+    searchTask?.cancel()
+    searchTask = nil
+    searchID = nil
+    searching = false
+    engine = nil
+    // Keep the selected region and route, but release its native mappings and
+    // renderer caches before the new import reaches its memory-intensive phases.
+    await previous?.close()
+    do {
+      try Task.checkCancellation()
+      let phase = beginPhase(operation, status: "Offline-Region wird aufbereitet …")
+      _ = try await importRegion(options) { [weak self] progress in
+        Task { @MainActor in
+          self?.receiveProgress(
+            phase, fraction: progress.fraction, status: Self.phaseLabel(progress.phase))
+        }
+      }
+      pending = nil
+      defaults.removeObject(forKey: "pendingImport")
+      clearImportDiagnostics()
+      let root = root
+      await Task.detached(priority: .utility) {
+        DemoStorage.removeImportedSource(options.pbf, in: root)
+      }.value
+      try Task.checkCancellation()
+      try await open(URL(fileURLWithPath: options.destination))
+    } catch {
+      // Native cancellation drains its job before throwing. Reopen only after
+      // that drain, in an independent task that can survive the user's cancel.
+      if let previousDirectory {
+        phaseID = nil
+        status = "Bisherige Offline-Karte wird wieder geöffnet …"
+        let restoration = Task.detached(priority: .userInitiated) {
+          try await OfflineEngine.open(previousDirectory)
+        }
+        do {
+          engine = try await restoration.value
+          regionError = nil
+        } catch {
+          regionError = "Die bisherige Karte konnte nicht wieder geöffnet werden: \(error.localizedDescription)"
+        }
+      }
+      throw error
+    }
   }
 
   private static func phaseLabel(_ phase: String) -> String {

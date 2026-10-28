@@ -188,6 +188,13 @@ func buildPOIIndex(ctx context.Context, path string, source *searchReader, sourc
 	if err = builder.finish(); err != nil {
 		return err
 	}
+	return writePOIIndexFooter(ctx, path, sourceDigest)
+}
+
+func writePOIIndexFooter(ctx context.Context, path string, sourceDigest []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	file, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
 		return err

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+	"unicode/utf8"
 
 	osm "simonwaldherr.de/go/osmmini"
 )
@@ -89,6 +90,10 @@ func buildSearch(ctx context.Context, path string, r *osm.Router, source string)
 }
 
 func buildSearchWithPreset(ctx context.Context, path string, r *osm.Router, source string, preset POIPreset) error {
+	return buildSearchWithPresetObserved(ctx, path, r, source, preset, nil)
+}
+
+func buildSearchWithPresetObserved(ctx context.Context, path string, r *osm.Router, source string, preset POIPreset, observe func(SearchResult, uint64, uint32) error) error {
 	var err error
 	preset, err = preset.normalized()
 	if err != nil {
@@ -138,6 +143,19 @@ func buildSearchWithPreset(ctx context.Context, path string, r *osm.Router, sour
 				seen[term] = true
 			}
 		}
+		if observe != nil {
+			observed := result
+			// JSON replaces malformed UTF-8. Derived indexes must classify the
+			// exact strings later readers see, without reparsing normal records.
+			if !utf8.ValidString(result.Label) || !utf8.ValidString(result.Category) || !utf8.ValidString(result.Place) || !utf8.ValidString(result.Kind) {
+				if err := json.Unmarshal(b, &observed); err != nil {
+					return err
+				}
+			}
+			if err := observe(observed, offset, uint32(len(b))); err != nil {
+				return err
+			}
+		}
 		offset += uint64(len(b))
 		return nil
 	}
@@ -146,16 +164,16 @@ func buildSearchWithPreset(ctx context.Context, path string, r *osm.Router, sour
 			return err
 		}
 	}
-	// Keep only referenced IDs in memory. The labels and geometry of address/POI
-	// ways are streamed to a private scratch file until their coordinates arrive
-	// during the node pass. Large regions otherwise retain every way's tag map.
+	// Spool labels and references independently; neither a region's way tags nor
+	// its complete reference/coordinate table needs to remain on the Go heap.
 	ways, err := os.CreateTemp(filepath.Dir(path), ".search-ways-*")
 	if err != nil {
 		return err
 	}
 	defer func() { ways.Close(); os.Remove(ways.Name()) }()
 	wayWriter := bufio.NewWriter(ways)
-	var refs []int64
+	nodes := searchNodeBuilder{ctx: ctx, parent: filepath.Dir(path)}
+	defer nodes.close()
 	result := func(id int64, kind string, c osm.Coord, tags osm.Tags, category string) SearchResult {
 		label := strings.TrimSpace(tags["name"])
 		street := strings.TrimSpace(tags["addr:street"])
@@ -220,7 +238,9 @@ func buildSearchWithPreset(ctx context.Context, path string, r *osm.Router, sour
 		if category == "" && strings.TrimSpace(way.Tags["addr:street"]) == "" && strings.TrimSpace(way.Tags["addr:place"]) == "" {
 			return nil
 		}
-		refs = append(refs, way.NodeIDs...)
+		if err := nodes.add(way.NodeIDs); err != nil {
+			return err
+		}
 		return writeSearchWay(wayWriter, result(way.ID, "way", osm.Coord{}, way.Tags, category), way.NodeIDs)
 	}})
 	if err != nil {
@@ -232,42 +252,22 @@ func buildSearchWithPreset(ctx context.Context, path string, r *osm.Router, sour
 	if _, err = ways.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
-	if len(refs) > 0 {
-		if err = ctx.Err(); err != nil {
-			return err
-		}
-		slices.Sort(refs)
-		refs = slices.Compact(refs)
-		if err = ctx.Err(); err != nil {
-			return err
-		}
-		coordinates := make([]osm.Coord, len(refs))
-		found := make([]bool, len(refs))
-		cursor := 0
-		var lastID int64
-		err = osm.ExtractFile(source, osm.Options{Context: ctx}, osm.Callbacks{Node: func(id int64, lat, lon float64) error {
-			// PBF nodes normally arrive in ID order. Merge against the sorted
-			// references in linear time, with binary search for unsorted files.
-			if id < lastID {
-				cursor, _ = slices.BinarySearch(refs, id)
-			} else {
-				for cursor < len(refs) && refs[cursor] < id {
-					cursor++
-				}
-			}
-			lastID = id
-			if cursor < len(refs) && refs[cursor] == id {
-				coordinates[cursor] = osm.Coord{Lat: lat, Lon: lon}
-				found[cursor] = true
-			}
-			return nil
-		}})
+	coordinates, err := nodes.finish()
+	if err != nil {
+		return err
+	}
+	if coordinates != nil {
+		defer coordinates.close()
+		err = osm.ExtractFile(source, osm.Options{Context: ctx}, osm.Callbacks{Node: coordinates.record})
 		if err != nil {
+			return err
+		}
+		if err = coordinates.finishCoordinates(); err != nil {
 			return err
 		}
 		reader := bufio.NewReader(ways)
 		for {
-			way, err := readSearchWay(ctx, reader, refs, coordinates, found)
+			way, err := readSearchWay(ctx, reader, coordinates.coordinate)
 			if err == io.EOF {
 				break
 			} else if err != nil {
@@ -301,7 +301,7 @@ func cleanSearchScratch(ctx context.Context, directory string) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if strings.HasPrefix(entry.Name(), ".search-sort-") || strings.HasPrefix(entry.Name(), ".search-ways-") {
+		if strings.HasPrefix(entry.Name(), ".search-sort-") || strings.HasPrefix(entry.Name(), ".search-ways-") || strings.HasPrefix(entry.Name(), ".search-nodes-") {
 			if err := os.RemoveAll(filepath.Join(directory, entry.Name())); err != nil {
 				return err
 			}
@@ -340,7 +340,7 @@ func writeSearchWay(w *bufio.Writer, result SearchResult, nodes []int64) error {
 	return nil
 }
 
-func readSearchWay(ctx context.Context, r *bufio.Reader, refs []int64, coordinates []osm.Coord, found []bool) (SearchResult, error) {
+func readSearchWay(ctx context.Context, r *bufio.Reader, lookup func(int64) (osm.Coord, bool, error)) (SearchResult, error) {
 	var result SearchResult
 	if err := ctx.Err(); err != nil {
 		return result, err
@@ -372,9 +372,13 @@ func readSearchWay(ctx context.Context, r *bufio.Reader, refs []int64, coordinat
 		if _, err := io.ReadFull(r, b[:]); err != nil {
 			return result, fmt.Errorf("read temporary search way reference: %w", err)
 		}
-		if j, ok := slices.BinarySearch(refs, int64(binary.LittleEndian.Uint64(b[:]))); ok && found[j] {
-			c.Lat += coordinates[j].Lat
-			c.Lon += coordinates[j].Lon
+		coordinate, found, err := lookup(int64(binary.LittleEndian.Uint64(b[:])))
+		if err != nil {
+			return result, err
+		}
+		if found {
+			c.Lat += coordinate.Lat
+			c.Lon += coordinate.Lon
 			count++
 		}
 	}
