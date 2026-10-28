@@ -26,6 +26,24 @@ struct PreparedMapOverlay: Sendable {
     let scale: CGFloat
   }
 
+  /// Visible world copies need only a counter and a screen origin. Iterating
+  /// them must not allocate an array for every point or path on each frame.
+  private struct Placements: Sequence, IteratorProtocol {
+    var origin: CGPoint
+    let scale: CGFloat
+    var remaining: Int
+
+    func makeIterator() -> Self { self }
+
+    mutating func next() -> Placement? {
+      guard remaining > 0 else { return nil }
+      let placement = Placement(origin: origin, scale: scale)
+      origin.x += 256 * scale
+      remaining -= 1
+      return placement
+    }
+  }
+
   private struct Camera {
     let scale: CGFloat
     let base: CGPoint
@@ -157,6 +175,9 @@ struct PreparedMapOverlay: Sendable {
       CGRect(origin: .zero, size: size).contains(tap)
     else { return nil }
     let camera = Camera(center: center, zoom: displayZoom, size: size)
+    let query = CGRect(
+      x: (tap.x - camera.base.x) / camera.scale,
+      y: (tap.y - camera.base.y) / camera.scale, width: 0, height: 0)
     var best: (priority: Int, distance: CGFloat, selection: MapSelection)?
     func consider(
       _ item: Item, point: CGPoint, priority: Int, placement: Placement,
@@ -185,12 +206,12 @@ struct PreparedMapOverlay: Sendable {
       switch item.shape {
       case .point(let coordinate, let point):
         for placement in Self.placements(
-          origin: point, bounds: CGRect(origin: point, size: .zero), camera: camera)
+          origin: point, bounds: CGRect(origin: point, size: .zero), camera: camera, query: query)
         { consider(item, point: .zero, priority: 0, placement: placement, coordinate: coordinate) }
       case .line(let route):
         for chunk in route.chunks {
           for placement in Self.placements(
-            origin: chunk.origin, bounds: chunk.bounds, camera: camera)
+            origin: chunk.origin, bounds: chunk.bounds, camera: camera, query: query)
           {
             let local = CGPoint(
               x: (tap.x - placement.origin.x) / placement.scale,
@@ -209,7 +230,7 @@ struct PreparedMapOverlay: Sendable {
         }
       case .polygon(let polygon):
         for placement in Self.placements(
-          origin: polygon.origin, bounds: polygon.bounds, camera: camera)
+          origin: polygon.origin, bounds: polygon.bounds, camera: camera, query: query)
         {
           let local = CGPoint(
             x: (tap.x - placement.origin.x) / placement.scale,
@@ -265,20 +286,28 @@ struct PreparedMapOverlay: Sendable {
   }
 
   private static func placements(
-    origin: CGPoint, bounds: CGRect, camera: Camera
-  ) -> [Placement] {
+    origin: CGPoint, bounds: CGRect, camera: Camera, query: CGRect? = nil
+  ) -> Placements {
     let scale = camera.scale
+    // Hit testing visits only shapes within 18 physical points of the tap.
+    // Lines still use the full screen clip before reporting their closest point.
     let viewport = camera.viewport
     let bounds = bounds.insetBy(dx: -18 / scale, dy: -18 / scale)
-    guard bounds.minY <= viewport.maxY, bounds.maxY >= viewport.minY else { return [] }
-    let first = ceil((viewport.minX - bounds.maxX) / 256)
-    let last = floor((viewport.maxX - bounds.minX) / 256)
-    guard first.isFinite, last.isFinite, first <= last else { return [] }
-    return (0...min(PreparedMapTileCache.capacity, Int(last - first))).map { copy in
-      Placement(
-        origin: CGPoint(
-          x: camera.base.x + (origin.x + first * 256 + CGFloat(copy) * 256) * scale,
-          y: camera.base.y + origin.y * scale), scale: scale)
+    let empty = Placements(origin: .zero, scale: scale, remaining: 0)
+    guard bounds.minY <= viewport.maxY, bounds.maxY >= viewport.minY else { return empty }
+    if let query, bounds.minY > query.maxY || bounds.maxY < query.minY { return empty }
+    var first = ceil((viewport.minX - bounds.maxX) / 256)
+    var last = min(
+      floor((viewport.maxX - bounds.minX) / 256), first + CGFloat(PreparedMapTileCache.capacity))
+    if let query {
+      first = max(first, ceil((query.minX - bounds.maxX) / 256))
+      last = min(last, floor((query.maxX - bounds.minX) / 256))
     }
+    guard first.isFinite, last.isFinite, first <= last else { return empty }
+    return Placements(
+      origin: CGPoint(
+        x: camera.base.x + (origin.x + first * 256) * scale,
+        y: camera.base.y + origin.y * scale),
+      scale: scale, remaining: Int(last - first) + 1)
   }
 }

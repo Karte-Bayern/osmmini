@@ -118,6 +118,56 @@ private func overlayScreen(_ coordinate: Coordinate, center: Coordinate, zoom: D
       size: CGSize(width: 800, height: 600))?.feature?.name == "Point")
 }
 
+@Test func overlayLineSelectionKeepsViewportClippingNearTheScreenEdges() throws {
+  let center = Coordinate(lat: 0, lon: 0)
+  let zoom = 10.5
+  let size = CGSize(width: 100, height: 100)
+  let origin = WebMercator.world(center, displayZoom: zoom)
+  func position(x: CGFloat, y: CGFloat) -> String {
+    let coordinate = WebMercator.coordinate(
+      CGPoint(x: origin.x + x - 50, y: origin.y + y - 50), displayZoom: zoom)
+    return "\(coordinate.lon),\(coordinate.lat)"
+  }
+  let document = try overlayDocument(
+    """
+    <Placemark><name>Outside</name><LineString><coordinates>
+      \(position(x: -10, y: 20)) \(position(x: -10, y: 80))
+    </coordinates></LineString></Placemark>
+    <Placemark><name>Visible</name><LineString><coordinates>
+      \(position(x: 98, y: 20)) \(position(x: 98, y: 80))
+    </coordinates></LineString></Placemark>
+    """)
+  let overlay = try PreparedMapOverlay(document)
+  #expect(
+    overlay.select(at: CGPoint(x: 5, y: 50), center: center, displayZoom: zoom, size: size) == nil)
+  #expect(
+    overlay.select(at: CGPoint(x: 85, y: 50), center: center, displayZoom: zoom, size: size)?
+      .feature?.name == "Visible")
+}
+
+@Test func overlaySelectionFindsEachVisibleWorldCopyAtOverviewZoom() throws {
+  let center = Coordinate(lat: 0, lon: 0)
+  let document = try overlayDocument(
+    """
+    <Placemark><name>Point</name><Point><coordinates>0,0</coordinates></Point></Placemark>
+    <Placemark><name>Line</name><LineString><coordinates>-10,20 10,20</coordinates></LineString></Placemark>
+    """)
+  let overlay = try PreparedMapOverlay(document)
+  let size = CGSize(width: 1_000, height: 400)
+  for copy in -1...1 {
+    let tap = CGPoint(x: size.width / 2 + CGFloat(copy) * 256, y: size.height / 2)
+    let selection = try #require(
+      overlay.select(at: tap, center: center, displayZoom: 0, size: size))
+    #expect(selection.feature?.name == "Point")
+    #expect(selection.coordinate == center)
+    let lineOffset = WebMercator.offset(Coordinate(lat: 20, lon: 0), from: center, zoom: 0)
+    let lineTap = CGPoint(x: tap.x, y: tap.y + lineOffset.y - 17)
+    #expect(
+      overlay.select(at: lineTap, center: center, displayZoom: 0, size: size)?.feature?.name
+        == "Line")
+  }
+}
+
 @Test func importedOverlayPreparationHonorsCancellation() async throws {
   let document = try overlayDocument(
     "<Placemark><Point><coordinates>12.5,48.5</coordinates></Point></Placemark>")

@@ -318,8 +318,7 @@ struct DemoCatalogSearch: Sendable {
   func start(arguments: [String] = CommandLine.arguments) async {
     guard !started else { return }
     started = true
-    await layers.restore()
-    await refreshInstalled()
+    async let restoredLayers: Void = layers.restore()
     let explicitRegion = arguments.firstIndex(of: "--region").flatMap {
       $0 + 1 < arguments.count ? arguments[$0 + 1] : nil
     }
@@ -327,9 +326,14 @@ struct DemoCatalogSearch: Sendable {
       try? DemoStorage.restoredPath($0, in: root)
     }
     if let path = explicitRegion ?? lastRegion, engine == nil {
+      // Opening also refreshes installed regions. Publish the basemap without
+      // waiting for unrelated KML parsing or a duplicate storage scan.
       openRegion(URL(fileURLWithPath: path))
       await operation?.value
+    } else {
+      await refreshInstalled()
     }
+    await restoredLayers
     // Reopening a local region needs no catalog request. The catalog can still
     // be loaded explicitly in the sidebar when choosing another region.
     if engine == nil, layers.entries.isEmpty, !arguments.contains("--offline") { await loadCatalog() }

@@ -134,6 +134,105 @@ func TestCompressedSearchDataEmptyAndExactBlocks(t *testing.T) {
 	}
 }
 
+func TestCompressedSearchReadAheadIsLocalToEachQuery(t *testing.T) {
+	scratch := new(searchScratch)
+	for _, value := range []byte{'a', 'b'} {
+		data := bytes.Repeat([]byte{value}, 70*searchDataBlockBytes+719)
+		reader, err := openSearch(writeCompressedSearchData(t, data))
+		if err != nil {
+			t.Fatal(err)
+		}
+		stream := &searchDataStream{search: reader, ctx: t.Context(), scratch: scratch}
+		got, err := io.ReadAll(stream)
+		reader.close()
+		if err != nil || !bytes.Equal(got, data) {
+			t.Fatalf("query with reused buffers read another catalog's bytes: %v", err)
+		}
+	}
+}
+
+func TestCompressedSearchReadAheadStillValidatesLaterBlocks(t *testing.T) {
+	path := writeCompressedSearchData(t, bytes.Repeat([]byte("abcdefgh"), 70*searchDataBlockBytes/8))
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := binary.LittleEndian.Uint64(original[32:])
+	for _, mode := range []string{"reserved directory field", "noncontiguous payload", "payload checksum"} {
+		t.Run(mode, func(t *testing.T) {
+			data := bytes.Clone(original)
+			switch mode {
+			case "reserved directory field":
+				data[directory+63*searchDataEntryBytes+12]++
+			case "noncontiguous payload":
+				data[directory+63*searchDataEntryBytes]++
+			case "payload checksum":
+				entry := data[directory+3*searchDataEntryBytes:]
+				offset := binary.LittleEndian.Uint64(entry)
+				size := binary.LittleEndian.Uint32(entry[8:])
+				data[offset+uint64(size)-1]++
+			}
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			reader, err := openSearch(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reader.close()
+			stream := &searchDataStream{search: reader, ctx: t.Context(), scratch: new(searchScratch)}
+			if _, err := io.Copy(io.Discard, stream); err == nil {
+				t.Fatal("corrupt data in a later block was accepted")
+			}
+		})
+	}
+}
+
+func compressedReadFixture(tb testing.TB) (string, []byte) {
+	tb.Helper()
+	data := make([]byte, 256*searchDataBlockBytes)
+	random := rand.New(rand.NewPCG(3, 4))
+	for block := range 256 {
+		start := block * searchDataBlockBytes
+		for at := start; at < start+4096; at += 8 {
+			binary.LittleEndian.PutUint64(data[at:], random.Uint64())
+		}
+		for at := start + 4096; at < start+searchDataBlockBytes; at += 4096 {
+			copy(data[at:at+4096], data[start:start+4096])
+		}
+	}
+	return writeCompressedSearchData(tb, data), data
+}
+
+func BenchmarkCompressedSearchBlockReads(b *testing.B) {
+	path, data := compressedReadFixture(b)
+	reader, err := openSearch(path)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer reader.close()
+	scratch := new(searchScratch)
+	for _, stride := range []int{1, 73} {
+		name := "sequential"
+		if stride != 1 {
+			name = "sparse"
+		}
+		b.Run(name, func(b *testing.B) {
+			b.ReportAllocs()
+			for range b.N {
+				records := searchRecords{search: reader, ctx: context.Background(), scratch: scratch}
+				for i := range 32 {
+					at := uint64((i*stride)%256*searchDataBlockBytes + 17)
+					got, err := records.read(at, 1)
+					if err != nil || got[0] != data[at] {
+						b.Fatalf("block read differs: %v", err)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestCompressedSearchPreservesQueriesAndPlaces(t *testing.T) {
 	results := []SearchResult{
 		{ID: 1, Kind: "node", Label: "Before city", Category: "city", Place: "city"},
@@ -379,7 +478,7 @@ func TestCompressedSearchRejectsExcessExpansionAndTrailingStreams(t *testing.T) 
 				t.Fatal(err)
 			}
 			defer reader.close()
-			if _, err := reader.readDataBlock(t.Context(), 0, new(searchScratch)); err == nil {
+			if _, err := reader.readDataBlock(t.Context(), 0, new(searchScratch), new(searchDataWindow)); err == nil {
 				t.Fatalf("%s accepted", mode)
 			}
 		})

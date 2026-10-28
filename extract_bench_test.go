@@ -1,6 +1,9 @@
 package osmmini
 
-import "testing"
+import (
+	"strconv"
+	"testing"
+)
 
 func BenchmarkDenseNodes(b *testing.B) {
 	const count = 8000
@@ -42,5 +45,28 @@ func BenchmarkPBFWay(b *testing.B) {
 		if err := processWay(raw, ctx, true, false, opts, cb); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+func BenchmarkPBFBlob(b *testing.B) {
+	for _, count := range []int{8000, 80000} {
+		b.Run(strconv.Itoa(count)+"Nodes", func(b *testing.B) {
+			ids, lats, lons := make([]int64, count), make([]int64, count), make([]int64, count)
+			for i := range ids {
+				ids[i] = 1
+				lats[i] = int64(i%97) - 48
+				lons[i] = int64(i%151) - 75
+			}
+			raw := testPBFDenseNodes(ids, lats, lons, nil)
+			blob := testPBFZlibBlob(b, raw, len(raw))
+			b.ReportAllocs()
+			b.SetBytes(int64(len(raw)))
+			for b.Loop() {
+				decoded, err := parseAndDecompressBlob(blob)
+				if err != nil || len(decoded) != len(raw) {
+					b.Fatalf("decoded %d bytes, want %d: %v", len(decoded), len(raw), err)
+				}
+			}
+		})
 	}
 }

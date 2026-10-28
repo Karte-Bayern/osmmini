@@ -271,7 +271,17 @@ func parseAndDecompressBlob(b []byte) ([]byte, error) {
 		}
 		defer zr.Close()
 
-		out, err := io.ReadAll(zr)
+		var out []byte
+		if rawSize > 0 && rawSize <= 32<<20 {
+			// PBF supplies the decoded size. Leave ReadFrom one read's spare
+			// capacity so checking EOF does not grow an exactly full buffer.
+			// Larger or missing hints retain the streaming fallback.
+			buf := bytes.NewBuffer(make([]byte, 0, rawSize+bytes.MinRead))
+			_, err = buf.ReadFrom(zr)
+			out = buf.Bytes()
+		} else {
+			out, err = io.ReadAll(zr)
+		}
 		if err != nil {
 			return nil, err
 		}

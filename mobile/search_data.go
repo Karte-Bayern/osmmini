@@ -178,29 +178,60 @@ func (s *searchReader) readDataHeader(size int64) error {
 // Each query owns its inflater and block buffers. Reusing the inflater avoids a
 // 32 KiB DEFLATE window allocation for every random block, without a shared file
 // cursor, region-sized cache, or retained oversized JSON records.
-func (s *searchReader) readDataBlock(ctx context.Context, block uint64, scratch *searchScratch) ([]byte, error) {
+// Cache ranges stay on the query or stream, so pooled buffers never carry
+// valid offsets from a previously searched region.
+type searchDataWindow struct {
+	directoryAt    uint64
+	directoryCount uint64
+	encodedAt      uint64
+	encodedSize    uint64
+	nextBlock      uint64
+}
+
+func (s *searchReader) readDataBlock(ctx context.Context, block uint64, scratch *searchScratch, window *searchDataWindow) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if block >= s.dataBlocks {
 		return nil, fmt.Errorf("invalid compressed search block number")
 	}
-	var entries [2 * searchDataEntryBytes]byte
-	n := searchDataEntryBytes
+	// Sparse POI lookups keep exact-size reads. Only adjacent forward blocks
+	// opt into read-ahead after the first block has been read successfully.
+	continuing := window.nextBlock == block
+	count := uint64(1)
 	if block+1 < s.dataBlocks {
-		n *= 2
+		count++
 	}
-	if _, err := s.data.ReadAt(entries[:n], s.dataDirectory+int64(block)*searchDataEntryBytes); err != nil {
-		return nil, err
+	if block < window.directoryAt || block+count > window.directoryAt+window.directoryCount {
+		// Keep single-block queries small. A continuing scan reads a bounded
+		// directory window instead of making another syscall for each block.
+		n := count
+		if window.directoryCount != 0 && continuing {
+			n = min(uint64(len(scratch.directory)/searchDataEntryBytes), s.dataBlocks-block)
+		}
+		if _, err := s.data.ReadAt(scratch.directory[:n*searchDataEntryBytes], s.dataDirectory+int64(block)*searchDataEntryBytes); err != nil {
+			return nil, err
+		}
+		window.directoryAt, window.directoryCount = block, n
 	}
+	entryAt := (block - window.directoryAt) * searchDataEntryBytes
+	entries := scratch.directory[entryAt : entryAt+count*searchDataEntryBytes]
 	offset, size := binary.LittleEndian.Uint64(entries[:]), binary.LittleEndian.Uint32(entries[8:])
 	if offset < searchDataHeaderBytes || offset > uint64(s.dataDirectory) || size == 0 || size > searchDataMaxEncoded || uint64(size) > uint64(s.dataDirectory)-offset || binary.LittleEndian.Uint32(entries[12:]) != 0 || block == 0 && offset != searchDataHeaderBytes || block+1 == s.dataBlocks && offset+uint64(size) != uint64(s.dataDirectory) || block+1 < s.dataBlocks && offset+uint64(size) != binary.LittleEndian.Uint64(entries[searchDataEntryBytes:]) {
 		return nil, fmt.Errorf("invalid compressed search block bounds")
 	}
-	encoded := scratch.encoded[:size]
-	if _, err := s.data.ReadAt(encoded, int64(offset)); err != nil {
-		return nil, err
+	if offset < window.encodedAt || offset+uint64(size) > window.encodedAt+window.encodedSize {
+		n := uint64(size)
+		if window.encodedSize != 0 && continuing {
+			n = min(uint64(len(scratch.encoded)), uint64(s.dataDirectory)-offset)
+		}
+		if _, err := s.data.ReadAt(scratch.encoded[:n], int64(offset)); err != nil {
+			return nil, err
+		}
+		window.encodedAt, window.encodedSize = offset, n
 	}
+	encodedAt := offset - window.encodedAt
+	encoded := scratch.encoded[encodedAt : encodedAt+uint64(size)]
 	scratch.compressed.Reset(encoded)
 	var err error
 	if scratch.inflater == nil {
@@ -218,13 +249,14 @@ func (s *searchReader) readDataBlock(ctx context.Context, block uint64, scratch 
 	}
 	// Reading through EOF verifies the zlib checksum. The extra-byte limit also
 	// rejects a small compressed input that expands beyond the declared block.
-	n, err = io.ReadFull(scratch.inflater, scratch.extra[:])
+	n, err := io.ReadFull(scratch.inflater, scratch.extra[:])
 	if n != 0 || scratch.compressed.Len() != 0 {
 		return nil, fmt.Errorf("invalid compressed search block length")
 	}
 	if err != io.EOF {
 		return nil, fmt.Errorf("read compressed search block checksum: %w", err)
 	}
+	window.nextBlock = block + 1
 	return data, nil
 }
 
@@ -234,6 +266,7 @@ type searchRecords struct {
 	scratch    *searchScratch
 	start, end uint64
 	oversized  []byte
+	window     searchDataWindow
 }
 
 func (r *searchRecords) read(offset uint64, length uint32) ([]byte, error) {
@@ -288,7 +321,7 @@ func (r *searchRecords) largeBuffer(length uint32) []byte {
 }
 
 func (r *searchRecords) loadBlock(block uint64) error {
-	data, err := r.search.readDataBlock(r.ctx, block, r.scratch)
+	data, err := r.search.readDataBlock(r.ctx, block, r.scratch, &r.window)
 	if err != nil {
 		return err
 	}
@@ -305,6 +338,7 @@ type searchDataStream struct {
 	scratch *searchScratch
 	block   uint64
 	pending []byte
+	window  searchDataWindow
 }
 
 func (s *searchDataStream) Read(p []byte) (int, error) {
@@ -319,7 +353,7 @@ func (s *searchDataStream) Read(p []byte) (int, error) {
 			return 0, io.EOF
 		}
 		var err error
-		s.pending, err = s.search.readDataBlock(s.ctx, s.block, s.scratch)
+		s.pending, err = s.search.readDataBlock(s.ctx, s.block, s.scratch, &s.window)
 		if err != nil {
 			return 0, err
 		}

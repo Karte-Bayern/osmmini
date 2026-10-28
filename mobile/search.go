@@ -685,6 +685,7 @@ type searchScratch struct {
 	block      [searchBlockMaxBytes]byte
 	data       [32 << 10]byte
 	encoded    [searchDataMaxEncoded]byte
+	directory  [64 * searchDataEntryBytes]byte
 	compressed bytes.Reader
 	inflater   io.ReadCloser
 	extra      [1]byte
